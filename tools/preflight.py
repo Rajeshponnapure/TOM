@@ -66,13 +66,22 @@ CHECKS: Dict[str, Dict[str, Any]] = {
     "gamedev":   {"label": "Game-dev scaffolding", "mods": [], "fix": ""},
     "news":      {"label": "News briefings", "mods": ["requests", "bs4"],
                   "fix": "pip install requests beautifulsoup4"},
+    "file_ops":  {"label": "File operations", "mods": [], "fix": ""},
+    "image_convert": {"label": "Image conversion", "mods": ["PIL"],
+                      "fix": "pip install Pillow"},
+    "web_scrape": {"label": "Web scraping", "mods": ["requests", "bs4"],
+                   "fix": "pip install requests beautifulsoup4"},
+    "code_run_node": {"label": "Node.js runner", "bins": ["node"],
+                      "fix": "Install Node.js from nodejs.org"},
+    "schedule_user": {"label": "Task scheduling", "mods": ["apscheduler"],
+                      "fix": "pip install apscheduler"},
 }
 
 # EngineRouter key → capability id (for precise unavailable-messages)
 ENGINE_TO_CAPABILITY = {
     "ml": "ml", "iot": "iot", "vlsi": "vlsi", "hardware": "hardware",
     "gamedev": "gamedev", "blender": "blender", "news": "news",
-    "voiceplus": "voice", "webauto": "web_verify", "coderun": "code_run",
+    "voiceplus": "voice", "webauto": "web_verify", "coderun": "code_run", "fileops": "file_ops", "webrecipes": "web_scrape", "schedule": "schedule_user",
 }
 
 

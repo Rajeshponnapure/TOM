@@ -52,7 +52,15 @@ The #1 thing separating "demo" from "does any task" is **failure handling**.
 
 Exit check: kill each dependency in turn; TOM stays up and tells the user what to do.
 
-## 3. Phase B — Widen the task surface (Week 2)  → 88→93
+## 3. Phase B — Widen the task surface — ✅ SHIPPED 2026-06-10  → 88→93
+
+Delivery record:
+- B1 ✅ code runner: Node.js + explicit shell commands ("run shell: ...") — approval-gated + destructive-command denylist (verified: shutdown blocked, echo ran)
+- B2 ✅ tools/file_ops.py: find / organize-by-type / organize-by-year / bulk-rename / zip / image-convert — destructive steps build a dry-run plan and require approval (verified: 8-file organize, rename, zip roundtrips)
+- B3 ✅ tools/web_recipes.py: scrape tables→CSV, capped downloads, readable-text fetch — requests/bs4 only, works without Playwright
+- B4 ✅ schedule ANY task from chat: "schedule: <task> every N hours", list/unschedule, persisted registry (verified live: schedule→list→unschedule through the full agent; APScheduler fallback works)
+- B5 → moved to Phase C (connector expansion needs account setup)
+- Registry now 51/51 verified capabilities, zero orphans; 23 tests passing
 
 | # | Build | Why |
 |---|---|---|

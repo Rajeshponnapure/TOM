@@ -2058,5 +2058,125 @@
       }
     },
     "reward": 0
+  },
+  {
+    "id": 1781109457098,
+    "ts": 1781109457.098036,
+    "action": "schedule: give me the daily briefing every 24 hours",
+    "outcome": "success",
+    "details": {
+      "result": {
+        "status": "success",
+        "response_type": "schedule",
+        "job_id": "user_give_me_the_daily_briefing",
+        "message": "Scheduled: \"give me the daily briefing\" every 24 hour(s) (job: user_give_me_the_daily_briefing). Note: schedules last until TOM restarts; say 'list scheduled tasks' or 'unschedule user_give_me_the_daily_briefing'.",
+        "experience_id": 1781109457098
+      }
+    },
+    "reward": 0
+  },
+  {
+    "id": 1781109457199,
+    "ts": 1781109457.1991765,
+    "action": "list scheduled tasks",
+    "outcome": "success",
+    "details": {
+      "result": {
+        "status": "success",
+        "response_type": "schedule",
+        "message": "Scheduled tasks:\n  - user_give_me_the_daily_briefing: {'id': 'user_give_me_the_daily_briefing', 'job': None, 'thread': <Thread(task-user_give_me_the_daily_briefing, started daemon 126488717329984)>, 'stop_event': <threading.Event object at 0x730a7334cc10>, 'callable': <function TomAgent.schedule_user_task.<locals>._job at 0x730a731dd510>, 'function': '_job', 'interval': '24h 0m 0s', 'next_run': datetime.datetime(2026, 6, 11, 16, 37, 37, 86823), 'created_at': '2026-06-10T16:37:37.086833', 'backend': 'fallback'}",
+        "experience_id": 1781109457199
+      }
+    },
+    "reward": 0
+  },
+  {
+    "id": 1781109457308,
+    "ts": 1781109457.3084228,
+    "action": "unschedule user_give_me_the_daily_briefing",
+    "outcome": "success",
+    "details": {
+      "result": {
+        "status": "success",
+        "response_type": "schedule",
+        "message": "Unscheduled: user_give_me_the_daily_briefing",
+        "experience_id": 1781109457308
+      }
+    },
+    "reward": 0
+  },
+  {
+    "id": 1781109457425,
+    "ts": 1781109457.4258323,
+    "action": "find all pdfs in /tmp/agent_files",
+    "outcome": "success",
+    "details": {
+      "result": {
+        "status": "success",
+        "response_type": "engine_fileops",
+        "message": "Found 1 file(s) matching '*.pdf' under /tmp/agent_files."
+      }
+    },
+    "reward": 0
+  },
+  {
+    "id": 1781109475519,
+    "ts": 1781109475.5197875,
+    "action": "schedule: give me the daily briefing every 24 hours",
+    "outcome": "success",
+    "details": {
+      "result": {
+        "status": "success",
+        "response_type": "schedule",
+        "job_id": "user_give_me_the_daily_briefing",
+        "message": "Scheduled: \"give me the daily briefing\" every 24 hour(s) (job: user_give_me_the_daily_briefing). Note: schedules last until TOM restarts; say 'list scheduled tasks' or 'unschedule user_give_me_the_daily_briefing'.",
+        "experience_id": 1781109475519
+      }
+    },
+    "reward": 0
+  },
+  {
+    "id": 1781109475591,
+    "ts": 1781109475.591855,
+    "action": "list scheduled tasks",
+    "outcome": "success",
+    "details": {
+      "result": {
+        "status": "success",
+        "response_type": "schedule",
+        "message": "Scheduled tasks:\n  - user_give_me_the_daily_briefing: {'id': 'user_give_me_the_daily_briefing', 'job': None, 'thread': <Thread(task-user_give_me_the_daily_briefing, started daemon 133691641497152)>, 'stop_event': <threading.Event object at 0x799782e3ee90>, 'callable': <function TomAgent.schedule_user_task.<locals>._job at 0x799782da56c0>, 'function': '_job', 'interval': '24h 0m 0s', 'next_run': datetime.datetime(2026, 6, 11, 16, 37, 55, 512063), 'created_at': '2026-06-10T16:37:55.512069', 'backend': 'fallback'}",
+        "experience_id": 1781109475591
+      }
+    },
+    "reward": 0
+  },
+  {
+    "id": 1781109475661,
+    "ts": 1781109475.6614022,
+    "action": "unschedule user_give_me_the_daily_briefing",
+    "outcome": "success",
+    "details": {
+      "result": {
+        "status": "success",
+        "response_type": "schedule",
+        "message": "Unscheduled: user_give_me_the_daily_briefing",
+        "experience_id": 1781109475661
+      }
+    },
+    "reward": 0
+  },
+  {
+    "id": 1781109475762,
+    "ts": 1781109475.762107,
+    "action": "find all pdfs in /tmp/agent_files",
+    "outcome": "success",
+    "details": {
+      "result": {
+        "status": "success",
+        "response_type": "engine_fileops",
+        "message": "Found 1 file(s) matching '*.pdf' under /tmp/agent_files."
+      }
+    },
+    "reward": 0
   }
 ]

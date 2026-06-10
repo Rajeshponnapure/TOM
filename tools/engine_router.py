@@ -51,6 +51,28 @@ def _extract_kv_num(command: str, key: str, default: int) -> int:
     return default
 
 
+def parse_schedule_command(command: str):
+    """'schedule X every N hours/minutes' / 'every morning' → (task, hours).
+    Returns (None, None) if no schedule intent."""
+    c = command.strip()
+    low = c.lower()
+    m = re.search(r"\bevery\s+(\d+(?:\.\d+)?)\s*(hour|hr|minute|min)s?\b", low)
+    hours = None
+    if m:
+        val = float(m.group(1))
+        hours = val if m.group(2).startswith(("hour", "hr")) else val / 60.0
+    elif re.search(r"\bevery\s+(morning|day|daily)\b", low):
+        hours = 24.0
+    elif re.search(r"\bevery\s+hour\b", low):
+        hours = 1.0
+    if hours is None:
+        return None, None
+    task = re.sub(r"^\s*schedule\s*:?\s*", "", c, flags=re.I)
+    task = re.sub(r"\bevery\s+(\d+(?:\.\d+)?\s*(?:hour|hr|minute|min)s?|morning|day|daily|hour)\b.*$",
+                  "", task, flags=re.I).strip(" ,.-")
+    return (task or None), hours
+
+
 class EngineRouter:
     """Detects and dispatches engine-class commands for TomAgent."""
 
@@ -138,7 +160,11 @@ class EngineRouter:
             if c.startswith(prefix):
                 return key
 
-        # Natural language — require strong, unambiguous signals
+        # Natural language — require strong, unambiguous signals.
+        # Schedule is checked FIRST: "schedule X every N hours" wraps any other
+        # capability (the wrapped task re-routes normally when the job fires).
+        if ("schedule" in c and "every" in c) or c.startswith(("unschedule", "list scheduled")):
+            return "schedule"
         if re.search(r"\b(autonomous(ly)?\s+(task|execute|run|do)|execute autonomous)\b", c):
             return "autonomous"
         if re.search(r"\b(multi[- ]agent|deploy (the )?agents?\b.*task|orchestrat)", c):
@@ -174,6 +200,19 @@ class EngineRouter:
         if re.search(r"\b(verify|check)\b.*\b(localhost|web ?app|webapp)\b", c) or \
            c.startswith("verify website"):
             return "webauto"
+        if re.search(r"\borganize\b.*\b(folder|downloads|desktop|documents|files|photos|pictures)\b", c) or \
+           re.search(r"\bfind (all |every )?[\w*.]*\s*(files|pdfs|images|photos|documents)\b", c) or \
+           re.search(r"\b(bulk rename|rename all)\b", c) or \
+           re.search(r"\b(zip|compress)\b.*\b(folder|directory|downloads|documents)\b", c) or \
+           re.search(r"\bconvert\b.*\b(images?|photos?|pngs?|jpe?gs?)\b", c):
+            return "fileops"
+        if (re.search(r"\bscrape\b.*\btables?\b", c) or
+                re.search(r"\bdownload\b.*https?://", c) or
+                re.search(r"\bextract\b.*\btables?\b.*\bfrom\b", c)):
+            return "webrecipes"
+        if re.search(r"\b(run|execute)\b[^.]*\.js\b", c) or \
+           c.startswith(("run shell:", "run command:", "shell:")):
+            return "coderun"
         if re.search(r"\b(run|execute)\b[^.]*\.py\b", c) or \
            re.search(r"^run (the )?(code|script)\b", c) or c.startswith("run code"):
             return "coderun"
@@ -194,6 +233,10 @@ class EngineRouter:
                 return await self._run_webauto(c)
             if key == "coderun":
                 return await self._run_coderun(c)
+            if key == "fileops":
+                return await self._run_fileops(c)
+            if key == "schedule":
+                return self._run_schedule(c)
             handler = getattr(self, f"_run_{key}")
             return handler(c)
         except Exception as exc:
@@ -513,11 +556,14 @@ class EngineRouter:
         eng = self._get("coderun")
         if not eng:
             return self._unavailable("Code runner", "")
+        shell_m = re.match(r"^(?:run shell:|run command:|shell:)\s*(.+)$", command.strip(), re.I)
+        js_m = re.search(r"([\w\-./\\:]+\.js)\b", command)
         m = re.search(r"([\w\-./\\:]+\.py)\b", command)
-        if not m:
+        if not (shell_m or js_m or m):
             return self._ok("engine_coderun",
-                            "Tell me which .py file to run, e.g. 'run code myscript.py'.")
-        path = m.group(1)
+                            "Tell me what to run: a .py/.js file, or 'run shell: <command>'.")
+        path = (js_m or m).group(1) if (js_m or m) else ""
+        run_kind = "shell" if shell_m else ("node" if js_m else "python")
         agent = self._agent
         if agent is None or not getattr(agent, "approval_manager", None):
             return {"status": "error", "response_type": "engine_coderun",
@@ -526,11 +572,109 @@ class EngineRouter:
         from tools.approval import ApprovalRequest
         approved = await _aio.to_thread(
             agent.approval_manager.request_approval,
-            ApprovalRequest(action="run_code", summary=f"Run Python file: {path}",
+            ApprovalRequest(action="run_code", summary=f"Run {run_kind}: {shell_m.group(1) if shell_m else path}",
                             details={"path": path}, risk_level="high"))
         if not approved:
             return {"status": "cancelled", "response_type": "engine_coderun",
                     "message": "Code run cancelled by user."}
-        res = eng.run_python_file(path)
+        if run_kind == "shell":
+            res = eng.run_shell(shell_m.group(1))
+            label = "shell"
+        elif run_kind == "node":
+            res = eng.run_node_file(path)
+            label = path
+        else:
+            res = eng.run_python_file(path)
+            label = path
         return self._ok("engine_coderun",
-                        f"Code run ({path}):\n{res.get('message', '')[:1500]}", raw=res)
+                        f"Code run ({label}):\n{res.get('message', '')[:1500]}", raw=res)
+
+    # ── File operations (Phase B2) — destructive steps approval-gated ────
+    async def _run_fileops(self, command: str) -> Dict[str, Any]:
+        from tools.file_ops import FileOps, resolve_folder
+        ops = FileOps()
+        c = command.lower()
+
+        folder_m = re.search(
+            r"(?:\bin|\bfrom|\bof)?\s*(my\s+)?(downloads|documents|desktop|pictures|photos|music|videos|[a-z]:\\[^\s\"]+|/[^\s\"]+)",
+            c)
+        folder = folder_m.group(2) if folder_m else "downloads"
+
+        if re.search(r"\bfind\b", c):
+            ext_m = re.search(r"\b(pdfs?|images?|photos?|docs?|documents|videos?|\*?\.[a-z0-9]{2,4})\b", c)
+            token = ext_m.group(1) if ext_m else "*"
+            pattern = {"pdf": "*.pdf", "pdfs": "*.pdf", "image": "*.jpg", "images": "*.*",
+                       "photo": "*.jpg", "photos": "*.*", "doc": "*.doc*", "docs": "*.doc*",
+                       "documents": "*.*", "video": "*.mp4", "videos": "*.*"}.get(token, token if "." in token else "*")
+            return self._ok("engine_fileops", ops.find_files(folder, pattern)["message"])
+
+        if re.search(r"\bzip|compress\b", c):
+            return self._ok("engine_fileops", ops.zip_folder(folder)["message"])
+
+        if re.search(r"\bconvert\b", c):
+            to_m = re.search(r"\bto\s+\.?([a-z]{3,4})\b", c)
+            return self._ok("engine_fileops",
+                            ops.convert_images(folder, to_m.group(1) if to_m else "png")["message"])
+
+        # organize / bulk rename → PLAN then APPROVAL then EXECUTE
+        if re.search(r"\b(bulk rename|rename all)\b", c):
+            pat_m = re.search(r"['\"]([^'\"]+)['\"]\s*(?:to|->|→)\s*['\"]([^'\"]*)['\"]", command)
+            if not pat_m:
+                return self._ok("engine_fileops",
+                                "Tell me the pattern, e.g.: bulk rename in downloads 'IMG_' to 'Holiday_'")
+            plan = ops.plan_bulk_rename(folder, pat_m.group(1), pat_m.group(2))
+        elif "year" in c:
+            plan = ops.plan_organize_by_year(folder)
+        else:
+            plan = ops.plan_organize_by_type(folder)
+
+        if plan.get("status") != "plan":
+            return self._ok("engine_fileops", plan.get("message", "Could not build a plan."))
+        if not plan["moves"]:
+            return self._ok("engine_fileops", "Nothing to do — " + plan["message"])
+
+        agent = self._agent
+        if agent is None or not getattr(agent, "approval_manager", None):
+            return self._ok("engine_fileops", "[DRY RUN — approval system unavailable]\n" + plan["message"])
+        import asyncio as _aio
+        from tools.approval import ApprovalRequest
+        approved = await _aio.to_thread(
+            agent.approval_manager.request_approval,
+            ApprovalRequest(action="file_ops", summary=plan["message"],
+                            details={"count": len(plan["moves"])}, risk_level="medium"))
+        if not approved:
+            return {"status": "cancelled", "response_type": "engine_fileops",
+                    "message": "File operation cancelled. (Plan was: " + plan["message"][:200] + ")"}
+        res = ops.execute_plan(plan)
+        return self._ok("engine_fileops", res["message"])
+
+    # ── Web recipes (Phase B3) ────────────────────────────────────────────
+    def _run_webrecipes(self, command: str) -> Dict[str, Any]:
+        from tools import web_recipes as wr
+        url_m = re.search(r"https?://\S+", command)
+        if not url_m:
+            return self._ok("engine_webrecipes",
+                            "Give me a URL, e.g. 'scrape the tables from https://example.com/page'.")
+        url = url_m.group(0).rstrip(".,);")
+        if re.search(r"\bdownload\b", command.lower()):
+            return self._ok("engine_webrecipes", wr.download_file(url)["message"])
+        return self._ok("engine_webrecipes", wr.scrape_tables(url)["message"])
+
+    # ── Scheduling (Phase B4) ─────────────────────────────────────────────
+    def _run_schedule(self, command: str) -> Dict[str, Any]:
+        agent = self._agent
+        if agent is None:
+            return self._unavailable("Scheduler", "agent context required")
+        low = command.lower().strip()
+        if low.startswith("list scheduled"):
+            return agent.list_user_tasks()
+        if low.startswith("unschedule"):
+            ref = command.split(None, 1)[1].strip() if " " in command else ""
+            return agent.unschedule_user_task(ref) if ref else self._ok(
+                "schedule", "Which job? Say 'list scheduled tasks' to see names.")
+        task, hours = parse_schedule_command(command)
+        if not task or not hours:
+            return self._ok("schedule",
+                            "Tell me what and how often, e.g. "
+                            "'schedule: give me the daily briefing every 24 hours'.")
+        return agent.schedule_user_task(task, hours)

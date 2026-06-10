@@ -2208,6 +2208,65 @@ class TomAgent:
         except Exception:
             return ""
 
+    # ── Phase B4: schedule ANY task from chat ───────────────────────────
+    def schedule_user_task(self, command: str, hours: float) -> Dict[str, Any]:
+        """Run `command` through execute_task every N hours (until restart)."""
+        import json as _json
+        import threading as _th
+        from tools.scheduler import get_scheduler
+        if hours <= 0 or hours > 720:
+            return {"status": "error", "message": "Interval must be between 0 and 720 hours."}
+        job_id = "user_" + re.sub(r"[^a-z0-9]+", "_", command.lower())[:40].strip("_")
+
+        def _job(cmd=command):
+            def _runner():
+                try:
+                    asyncio.run(self.execute_task(cmd))
+                except Exception as _e:
+                    self.safety.log_action("WARN", target="scheduled_task",
+                                           status="FAILURE", message=str(_e))
+            _th.Thread(target=_runner, daemon=True, name=f"sched-{job_id}").start()
+
+        sched = get_scheduler()
+        sched.start()
+        whole_h = int(hours)
+        mins = int(round((hours - whole_h) * 60))
+        sched.schedule_interval_task(job_id, _job, hours=whole_h, minutes=mins)
+        # Persist a registry of user schedules (informational; jobs re-register
+        # on demand — surviving restarts ships in Phase C).
+        try:
+            reg_path = os.path.join(os.getcwd(), "tom_logs", "scheduled_user_tasks.json")
+            entries = {}
+            if os.path.isfile(reg_path):
+                with open(reg_path, encoding="utf-8") as f:
+                    entries = _json.load(f)
+            entries[job_id] = {"command": command, "every_hours": hours}
+            with open(reg_path, "w", encoding="utf-8") as f:
+                _json.dump(entries, f, indent=1)
+        except Exception:
+            pass
+        return {"status": "success", "response_type": "schedule",
+                "job_id": job_id,
+                "message": f"Scheduled: \"{command}\" every {hours:g} hour(s) "
+                           f"(job: {job_id}). Note: schedules last until TOM restarts; "
+                           f"say 'list scheduled tasks' or 'unschedule {job_id}'."}
+
+    def unschedule_user_task(self, job_ref: str) -> Dict[str, Any]:
+        from tools.scheduler import get_scheduler
+        ok = get_scheduler().unschedule_task(job_ref.strip())
+        return {"status": "success" if ok else "not_found", "response_type": "schedule",
+                "message": ("Unscheduled: " + job_ref) if ok else f"No job named '{job_ref}'."}
+
+    def list_user_tasks(self) -> Dict[str, Any]:
+        from tools.scheduler import get_scheduler
+        jobs = get_scheduler().get_scheduled_jobs()
+        if not jobs:
+            return {"status": "success", "response_type": "schedule",
+                    "message": "No scheduled tasks right now."}
+        lines = [f"  - {jid}: {info}" for jid, info in jobs.items()]
+        return {"status": "success", "response_type": "schedule",
+                "message": "Scheduled tasks:\n" + "\n".join(lines)}
+
     def _capabilities_response(self) -> Dict[str, Any]:
         """Registry-backed capability listing (single source of truth)."""
         try:

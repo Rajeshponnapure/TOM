@@ -618,5 +618,95 @@
     "ts": "1781086251",
     "role": "user",
     "text": "system status"
+  },
+  {
+    "ts": "1781109457",
+    "role": "user",
+    "text": "schedule: give me the daily briefing every 24 hours"
+  },
+  {
+    "ts": "1781109457",
+    "role": "assistant",
+    "text": "Scheduled: \"give me the daily briefing\" every 24 hour(s) (job: user_give_me_the_daily_briefing). Note: schedules last until TOM restarts; say 'list scheduled tasks' or 'unschedule user_give_me_the_daily_briefing'."
+  },
+  {
+    "ts": "1781109457",
+    "role": "user",
+    "text": "list scheduled tasks"
+  },
+  {
+    "ts": "1781109457",
+    "role": "assistant",
+    "text": "Scheduled tasks:\n  - user_give_me_the_daily_briefing: {'id': 'user_give_me_the_daily_briefing', 'job': None, 'thread': <Thread(task-user_give_me_the_daily_briefing, started daemon 126488717329984)>, 'stop_event': <threading.Event object at 0x730a7334cc10>, 'callable': <function TomAgent.schedule_user_task.<locals>._job at 0x730a731dd510>, 'function': '_job', 'interval': '24h 0m 0s', 'next_run': datetime.datetime(2026, 6, 11, 16, 37, 37, 86823), 'created_at': '2026-06-10T16:37:37.086833', 'backend': 'fallback'}"
+  },
+  {
+    "ts": "1781109457",
+    "role": "user",
+    "text": "unschedule user_give_me_the_daily_briefing"
+  },
+  {
+    "ts": "1781109457",
+    "role": "assistant",
+    "text": "Unscheduled: user_give_me_the_daily_briefing"
+  },
+  {
+    "ts": "1781109457",
+    "role": "user",
+    "text": "find all pdfs in /tmp/agent_files"
+  },
+  {
+    "ts": "1781109457",
+    "role": "assistant",
+    "text": "Found 1 file(s) matching '*.pdf' under /tmp/agent_files."
+  },
+  {
+    "ts": "1781109457",
+    "role": "user",
+    "text": "what can you do"
+  },
+  {
+    "ts": "1781109475",
+    "role": "user",
+    "text": "schedule: give me the daily briefing every 24 hours"
+  },
+  {
+    "ts": "1781109475",
+    "role": "assistant",
+    "text": "Scheduled: \"give me the daily briefing\" every 24 hour(s) (job: user_give_me_the_daily_briefing). Note: schedules last until TOM restarts; say 'list scheduled tasks' or 'unschedule user_give_me_the_daily_briefing'."
+  },
+  {
+    "ts": "1781109475",
+    "role": "user",
+    "text": "list scheduled tasks"
+  },
+  {
+    "ts": "1781109475",
+    "role": "assistant",
+    "text": "Scheduled tasks:\n  - user_give_me_the_daily_briefing: {'id': 'user_give_me_the_daily_briefing', 'job': None, 'thread': <Thread(task-user_give_me_the_daily_briefing, started daemon 133691641497152)>, 'stop_event': <threading.Event object at 0x799782e3ee90>, 'callable': <function TomAgent.schedule_user_task.<locals>._job at 0x799782da56c0>, 'function': '_job', 'interval': '24h 0m 0s', 'next_run': datetime.datetime(2026, 6, 11, 16, 37, 55, 512063), 'created_at': '2026-06-10T16:37:55.512069', 'backend': 'fallback'}"
+  },
+  {
+    "ts": "1781109475",
+    "role": "user",
+    "text": "unschedule user_give_me_the_daily_briefing"
+  },
+  {
+    "ts": "1781109475",
+    "role": "assistant",
+    "text": "Unscheduled: user_give_me_the_daily_briefing"
+  },
+  {
+    "ts": "1781109475",
+    "role": "user",
+    "text": "find all pdfs in /tmp/agent_files"
+  },
+  {
+    "ts": "1781109475",
+    "role": "assistant",
+    "text": "Found 1 file(s) matching '*.pdf' under /tmp/agent_files."
+  },
+  {
+    "ts": "1781109475",
+    "role": "user",
+    "text": "what can you do"
   }
 ]

@@ -67,3 +67,43 @@ class CodeRunner:
                     "message": f"Execution timed out after {timeout}s (hard limit enforced)."}
         except Exception as exc:
             return {"status": "error", "message": f"Run failed: {exc}"}
+
+    # ── Phase B1: more languages ─────────────────────────────────────────
+    def run_node_file(self, path: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+        """Run a .js file with Node (if installed)."""
+        import shutil as _sh
+        if not _sh.which("node"):
+            return {"status": "error",
+                    "message": "Node.js not found. Fix: install from nodejs.org and add to PATH."}
+        abs_path = path if os.path.isabs(path) else project_path_str(path)
+        if not os.path.isfile(abs_path):
+            return {"status": "error", "message": f"File not found: {path}"}
+        return self._run(["node", abs_path], timeout, cwd=os.path.dirname(abs_path) or None)
+
+    # Explicitly requested shell commands ONLY — always approval-gated by the
+    # router, plus this hard denylist as a second belt.
+    _SHELL_DENY = ("format ", "rm -rf /", "del /s", "del /q c:", "rd /s",
+                   "shutdown", "reg delete", "mkfs", ":(){", "cipher /w",
+                   "diskpart", "bcdedit", "vssadmin delete")
+
+    def run_shell(self, command: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+        low = " " + command.strip().lower() + " "
+        for bad in self._SHELL_DENY:
+            if bad in low:
+                return {"status": "blocked",
+                        "message": f"Refused: '{bad.strip()}' is on the destructive-command denylist."}
+        # shell=True is intentional and confined to THIS user-approved feature.
+        try:
+            proc = subprocess.run(command, shell=True, capture_output=True,
+                                  text=True, timeout=timeout, cwd=self.scratch_dir)
+            msg = f"Exit code: {proc.returncode}\n"
+            if proc.stdout:
+                msg += f"--- stdout ---\n{proc.stdout[:MAX_OUTPUT]}\n"
+            if proc.stderr:
+                msg += f"--- stderr ---\n{proc.stderr[:MAX_OUTPUT]}\n"
+            return {"status": "success" if proc.returncode == 0 else "error",
+                    "message": msg.strip(), "returncode": proc.returncode}
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "message": f"Shell command timed out after {timeout}s."}
+        except Exception as exc:
+            return {"status": "error", "message": f"Shell run failed: {exc}"}

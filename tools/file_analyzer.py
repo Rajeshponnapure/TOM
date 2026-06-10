@@ -546,4 +546,16 @@ class FileAnalyzer:
             if defs:
                 parts.append(f"  └ Defines: {', '.join(defs[:5])}")
 
- 
+        elif result.get("type") == "text":
+            parts.append(f"📄 Text - {result.get('line_count', '?')} lines, "
+                         f"{result.get('word_count', '?')} words")
+
+        return "\n".join(parts)
+
+    @staticmethod
+    def _format_size(bytes_val: int) -> str:
+        for unit in ["B", "KB", "MB", "GB"]:
+            if bytes_val < 1024:
+                return f"{bytes_val:.1f} {unit}"
+            bytes_val /= 1024
+        return f"{bytes_val:.1f} TB"
