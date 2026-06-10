@@ -135,9 +135,14 @@ class VoiceTools:
         result = {"status": "success", "message": "Spoken (edge-tts)"}
 
         def _run():
+            tmp = ""
             try:
                 import edge_tts
-                tmp = os.path.join(tempfile.gettempdir(), "tom_voice.mp3")
+                # FIX: unique file per utterance — a fixed name gets locked by
+                # the player and every later save fails on Windows.
+                self._utt_counter = getattr(self, "_utt_counter", 0) + 1
+                tmp = os.path.join(tempfile.gettempdir(),
+                                   f"tom_voice_{os.getpid()}_{self._utt_counter}.mp3")
                 loop = asyncio.new_event_loop()
                 communicate = edge_tts.Communicate(text[:2000], self.voice_name, rate=self.voice_rate)
                 loop.run_until_complete(communicate.save(tmp))
@@ -146,6 +151,13 @@ class VoiceTools:
             except Exception as exc:
                 result["status"] = "error"
                 result["message"] = f"edge-tts failed: {exc}"
+            finally:
+                # best-effort cleanup of this and older utterance files
+                try:
+                    if tmp and os.path.isfile(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
 
         worker = threading.Thread(target=_run, daemon=True)
         worker.start()
@@ -164,7 +176,12 @@ class VoiceTools:
         return t
 
     def _play_audio(self, filepath: str):
-        # Try pygame first
+        # Try pygame first.
+        # FIX: catch EVERY pygame failure (pygame.error from mixer.init when the
+        # audio device is busy/missing, etc.) — previously only ImportError was
+        # caught, so one pygame hiccup skipped ALL fallback players and TOM went
+        # silent. Also unload() afterwards: pygame keeps the mp3 LOCKED on
+        # Windows, which made the next edge-tts save fail with WinError 32.
         try:
             import pygame
             if not pygame.mixer.get_init():
@@ -173,9 +190,13 @@ class VoiceTools:
             pygame.mixer.music.play()
             while pygame.mixer.music.get_busy():
                 pygame.time.wait(50)
+            try:
+                pygame.mixer.music.unload()  # release file lock (pygame >= 2.0)
+            except Exception:
+                pass
             return
-        except ImportError:
-            pass
+        except Exception as _pg_err:
+            self._output_error = f"pygame playback unavailable ({_pg_err}); using fallback player."
 
         # Fallback: use ffplay (from ffmpeg) — handles mp3 natively
         try:
@@ -260,8 +281,18 @@ class VoiceTools:
         try:
             import speech_recognition as sr
 
-            with sr.Microphone() as source:
-                self._recognizer.adjust_for_ambient_noise(source, duration=0.3)
+            mic_kwargs = {}
+            mic_index = os.environ.get("VOICE_MIC_INDEX", "").strip()
+            if mic_index.isdigit():
+                mic_kwargs["device_index"] = int(mic_index)
+            with sr.Microphone(**mic_kwargs) as source:
+                # FIX: calibrate ONCE per conversation. Re-calibrating on every
+                # listen (with dynamic adjustment on top) ratcheted the energy
+                # threshold up until real speech was treated as background noise.
+                if not getattr(self, "_calibrated", False):
+                    self._recognizer.adjust_for_ambient_noise(
+                        source, duration=max(0.3, self.calibration_duration))
+                    self._calibrated = True
                 if self.on_state_change:
                     self.on_state_change("listening", "")
                 if self.on_audio_level:
@@ -331,6 +362,7 @@ class VoiceTools:
 
         self._conv_stop.clear()
         self._conv_active = True
+        self._calibrated = False  # fresh ambient calibration per session
 
         def _notify(state, text=""):
             if on_status:
@@ -345,7 +377,10 @@ class VoiceTools:
             _notify("ready", "Voice mode active. I'm listening...")
             greeting = "Hey! I'm here. What's up?"
             _notify("speaking", f"TOM: {greeting}")
-            self.speak(greeting, timeout_seconds=10)
+            _greet_res = self.speak(greeting, timeout_seconds=10)
+            if _greet_res.get("status") not in ("success", "skipped"):
+                _notify("error", f"Voice output problem: {_greet_res.get('message')} "
+                                 f"(say 'voice check' in chat for a full diagnosis)")
 
             consecutive_timeouts = 0
 
@@ -410,7 +445,9 @@ class VoiceTools:
                     # Speak response — BLOCKING so we finish before listening again
                     display = f"TOM: \"{response[:120]}...\"" if len(response) > 120 else f"TOM: \"{response}\""
                     _notify("speaking", display)
-                    self.speak(response[:500], timeout_seconds=30)
+                    _spk = self.speak(response[:500], timeout_seconds=30)
+                    if _spk.get("status") not in ("success", "skipped"):
+                        _notify("error", f"Voice output problem: {_spk.get('message')}")
 
                 except KeyboardInterrupt:
                     _notify("idle", "Voice conversation interrupted.")
@@ -464,3 +501,76 @@ class VoiceTools:
         def reset_peak(self):
             with self._lock:
                 self.peak_level = 0.0
+
+    # ── Self-test: one command tells you exactly what is broken ──────────
+    def self_test(self) -> Dict[str, Any]:
+        """Diagnose the whole voice stack without needing a conversation."""
+        import socket
+        report: Dict[str, Any] = {"env": {
+            "VOICE_INPUT_ENABLED": os.environ.get("VOICE_INPUT_ENABLED", "(unset → false)"),
+            "VOICE_OUTPUT_ENABLED": os.environ.get("VOICE_OUTPUT_ENABLED", "(unset → false)"),
+            "engine": self.recognition_engine,
+            "energy_threshold": self.energy_threshold,
+        }}
+        # microphones
+        try:
+            import speech_recognition as sr
+            names = sr.Microphone.list_microphone_names()
+            report["microphones"] = names[:10]
+            report["mic_count"] = len(names)
+        except Exception as exc:
+            report["microphones"] = []
+            report["mic_count"] = 0
+            report["mic_error"] = str(exc)
+        # playback
+        try:
+            import pygame
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            report["pygame_audio"] = "OK"
+            pygame.mixer.quit()
+        except Exception as exc:
+            report["pygame_audio"] = f"FAILED: {exc} (fallback players will be used)"
+        # network for STT (google) and TTS (edge)
+        for label, host in (("google_stt_reachable", "speech.googleapis.com"),
+                            ("edge_tts_reachable", "speech.platform.bing.com")):
+            try:
+                socket.create_connection((host, 443), timeout=3).close()
+                report[label] = True
+            except OSError:
+                report[label] = False
+        report["input_error"] = self._input_error
+        report["output_error"] = self._output_error
+        # verdicts
+        problems = []
+        if report["mic_count"] == 0:
+            problems.append("No microphone detected — check Windows Settings > Privacy "
+                            "& security > Microphone (allow desktop apps), and that a mic is plugged in/enabled.")
+        if not report.get("google_stt_reachable"):
+            problems.append("Google speech service unreachable — voice RECOGNITION needs internet; "
+                            "check connection/firewall, or set VOICE_RECOGNITION_ENGINE=whisper (offline, needs openai-whisper).")
+        if not report.get("edge_tts_reachable"):
+            problems.append("Edge-TTS service unreachable — TOM's neural VOICE needs internet; "
+                            "pyttsx3 offline fallback will be used if installed.")
+        if str(report.get("pygame_audio", "")).startswith("FAILED"):
+            problems.append("Audio playback device issue — check output device / drivers; "
+                            "fallback players (ffplay/PowerShell) will be tried automatically.")
+        report["problems"] = problems
+        report["verdict"] = "ALL CLEAR — voice should work." if not problems else             f"{len(problems)} problem(s) found."
+        return report
+
+    def self_test_text(self) -> str:
+        r = self.self_test()
+        lines = [f"Voice self-test: {r['verdict']}",
+                 f"  Mics detected: {r['mic_count']}"
+                 + (f" (first: {r['microphones'][0]})" if r.get("microphones") else ""),
+                 f"  Playback (pygame): {r['pygame_audio']}",
+                 f"  Google STT reachable: {r.get('google_stt_reachable')}",
+                 f"  Edge-TTS reachable: {r.get('edge_tts_reachable')}",
+                 f"  Env: input={r['env']['VOICE_INPUT_ENABLED']} output={r['env']['VOICE_OUTPUT_ENABLED']} "
+                 f"engine={r['env']['engine']} threshold={r['env']['energy_threshold']}"]
+        if r.get("mic_error"):
+            lines.append(f"  Mic error: {r['mic_error']}")
+        for p in r["problems"]:
+            lines.append(f"  FIX: {p}")
+        return "\n".join(lines)

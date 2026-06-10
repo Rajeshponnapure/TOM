@@ -51,7 +51,7 @@ CHECKS: Dict[str, Dict[str, Any]] = {
                   "fix": "pip install pyautogui"},
     "email_send": {"label": "Email (Gmail OAuth/IMAP)", "mods": ["google_auth_oauthlib", "imapclient"],
                    "fix": "pip install google-auth-oauthlib imapclient"},
-    "voice":     {"label": "Voice mode", "mods": ["speech_recognition", "pyttsx3"],
+    "voice":     {"label": "Voice mode", "mods": ["speech_recognition", "pyttsx3", "pyaudio", "pygame"],
                   "fix": "pip install SpeechRecognition pyttsx3  (PyAudio: pip install pipwin && pipwin install pyaudio)"},
     "rag_memory": {"label": "RAG semantic memory", "mods": ["chromadb"],
                    "fix": "pip install chromadb"},

@@ -433,6 +433,17 @@ class TomAgent:
             if _meta in ("show logs", "logs", "show recent logs", "view logs",
                          "recent activity log"):
                 return self._logs_response()
+            if _meta in ("voice check", "test voice", "voice test", "check voice",
+                         "diagnose voice", "voice diagnostics"):
+                try:
+                    from tools.voice_tools import VoiceTools
+                    vt = VoiceTools()
+                    return {"status": "success", "response_type": "voice_check",
+                            "message": vt.self_test_text()}
+                except Exception as _vt_err:
+                    return {"status": "error",
+                            "message": f"Voice stack failed to load: {_vt_err}. "
+                                       f"Fix: pip install SpeechRecognition pyttsx3 pyaudio edge-tts pygame"}
 
             safe_print("[STEP 1] Understanding your request...")
             parsed = await self.understand_command(command)
@@ -1233,6 +1244,20 @@ class TomAgent:
         data_source = parsed.get("data_source") or ""
         search_topic = parsed.get("search_topic") or ""
 
+        # ── Compound intent: "open <app> and analyze ..." ────────────────
+        # If the user asked to OPEN an app (Power BI / Excel / Tableau) as part
+        # of the analysis request, actually open it instead of refusing.
+        open_note = ""
+        _app_m = re.search(r"\bopen\s+(power\s*bi|excel|tableau)\b", command, re.I)
+        if _app_m:
+            _app = _app_m.group(1).lower().replace(" ", "")
+            _app = {"powerbi": "power bi desktop"}.get(_app, _app)
+            try:
+                _open_res = await self.execute_open_command(f"open {_app}")
+                open_note = ("Opened " + _app + ". ") if _open_res.get("status") == "success"                     else (f"Could not open {_app} ({_open_res.get('message', '')[:80]}). ")
+            except Exception as _oe:
+                open_note = f"Could not open {_app} ({str(_oe)[:60]}). "
+
         # ── Real pipeline first ──────────────────────────────────────────
         # If an actual data file is referenced, run the genuine
         # DataAnalysisEngine (clean → insights → charts → HTML report)
@@ -1242,11 +1267,38 @@ class TomAgent:
         if not candidate:
             m = re.search(r"([\w\-./\\:]+\.(?:csv|xlsx|xls|json|parquet))\b", command, re.I)
             candidate = m.group(1) if m else ""
-        if candidate:
+        real_path = ""
+        if not candidate and re.search(r"\b(sample|demo|dummy|test)\b.{0,20}\bdata\b", command, re.I):
+            # Generate a realistic sample dataset so the REAL pipeline runs
+            # (sales-flavoured if the request mentions sales/retail/mart).
+            try:
+                import pandas as _pd
+                import numpy as _np
+                rng = _np.random.default_rng(42)
+                n = 240
+                regions = ["North", "South", "East", "West"]
+                cats = ["Groceries", "Apparel", "Electronics", "Home", "Toys"]
+                df_s = _pd.DataFrame({
+                    "date": _pd.date_range("2025-01-01", periods=n, freq="D"),
+                    "region": rng.choice(regions, n),
+                    "category": rng.choice(cats, n),
+                    "units_sold": rng.integers(5, 220, n),
+                    "unit_price": _np.round(rng.uniform(1.5, 90.0, n), 2),
+                })
+                df_s["revenue"] = _np.round(df_s["units_sold"] * df_s["unit_price"], 2)
+                _dir = project_path_str("output", "analysis")
+                os.makedirs(_dir, exist_ok=True)
+                real_path = os.path.join(_dir, "sample_sales_data.csv")
+                df_s.to_csv(real_path, index=False)
+                open_note += f"Generated sample dataset ({n} rows): {real_path}. "
+            except Exception as _ge:
+                self.safety.log_action("WARN", target="data_analysis", status="FAILURE",
+                                       message=f"sample generation failed: {_ge}")
+        if candidate and not real_path:
             abs_try = candidate if os.path.isabs(candidate) else project_path_str(candidate)
             real_path = candidate if os.path.isfile(candidate) else (
                 abs_try if os.path.isfile(abs_try) else "")
-            if real_path:
+        if real_path:
                 try:
                     from tools.data_analysis import DataAnalysisEngine
                     engine = DataAnalysisEngine()
@@ -1261,6 +1313,7 @@ class TomAgent:
                         ov = insights.get("overview", {})
                         recs = insights.get("recommendations", [])[:5]
                         msg = (
+                            open_note +
                             f"Data analysis complete (real pipeline, not codegen).\n"
                             f"Rows: {ov.get('rows')} | Columns: {ov.get('columns')} | "
                             f"Missing cells: {ov.get('missing_cells')} | "
@@ -1308,7 +1361,7 @@ class TomAgent:
                     except Exception as e:
                         files_written.append(f"{fpath} (failed: {e})")
 
-            msg = f"Data analysis complete.\n\n{content[:2000]}"
+            msg = open_note + f"Data analysis complete.\n\n{content[:2000]}"
             if files_written:
                 msg += f"\n\nFiles written: {', '.join(files_written)}"
             return {"status": "success", "message": msg, "response_type": "data_analysis"}

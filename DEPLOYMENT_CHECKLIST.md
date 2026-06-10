@@ -18,7 +18,11 @@
    chat message, one quick action. Watch `tom_logs/startup.log` if anything fails.
 5. **Run the test suite (optional, 3 min)** — `python -m pytest tests/ -v`
    (11 tests incl. the 100%-utilization contract) and `python test_tom_comprehensive.py`.
-6. **Try the new meta commands** — in chat or CLI type `what can you do`
+6. **Voice sanity (after the fixes)** — type `voice check` in chat: it prints a
+   full diagnosis (mics found, playback device, Google-STT/Edge-TTS reachability)
+   with the exact fix for anything red. Voice needs INTERNET for recognition
+   (Google) and the neural voice (Edge) — that's by design of those engines.
+7. **Try the new meta commands** — in chat or CLI type `what can you do`
    (registry-backed capability list) and `system status` (live subsystem health).
 7. **Deep diagnostic (optional)** — `python tools/verify_tom_system.py`.
 

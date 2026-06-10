@@ -1299,6 +1299,7 @@ class TomDesktopApp:
         self.auto_update = None
 
         self._build_layout()
+        self._install_global_scroll()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(120, self._drain_ui_queue)
         self.root.after(3000, self._poll_email_agent_state)
@@ -1484,6 +1485,7 @@ class TomDesktopApp:
         sb.bind("<Configure>", _sb_configure)
         _sb_cv.bind("<Configure>", _sb_cv_resize)
         _sb_cv.bind("<MouseWheel>", lambda e: _sb_cv.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        self._sidebar_canvas = _sb_cv  # for the global wheel dispatcher
 
         # \u2500\u2500 Logo \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         logo_block = tk.Frame(sb, bg=C["bg"], pady=16, padx=16)
@@ -1726,6 +1728,36 @@ class TomDesktopApp:
         except Exception:
             pass
         self.root.after(80, self._pulse_ready_dot)
+
+    def _install_global_scroll(self):
+        """SCROLL FIX: wheel events go to the widget UNDER THE CURSOR, so a
+        binding on the canvas alone never fires while hovering its children
+        (chat bubbles, sidebar buttons). This global dispatcher walks up the
+        widget tree from the pointer position and scrolls the owning canvas."""
+        def _owner_canvas(widget):
+            w = widget
+            while w is not None:
+                if w is getattr(self, "chat_canvas", None) or \
+                   w is getattr(self, "_sidebar_canvas", None) or \
+                   w is getattr(self, "dash_canvas", None):
+                    return w
+                w = getattr(w, "master", None)
+            return None
+
+        def _on_wheel(event):
+            try:
+                target = self.root.winfo_containing(event.x_root, event.y_root)
+            except Exception:
+                target = None
+            cv = _owner_canvas(target) if target is not None else None
+            if cv is not None:
+                try:
+                    steps = int(-1 * (event.delta / 120)) or (-1 if event.delta > 0 else 1)
+                    cv.yview_scroll(steps, "units")
+                except Exception:
+                    pass
+
+        self.root.bind_all("<MouseWheel>", _on_wheel, add="+")
 
     def _build_content_area(self):
         self.content_frame = tk.Frame(self.body, bg=C["bg"])
@@ -2918,7 +2950,10 @@ class TomDesktopApp:
 
     def _toggle_voice_mode(self):
         if not self.voice:
-            self._append_chat("meta", "Voice tools are not available in this environment.")
+            reason = getattr(self, "voice_init_error", "")
+            self._append_chat("meta", "Voice tools are not available"
+                              + (f": {reason}" if reason else " in this environment.")
+                              + " Type 'voice check' in chat for a full diagnosis.")
             return
         if not self.voice_mode_enabled:
             self.voice.input_enabled = True
@@ -4364,8 +4399,12 @@ class TomDesktopApp:
         try:
             from tools.voice_tools import VoiceTools
             self.voice = VoiceTools()
-        except Exception:
+            self.voice_init_error = ""
+        except Exception as _v_err:
             self.voice = None
+            self.voice_init_error = str(_v_err)
+            self._enqueue(self._append_chat, "meta",
+                          f"[VOICE] Voice tools failed to load: {_v_err} — type 'voice check' for diagnosis.")
 
         try:
             from agent import TomAgent as _TomAgent
