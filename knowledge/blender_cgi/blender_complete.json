@@ -1,0 +1,155 @@
+{
+  "domain": "Blender Complete - 3D Modeling, Animation & CGI",
+  "category": "blender_cgi",
+  "subcategory": "blender_complete",
+  "description": "Complete Blender knowledge from absolute beginner to professional - modeling, sculpting, texturing, animation, rigging, VFX, and rendering",
+  "teaching_plan": {
+    "lesson_1": {
+      "title": "Your First 3D Model",
+      "concepts": ["Blender interface", "Navigating 3D space", "Selecting, moving, rotating, scaling", "Basic mesh editing"],
+      "projects": ["Create a low-poly sword", "Model a simple house"]
+    },
+    "lesson_2": {
+      "title": "Making Things Look Real",
+      "concepts": ["Materials (Principled BSDF)", "Textures and UV mapping", "Lighting (3-point lighting)", "Camera setup"],
+      "projects": ["Texture a character", "Set up a product render scene"]
+    },
+    "lesson_3": {
+      "title": "Bringing Characters to Life",
+      "concepts": ["Armatures and bones", "Weight painting", "Simple animation", "Shape keys for face"],
+      "projects": ["Rig and animate a walk cycle", "Create a simple facial animation"]
+    },
+    "lesson_4": {
+      "title": "VFX and Simulations",
+      "concepts": ["Particle systems", "Cloth simulation", "Fire and smoke", "Fluid simulation"],
+      "projects": ["Create an explosion effect", "Simulate flowing water"]
+    },
+    "lesson_5": {
+      "title": "Procedural Everything",
+      "concepts": ["Geometry Nodes", "Shader nodes", "Procedural textures", "Modifiers for production"],
+      "projects": ["Build a procedural tree generator", "Create a procedural sci-fi panel material"]
+    }
+  },
+  "sections": [
+    {
+      "name": "Blender Interface & Fundamentals",
+      "difficulty": "beginner",
+      "explanation_simple": "Blender is like a spaceship control panel - intimidating at first, but every button has a purpose. The 3D Viewport is your main window, the Timeline at the bottom is for animation, the Outliner on the right shows everything in your scene, and the Properties panel on the far right controls settings. The most important thing to learn is the keyboard shortcuts: G = Grab (move), R = Rotate, S = Scale, Tab = Toggle Edit Mode. These shortcuts make Blender 10x faster once you memorize them.",
+      "key_concepts": [
+        "3D Viewport: Main window where you create and see your 3D world",
+        "Outliner: List of every object in your scene",
+        "Properties Panel: Controls for objects, materials, render settings",
+        "Timeline: For animation (keyframes and scrubbing)",
+        "Object Mode: Move/rotate/scale whole objects",
+        "Edit Mode: Edit the vertices, edges, and faces of a mesh",
+        "Sculpt Mode: Push/pull clay digitally",
+        "Tab Key: Toggle between Object and Edit Mode",
+        "G: Grab (move), R: Rotate, S: Scale",
+        "X: Delete, E: Extrude, Ctrl+R: Loop Cut, K: Knife Tool"
+      ],
+      "code_examples": [
+        {
+          "title": "Basic Navigation and Keyboard Shortcuts",
+          "code": "/*\nBLENDER NAVIGATION CHEATSHEET\n\n=== VIEWPORT NAVIGATION ===\nMiddle Mouse Button: Orbit camera\nShift + Middle Mouse: Pan camera\nScroll: Zoom in/out\nNumpad 1: Front view\nNumpad 3: Right view\nNumpad 7: Top view\nNumpad 0: Camera view\nNumpad 5: Toggle perspective/orthographic\n\n=== BASIC TRANSFORMS ===\nG: Move (Grab)\nR: Rotate\nS: Scale\nAfter pressing G/R/S:\n  X/Y/Z: Lock to axis\n  Shift+X/Y/Z: Lock out of axis\n  Number: Precise value (G X 5 moves 5 units on X)\n\n=== SELECTION ===\nRight-click: Select\nA: Select/Deselect all\nB: Box select\nC: Circle select (scroll to resize)\nAlt+Right-click: Select edge loop\nCtrl+I: Invert selection\nH: Hide selected\nAlt+H: Unhide all\n\n=== EDITING ===\nTab: Toggle Edit Mode\n1/2/3: Vertex/Edge/Face select mode\nE: Extrude\nI: Inset\nCtrl+R: Loop cut\nK: Knife tool (Enter to confirm)\nCtrl+B: Bevel\nF: Fill (make face from selected edges)\nX: Delete menu\nM: Merge\nP: Separate selection to new object\n\n=== MODIFIERS ===\nThe most commonly used modifiers:\n- Subdivision Surface: Smooths mesh by subdividing faces\n- Mirror: Mirrors mesh across axis (for symmetrical modeling)\n- Bevel: Rounds sharp edges\n- Array: Creates a grid/line of copies\n- Solidify: Gives thickness to thin surfaces\n- Boolean: Add/Subtract/Intersect with another mesh\n- Displace: Deforms mesh based on texture\n*/\n\n// Blender Python API equivalent of manual operations\nimport bpy\n\n# Add a cube\nbpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 0))\n\n# Get reference to the new cube\ncube = bpy.context.active_object\n\n# Switch to edit mode\nbpy.ops.object.mode_set(mode='EDIT')\n\n# Subdivide all faces\nbpy.ops.mesh.subdivide(number_cuts=2)\n\n# Switch back to object mode\nbpy.ops.object.mode_set(mode='OBJECT')\n\n# Add subdivision surface modifier\nmod = cube.modifiers.new(name=\"Subdivision\", type='SUBSURF')\nmod.levels = 2\nmod.render_levels = 3\n\n# Smooth shading\nbpy.ops.object.shade_smooth()"
+        }
+      ],
+      "learning_path": "Learn the interface -> Memorize G/R/S/Tab -> Practice basic modeling -> Learn modifiers -> Learn materials and lighting"
+    },
+    {
+      "name": "Mesh Modeling (Hard Surface & Organic)",
+      "difficulty": "beginner",
+      "explanation_simple": "Mesh modeling is building 3D objects by manipulating vertices (points), edges (lines between points), and faces (flat surfaces). Hard surface modeling is for man-made objects like guns, cars, buildings, and robots - these have sharp edges and flat surfaces. Organic modeling is for living things like characters, animals, and creatures - these have smooth curves and flowing forms. Both start from simple shapes (cube, sphere, cylinder) that you push, pull, cut, and extrude into the final form.",
+      "key_concepts": [
+        "Vertices: Points in 3D space (the 'corners' of your model)",
+        "Edges: Lines connecting two vertices",
+        "Faces: Flat surfaces made of 3+ edges (triangles or quads)",
+        "Extrude (E): Pull a face outward to create new geometry",
+        "Loop Cut (Ctrl+R): Add a ring of edges around the mesh",
+        "Bevel (Ctrl+B): Round off sharp edges",
+        "Boolean: Cut one shape from another (like cookie cutters)",
+        "Mirror Modifier: Model half, get the other half for free",
+        "Subdivision Surface: Makes low-poly models smooth (game changer)",
+        "Edge Flow: How edges follow the shape of your model"
+      ],
+      "code_examples": [
+        {
+          "title": "Blender Python: Create a Hard Surface Sci-Fi Panel",
+          "code": "import bpy\nimport math\n\n# Clear existing objects\nbpy.ops.object.select_all(action='SELECT')\nbpy.ops.object.delete(use_global=False)\n\n# Create the base panel\nbpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 0))\npanel = bpy.context.active_object\npanel.name = \"SciFi_Panel\"\n\n# Scale to make it flat\npanel.scale = (3, 2, 0.2)\nbpy.ops.object.transform_apply(scale=True)\n\n# Enter edit mode and make insets\nbpy.ops.object.mode_set(mode='EDIT')\nbpy.ops.mesh.select_mode(type='FACE')\n\n# Select top and bottom faces (they're facing Z)\nbpy.ops.mesh.select_all(action='DESELECT')\nbpy.ops.view3d.select_pattern(extend=False, pattern=\"*Z*\")\n\n# Inset to create panel border\nbpy.ops.mesh.inset(thickness=0.1, depth=0)\n\n# Inset again for inner panel\nbpy.ops.mesh.inset(thickness=0.05, depth=-0.05)\n\n# Add some detail cuts\nbpy.ops.mesh.select_mode(type='EDGE')\nbpy.ops.mesh.select_all(action='DESELECT')\n# Add loop cuts for detail (would do manually in real workflow)\n\nbpy.ops.object.mode_set(mode='OBJECT')\n\n# Add bevel modifier for the sci-fi look\nbevel = panel.modifiers.new(name=\"Bevel\", type='BEVEL')\nbevel.width = 0.02\nbevel.segments = 3\n\n# Add subdivision surface for smoothness\nsubdiv = panel.modifiers.new(name=\"Subdivision\", type='SUBSURF')\nsubdiv.levels = 1\nsubdiv.render_levels = 2\n\n# Create material\nmat = bpy.data.materials.new(name=\"SciFi_Metal\")\nmat.use_nodes = True\nnodes = mat.node_tree.nodes\nlinks = mat.node_tree.links\n\n# Clear default nodes\nnodes.clear()\n\n# Add Principled BSDF\nprincipled = nodes.new(type='ShaderNodeBsdfPrincipled')\nprincipled.inputs['Base Color'].default_value = (0.2, 0.3, 0.5, 1)\nprincipled.inputs['Metallic'].default_value = 0.8\nprincipled.inputs['Roughness'].default_value = 0.3\nprincipled.inputs['Emission'].default_value = (0.1, 0.2, 0.5, 1)\nprincipled.inputs['Emission Strength'].default_value = 0.5\n\noutput = nodes.new(type='ShaderNodeOutputMaterial')\nlinks.new(principled.outputs['BSDF'], output.inputs['Surface'])\n\npanel.data.materials.append(mat)\n\n# Add lighting\nbpy.ops.object.light_add(type='AREA', location=(5, 5, 8))\nlight = bpy.context.active_object\nlight.data.energy = 1000\n\n# Add camera\nbpy.ops.object.camera_add(location=(6, -4, 3))\ncam = bpy.context.active_object\ncam.rotation_euler = (math.radians(60), 0, math.radians(45))\nbpy.context.scene.camera = cam\n\nprint(\"Sci-Fi panel created successfully!\")"
+        }
+      ],
+      "learning_path": "Basic shapes (cube, sphere, cylinder) -> Edit mode (E, Ctrl+R, Ctrl+B) -> Modifiers (Mirror, Subdivide, Bevel) -> Hard surface workflow -> Organic modeling -> Retopology"
+    },
+    {
+      "name": "Sculpting & Organic Creation",
+      "difficulty": "intermediate",
+      "explanation_simple": "Digital sculpting is like working with real clay, but with undo and unlimited clay. Instead of pushing individual vertices, you use brushes that affect areas of the mesh like real sculpting tools. A Clay brush adds volume, a Crease brush makes sharp lines, an Inflate brush puffs things up. Sculpting is the fastest way to create organic shapes like characters, creatures, and terrain. You start with a simple sphere and 'mold' it into a face, body, or monster.",
+      "key_concepts": [
+        "Dyntopo: Dynamic topology - adds/subtracts polygons as you sculpt",
+        "Multiresolution: Multiple detail levels (sculpt low-poly, then add finer detail)",
+        "Clay Brush: Adds volume like adding clay",
+        "Crease Brush: Carves sharp lines (wrinkles, muscles)",
+        "Snake Hook: Pulls clay out (noses, ears, horns)",
+        "Smooth Brush: Softens rough areas",
+        "Masking: Protect areas from sculpting",
+        "Symmetry: Left/right mirror (sculpt one side, get both)",
+        "VDM Brushes: Pre-made sculpting shapes (eyes, noses) you can stamp on",
+        "Remesh: Rebuild clean topology from sculpt"
+      ],
+      "code_examples": [
+        {
+          "title": "Blender Python: Sculpt a Simple Head",
+          "code": "import bpy\nimport math\n\n# Clear scene\nbpy.ops.object.select_all(action='SELECT')\nbpy.ops.object.delete(use_global=False)\n\n# Add a base sphere\nbpy.ops.mesh.primitive_uv_sphere_add(radius=1, location=(0, 0, 0))\nhead = bpy.context.active_object\nhead.name = \"Head_Base\"\n\n# Add multiresolution modifier for sculpting\nmultires = head.modifiers.new(name=\"Multires\", type='MULTIRES')\nmultires.levels = 0\nmultires.total_levels = 6\n\n# Subdivide a few levels for detail\nfor i in range(4):\n    bpy.ops.object.multires_subdivide(modifier=\"Multires\")\n\n# Enter sculpt mode\nbpy.ops.object.mode_set(mode='SCULPT')\n\n# Set symmetry\nhead.use_mesh_mirror_x = True\n\n# Basic sculpting operations (would do manually, but here's API)\n# The following would be done by hand with a tablet:\n# 1. Use Clay brush to build cheekbones\n# 2. Use Crease brush to define eye sockets\n# 3. Use Snake Hook to pull out nose\n# 4. Use Crease for mouth line\n# 5. Smooth brush to blend everything\n\nprint(\"Head base ready for sculpting!\")\nprint(\"Switch to Sculpt Mode and use these brushes:\")\nprint(\"  - Clay: Build form (cheeks, chin, brow)\")\nprint(\"  - Crease: Define features (eyes, mouth, nose)\")\nprint(\"  - Snake Hook: Pull out nose, ears\")\nprint(\"  - Smooth: Blend and soften\")"
+        }
+      ],
+      "learning_path": "Sculpt mode basics -> Brush types and settings -> Dyntopo vs Multires -> Symmetry sculpting -> Anatomy study -> Detailing -> Retopology for animation"
+    },
+    {
+      "name": "Texturing & Materials",
+      "difficulty": "intermediate",
+      "explanation_simple": "Texturing is how you give color and detail to your 3D models. A plain white cube becomes a rusty metal box, a smooth rock, or a glowing crystal just by changing the material. The most powerful material in Blender is the Principled BSDF - it can create ANY real-world surface. You control things like Base Color (what color is it), Metallic (is it metal?), Roughness (how shiny?), and Normal Map (bumpy details without changing the mesh). Textures are images that control these properties.",
+      "key_concepts": [
+        "Principled BSDF: The 'all-in-one' material node that does everything",
+        "Base Color: The main color/albedo of the surface",
+        "Metallic: 0 = non-metal (wood, plastic, skin), 1 = metal (iron, gold)",
+        "Roughness: 0 = mirror smooth, 1 = completely rough (sandpaper)",
+        "Normal Map: Fake bumps and dents without changing geometry",
+        "Displacement Map: Actually moves vertices (real bumps, needs subdivision)",
+        "UV Unwrapping: Flattening 3D surface onto 2D image (like peeling an orange)",
+        "Texture Paint: Painting directly on the 3D model",
+        "Procedural Textures: Math-generated textures (no image file needed)",
+        "PBR: Physically Based Rendering - realistic materials that react naturally to light"
+      ],
+      "code_examples": [
+        {
+          "title": "Blender Python: Create PBR Material with Nodes",
+          "code": "import bpy\nimport os\n\ndef create_pbr_material(name, base_color, metallic=0, roughness=0.5):\n    \"\"\"Create a PBR material with procedural textures.\"\"\"\n    mat = bpy.data.materials.new(name=name)\n    mat.use_nodes = True\n    nodes = mat.node_tree.nodes\n    links = mat.node_tree.links\n    \n    # Clear default\n    nodes.clear()\n    \n    # Create output\n    output = nodes.new(type='ShaderNodeOutputMaterial')\n    output.location = (400, 0)\n    \n    # Create Principled BSDF\n    principled = nodes.new(type='ShaderNodeBsdfPrincipled')\n    principled.location = (0, 0)\n    principled.inputs['Base Color'].default_value = (*base_color, 1)\n    principled.inputs['Metallic'].default_value = metallic\n    principled.inputs['Roughness'].default_value = roughness\n    \n    # Connect\n    links.new(principled.outputs['BSDF'], output.inputs['Surface'])\n    \n    # Add procedural noise for detail (if not fully metallic)\n    if metallic < 0.5:\n        # Noise texture for roughness variation\n        noise = nodes.new(type='ShaderNodeTexNoise')\n        noise.location = (-300, -200)\n        noise.inputs['Scale'].default_value = 5\n        noise.inputs['Detail'].default_value = 3\n        noise.inputs['Roughness'].default_value = 0.5\n        \n        # Color ramp to control the noise output\n        ramp = nodes.new(type='ShaderNodeValToRGB')\n        ramp.location = (-100, -200)\n        links.new(noise.outputs['Fac'], ramp.inputs['Fac'])\n        \n        # Mix roughness\n        mix = nodes.new(type='ShaderNodeMixRGB')\n        mix.location = (100, -200)\n        mix.blend_type = 'MIX'\n        links.new(ramp.outputs['Color'], mix.inputs['Fac'])\n        mix.inputs['Color1'].default_value = (roughness, roughness, roughness, 1)\n        mix.inputs['Color2'].default_value = (min(roughness + 0.3, 1),) * 3 + (1,)\n        links.new(mix.outputs['Color'], principled.inputs['Roughness'])\n    \n    return mat\n\n# Create materials for different purposes\nmetal_mat = create_pbr_material(\"Gold_Metal\", (0.8, 0.6, 0.1), metallic=1.0, roughness=0.1)\nwood_mat = create_pbr_material(\"Wood\", (0.4, 0.25, 0.1), metallic=0, roughness=0.7)\nplastic_mat = create_pbr_material(\"Red_Plastic\", (0.8, 0.1, 0.1), metallic=0, roughness=0.3)\n\n# Apply material to active object\nif bpy.context.active_object:\n    obj = bpy.context.active_object\n    if obj.data.materials:\n        obj.data.materials[0] = metal_mat\n    else:\n        obj.data.materials.append(metal_mat)\n    \nprint(f\"Created materials: Gold_Metal, Wood, Red_Plastic\")\nprint(f\"Applied {metal_mat.name} to {obj.name}\")"
+        }
+      ],
+      "learning_path": "Principled BSDF basics -> Color, metallic, roughness -> Texture images (download or paint) -> UV unwrapping -> Procedural textures (nodes) -> PBR workflows -> Substance integration"
+    },
+    {
+      "name": "Animation & Rigging",
+      "difficulty": "intermediate",
+      "explanation_simple": "Rigging is building a digital skeleton inside a character so you can animate it. Think of it like a puppet: the strings attach to specific points on the puppet, and when you pull them, the puppet moves. In 3D, the 'strings' are bones connected in a hierarchy. A leg bone connects to a foot bone, which connects to the body. When you rotate the thigh bone, the whole leg moves naturally. Weight painting controls WHICH parts of the mesh move with each bone (move the arm bone, the bicep and forearm should follow, but the chest should not).",
+      "key_concepts": [
+        "Armature: The skeleton (collection of bones)",
+        "Bone: A single bone in the skeleton",
+        "Bone Hierarchy: Parent-child relationships (upper arm -> lower arm -> hand)",
+        "IK (Inverse Kinematics): Move hand, arm adjusts automatically",
+        "FK (Forward Kinematics): Rotate each bone individually (for arcs and swings)",
+        "Weight Painting: How much each bone affects each vertex (0-1 range)",
+        "Vertex Groups: Lists of vertices assigned to each bone",
+        "Pose Mode: Mode for animating the rig",
+        "Action: A single animation (walk, run, jump)",
+        "NLA (Non-Linear Animation): Layering multiple animations (walk + wave)"
+      ],
+      "code_examples": [
+        {
+          "title": "Blender Python: Create a Simple Arm Rig",
+          "code": "import bpy\nimport math\n\ndef create_arm_rig(name=\"Arm_Rig\"):\n    \"\"\"Create a simple arm with IK/FK support.\"\"\"\n    # Create armature\n    bpy.ops.object.armature_add(enter_editmode=True, location=(0, 0, 0))\n    armature = bpy.context.active_object\n    armature.name = name\n    \n    # Get the armature data\n    amt = armature.data\n    amt.display_type = 'WIRE'\n    \n    # Delete default bone\n    bpy.ops.armature.select_all(action='SELECT')\n    bpy.ops.armature.delete()\n    \n    # Create bones in edit mode\n    # Upper arm\n    bpy.ops.armature.bone_primitive_add(name=\"UpperArm\")\n    upper = amt.edit_bones[\"UpperArm\"]\n    upper.head = (0, 0, 0)\n    upper.tail = (0, 0, 1.5)\n    \n    # Lower arm\n    bpy.ops.armature.bone_primitive_add(name=\"Forearm\")\n    forearm = amt.edit_bones[\"Forearm\"]\n    forearm.head = (0, 0, 1.5)\n    forearm.tail = (0, 0, 3.0)\n    forearm.parent = upper\n    \n    # Hand\n    bpy.ops.armature.bone_primitive_add(name=\"Hand\")\n    hand = amt.edit_bones[\"Hand\"]\n    hand.head = (0, 0, 3.0)\n    hand.tail = (0, 0.3, 3.5)\n    hand.parent = forearm\n    \n    # IK target bone\n    bpy.ops.armature.bone_primitive_add(name=\"IK_Target\")\n    ik = amt.edit_bones[\"IK_Target\"]\n    ik.head = (0, 0.5, 3.0)\n    ik.tail = (0, 1.0, 3.5)\n    \n    # Return to object mode\n    bpy.ops.object.mode_set(mode='OBJECT')\n    \n    return armature\n\n# Create the rig\nrig = create_arm_rig()\n\n# Add IK constraint\nbpy.ops.object.mode_set(mode='POSE')\n\n# Get the forearm bone and add IK constraint\nforearm = rig.pose.bones[\"Forearm\"]\nik_constraint = forearm.constraints.new(type='IK')\nik_constraint.target = rig\nik_constraint.subtarget = \"IK_Target\"\nik_constraint.chain_count = 2\n\nbpy.ops.object.mode_set(mode='OBJECT')\n\nprint(f\"Arm rig '{rig.name}' created with IK system!\")\nprint(\"Switch to Pose Mode and move IK_Target to pose the arm.\")"
+        }
+      ],
+      "learning_path": "Armature basics -> Bone placement -> FK animation -> IK systems -> Weight painting -> Character rigging -> Animation principles (12 principles) -> NLA editor"
+    }
+  ]
+}

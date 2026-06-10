@@ -1,0 +1,143 @@
+{
+  "domain": "Sculpting, Texturing & Rigging for 3D Art",
+  "category": "blender_cgi",
+  "subcategory": "sculpting_texturing_rigging",
+  "description": "Complete knowledge of digital sculpting, PBR texturing, and professional character/creature rigging — from beginner to film/AAA game quality",
+  "teaching_plan": {
+    "lesson_1": {
+      "title": "Sculpting Like Clay on Your Computer",
+      "concepts": ["What is digital sculpting?", "Brushes and their uses", "Dyntopo vs multires", "Sculpting anatomy basics"],
+      "projects": ["Sculpt a bust from a sphere", "Create a stylized creature head"]
+    },
+    "lesson_2": {
+      "title": "Making 3D Models Look Real",
+      "concepts": ["PBR texturing explained", "Substance Painter workflow", "Smart materials", "Weathering and wear"],
+      "projects": ["Texture a sword in Substance Painter", "Create a weathered sci-fi panel"]
+    },
+    "lesson_3": {
+      "title": "Building a Skeleton for Your Character",
+      "concepts": ["Armatures and bones", "IK vs FK", "Weight painting", "Rig controls"],
+      "projects": ["Rig a simple character", "Create an IK/FK toggle system"]
+    },
+    "lesson_4": {
+      "title": "Advanced Character Rigs",
+      "concepts": ["Facial rigs with shape keys", "Squash and stretch rigs", "Muscle systems", "Auto-rigging tools"],
+      "projects": ["Build a complete facial rig", "Create a quadruped rig from scratch"]
+    }
+  },
+  "sections": [
+    {
+      "name": "Digital Sculpting Fundamentals (ZBrush & Blender)",
+      "difficulty": "beginner",
+      "explanation_simple": "Digital sculpting is like working with clay on your computer. Instead of pushing vertices one by one, you use brushes that push, pull, smooth, and carve the surface like real clay. ZBrush is the industry standard (used for every character in Marvel movies and AAA games). Blender has a powerful sculpting mode built in for free. The key difference from regular 3D modeling: sculpting works with millions of polygons (like high-detail clay), while regular modeling works with thousands (like Lego blocks). You sculpt the high detail first, then create a low-poly version for the game.",
+      "key_concepts": [
+        "Dyntopo (Dynamic Topology): Automatically adds polygons where you need detail, removes where you don't",
+        "Multiresolution Modifier: Subdivides mesh evenly, keeps all levels of detail",
+        "Draw Brush: The main brush - pushes and pulls surface",
+        "Clay Brush: Adds volume like real clay building",
+        "Crease Brush: Makes sharp indentations (muscle lines, wrinkles)",
+        "Smooth Brush: Softens rough areas",
+        "Masking: Protecting areas from being affected by brushes",
+        "Symmetry: Mirroring your strokes across X, Y, or Z axis",
+        "Alphas: Greyscale images used as brush stamps (add skin texture, scales, etc.)",
+        "Reference: NEVER sculpt without reference images (anatomy books, photos, etc.)",
+        "Primary Forms: Big shapes (head shape, torso volume)",
+        "Secondary Forms: Medium details (muscles, fat pads)",
+        "Tertiary Details: Small details (pores, wrinkles, skin folds)"
+      ],
+      "code_examples": [],
+      "learning_path": "Understanding 3D clay -> Basic brushes (draw, clay, smooth, crease) -> Dyntopo vs Multires -> Primary forms (blocking out) -> Anatomy basics -> Secondary forms (muscles) -> Tertiary details (skin, wrinkles) -> Alphas and custom brushes -> Stylized vs realistic sculpting -> Posing the sculpt"
+    },
+    {
+      "name": "ZBrush Mastery",
+      "difficulty": "intermediate",
+      "explanation_simple": "ZBrush is the most powerful digital sculpting tool in the world. It can handle 100+ million polygon meshes in real-time, which is insane for a single computer. Every major film and game character is sculpted in ZBrush. The interface is unique (not like other 3D software) and takes getting used to, but once you learn it, you can create incredibly detailed characters, creatures, and environments. ZBrush uses 'Pixols' (pixel + polygon hybrid) instead of traditional meshes, which is why it can handle such high detail.",
+      "key_concepts": [
+        "Pixol: ZBrush's unique pixel+polygon hybrid technology",
+        "3D Gizmo: Transform, scale, rotate objects (like G in Blender)",
+        "Subtools: Each object (armor, body, weapon) is a separate subtool in one ZBrush project",
+        "ZRemesher: Auto-retopology tool that creates clean quad meshes from sculpts",
+        "Project All: Projects high-poly detail onto a new retopologized mesh",
+        "UV Master: Automatic UV unwrapping (good enough for most game assets)",
+        "Polypaint: Painting directly on the surface without needing UVs",
+        "Morph Target: Saves a 'snapshot' of mesh state for blending",
+        "Transpose: ZBrush's posing system (rotate parts of your sculpt like a puppet)",
+        "GoZ: One-click transfer between ZBrush and other software (Maya, Blender, UE5)",
+        "DynaMesh: Evenly redistributes polygons for cleaner sculpting",
+        "MicroMesh: Places millions of small objects (scales, tiles, feathers) on surface",
+        "FiberMesh: Generates realistic hair, fur, grass directly in ZBrush",
+        "NoiseMaker: Adds procedural surface detail (armor scratches, skin texture)",
+        "Decimation Master: Reduces polygon count while preserving detail"
+      ],
+      "code_examples": [
+        {
+          "title": "ZBrush Workflow: Blockout to Final",
+          "code": "# ===== COMPLETE ZBRUSH CHARACTER WORKFLOW =====\n\n\"\"\"\nPHASE 1: BLOCKOUT (Primary Forms)\n  1. Start with ZSphere or Sphere3D\n  2. Use Move brush to shape basic silhouette\n  3. ClayBuildup brush to add volume to body parts\n  4. Split into Subtools (Head, Torso, Arms, Legs)\n  5. Use Transpose Master to pose after blocking\n\nPHASE 2: DETAILING (Secondary Forms)\n  1. Divide mesh to higher resolution (Ctrl+D)\n  2. Standard brush for muscle definition\n  3. DamStandard brush for sharp creases (muscle separations)\n  4. Clay brush for building up forms\n  5. hPolish brush for flattening areas (bone landmarks)\n\nPHASE 3: SURFACE DETAILS (Tertiary Forms)\n  1. Alpha brushes for skin pores, wrinkles\n  2. NoiseMaker for surface texture\n  3. Layer brush for subtle skin folds\n  4. Make sure subdivision levels are 6-7 for detail\n\nPHASE 4: RETOPOLOGY & BAKE\n  1. ZRemesher with proper target poly count\n  2. Create UVs with UV Master\n  3. Project All to transfer detail\n  4. Export as GoZ to Maya/Blender for rigging\n  5. Bake maps (Normal, AO, Cavity) from high to low poly\n\"\"\"\n\n# ===== ZBRUSH SHORTCUTS =====\n/*\n  B - Brush menu\n  I - RGB intensity\n  Shift+F - Wireframe overlay\n  Ctrl+D - Divide (increase subdivisions)\n  Shift+D - Lower subdivision level\n  D - Higher subdivision level\n  Ctrl+Z - Undo (ZBrush has unlimited undo!)\n  Alt - Invert brush effect (hold while brushing)\n  Space - Quick menu\n  X - Toggle symmetry\n  Shift+Click on canvas - Rectangular zoom\n  Ctrl+Shift+Drag - Hide masked area\n  Ctrl+Click on empty canvas - Show all\n*/"
+        }
+      ],
+      "learning_path": "ZBrush interface basics -> ZSpheres -> Blockout sculpting -> Subtools management -> Subdivision levels -> Refining anatomy -> Brush mastery (Standard, Clay, DamStandard) -> Alphas for detail -> Retopology with ZRemesher -> UV Master -> Polypaint -> FiberMesh for hair -> MicroMesh for scales/armor -> Decimation for game export"
+    },
+    {
+      "name": "PBR Texturing with Substance Painter & Designer",
+      "difficulty": "intermediate",
+      "explanation_simple": "PBR (Physically Based Rendering) texturing is how you make 3D models look real. Instead of just painting a flat color on a model, you create multiple maps that describe how light interacts with the surface: Albedo (base color), Roughness (how smooth/shiny), Metalness (is it metal?), Normal (fake surface bumps), and AO (ambient shadows in crevices). Substance Painter is like Photoshop for 3D models - you paint directly on the model and it creates all these maps automatically. Substance Designer lets you create procedural materials (brick, wood, metal) using node graphs.",
+      "key_concepts": [
+        "Albedo Map: Base color of the surface (no lighting or shadows)",
+        "Roughness Map: How rough (0 = mirror smooth, 1 = completely rough/diffuse)",
+        "Metalness Map: Is this area metal? (1 = metal, 0 = non-metal, no in-between)",
+        "Normal Map: Fakes 3D detail by modifying how light bounces off surface",
+        "Ambient Occlusion (AO): Shadows in crevices and corners",
+        "Height/Displacement Map: Actually moves vertices for real 3D depth (expensive)",
+        "Emissive Map: Areas that glow (neon signs, eyes, screens)",
+        "Opacity Map: Transparency (glass, leaves, cloth)",
+        "Smart Materials: Substance Painter materials that auto-detect surface features",
+        "Smart Masks: Auto-masks for edge wear, dirt, scratches based on mesh curvature",
+        "UDIM: Multiple UV tiles for very high resolution texturing (film/VFX)",
+        "UDK: Channel packing (combining maps into one texture)",
+        "Texel Density: How many pixels per meter of 3D surface (consistency is key)",
+        "Trimming: Creating reusable texture sheets for modular environments",
+        "Procedural vs Hand-painted: CAD-designed patterns vs artistic textures"
+      ],
+      "code_examples": [
+        {
+          "title": "Substance Painter: Smart Material Creation",
+          "code": "# ===== SUBSTANCE PAINTER SMART MATERIAL WORKFLOW =====\n\n\"\"\"\nCREATING A WEATHERED METAL SMART MATERIAL:\n\nLAYER 1: BASE METAL\n  - Color: Dark gray (RGB 80,80,80)\n  - Metalness: 1.0\n  - Roughness: 0.3\n  - Height: 0\n\nLAYER 2: PAINT COATING\n  - Color: Red (RGB 180,40,30)\n  - Metalness: 0.0\n  - Roughness: 0.6\n  - Height: 0.01\n  - Mask: \"Grunge Map\" blended with \"Position\" (top areas stay painted)\n\nLAYER 3: EDGE WEAR\n  - Metalness: 1.0\n  - Roughness: 0.2\n  - Mask: \"Curvature\" (edges only) + \"Grunge\" for random variation\n  - Effect: Reveals the bare metal under the paint\n\nLAYER 4: DIRT/DUST\n  - Color: Brownish (RGB 120,100,80)\n  - Roughness: 0.9\n  - Metalness: 0.0\n  - Mask: \"Ambient Occlusion\" (dirt in crevices) + \"Position\" (dirt at bottom)\n\nLAYER 5: SCRATCHES\n  - Mask: \"Scratches\" generator with random direction\n  - Effect: Thin bright metallic lines\n\nOUTPUT SETTINGS (for Unreal Engine 5):\n  - Albedo (RGB) @ 2K (2048x2048)\n  - Normal (RG) @ 2K (BC5 compression)\n  - Roughness (R) + Metalness (G) + AO (B) packed into one texture\n  - Emissive (if needed) @ 2K\n\"\"\"\n\n# ===== SUBSTANCE DESIGNER: PROCEDURAL BRICK WALL =====\n\"\"\"\nNODE GRAPH:\n\n1. Tile Generator (Bricks pattern)\n   |\n2. -+-> Slope Blur (weathered edges on bricks)\n   |\n3. -+-> Non-Uniform Blur + Quantize (deformed bricks, random variation)\n   |\n4. -+-> Histogram Scan + Levels (adjust contrast of mortar)\n   |\n5. -+-> Ambient Occlusion (compute AO from height map)\n   |\n6. -+-> Height Blend (combine with dirt/grunge texture)\n   |\n7. OUTPUT:\n   - Height Map (for Normal calculation and Displacement)\n   - Base Color (albedo of bricks + mortar)\n   - Normal Map (computed from Height)\n   - AO Map\n   - Roughness (rougher mortar, smoother bricks)\n\"\"\"\n\n// Substance Designer - Custom Pixel Processor node\n// HLSL code for tile blending:\nfloat2 Random(float2 uv)\n{\n    uv = frac(uv * float2(123.34, 456.21));\n    uv += dot(uv, uv + 19.17);\n    return frac(uv * float2(78.92, 45.63));\n}\n\n// Slightly randomize each brick's color for realism\nfloat4 Process(float4 color1, float4 color2, float2 uv)\n{\n    float2 tilePos = floor(uv * float2(4, 8)); // 4 columns, 8 rows\n    float2 rand = Random(tilePos);\n    \n    // Slightly vary each brick's color and roughness\n    float3 brickColor = color1.rgb + (rand.x - 0.5) * 0.1;\n    float roughness = color1.a + (rand.y - 0.5) * 0.2;\n    \n    return float4(brickColor, roughness);\n}"
+        }
+      ],
+      "learning_path": "PBR theory (Albedo, Roughness, Metalness, Normal, AO) -> Substance Painter basics -> Smart materials -> Masking (curvature, position, AO) -> Weathering and wear -> Texture optimization -> Substance Designer fundamentals -> Node graphs -> Material functions -> Export to game engine"
+    },
+    {
+      "name": "Character & Creature Rigging",
+      "difficulty": "intermediate",
+      "explanation_simple": "Rigging is creating a digital skeleton for a 3D model so it can be animated. Think of it like a puppet: you build the armature (bones), attach the mesh (weight painting), and create controls so animators can easily pose it. A good rig gives the animator total control while being easy to use. Bad rigs make animation a nightmare. Professional rigs include IK/FK switching (using controllers on the hands and feet vs natural arm movement), stretchy limbs (for cartoon characters), facial controls (every subtle expression), and secondary animation (jiggling fat, floppy ears).",
+      "key_concepts": [
+        "Armature: The skeleton structure made of bones",
+        "Bone: A single joint in the skeleton (has head and tail position)",
+        "Joint: The pivot point of a bone",
+        "Hierarchy: Parent-child relationships (root -> spine -> chest -> shoulder -> arm -> hand)",
+        "IK (Inverse Kinematics): Hand stays in place, arm bends naturally (used for feet on ground, hands on objects)",
+        "FK (Forward Kinematics): Rotate each bone from parent to child (used for arms swinging naturally)",
+        "IK/FK Switch: A rig that can swap between IK and FK modes (standard in all pro rigs)",
+        "Weight Painting: How much each bone influences each vertex (painted with gradients)",
+        "Vertex Groups: Blender's way of storing bone weights per vertex",
+        "Deformation: How the mesh moves when bones move",
+        "Constraints: Rules that limit bone movement (e.g., knee can't bend backward)",
+        "Control Bones: Extra bones that animators use (not part of the skeleton, just controllers)",
+        "Shape Keys (Morph Targets): Pre-made mesh deformations for facial expressions",
+        "Drivers: Automatically control one property based on another (bone rotation drives shape key value)",
+        "Auto-Rigging: Tools that create rigs automatically (Rigify in Blender, AccuRig, etc.)"
+      ],
+      "code_examples": [
+        {
+          "title": "Complete Rigify Rig Pipeline (Blender Python)",
+          "code": "# ===== BLENDER PYTHON: METARIG SETUP =====\nimport bpy\n\ndef setup_character_rig(character_name=\"Character\"):\n    \"\"\"\n    Creates a complete rig for a character using Rigify.\n    \"\"\"\n    # Select the character mesh\n    mesh = bpy.context.active_object\n    if not mesh or mesh.type != 'MESH':\n        print(\"Please select a mesh first\")\n        return\n\n    # Add Rigify metarig\n    bpy.ops.object.armature_human_metarig_add()\n    metarig = bpy.context.active_object\n    metarig.name = f\"{character_name}_Metarig\"\n\n    # Scale metarig to match character\n    # (You'd do this manually in the viewport)\n\n    # Generate the actual rig\n    bpy.ops.object.select_all(action='DESELECT')\n    metarig.select_set(True)\n    bpy.context.view_layer.objects.active = metarig\n    bpy.ops.pose.rigify_generate()\n\n    # The generated rig is now active\n    rig = bpy.context.active_object\n    rig.name = f\"{character_name}_Rig\"\n\n    # Parent mesh to rig with automatic weights\n    bpy.ops.object.select_all(action='DESELECT')\n    mesh.select_set(True)\n    rig.select_set(True)\n    bpy.context.view_layer.objects.active = rig\n    bpy.ops.object.parent_set(type='ARMATURE_AUTO')\n\n    print(f\"Rig created for {character_name}\")\n    print(\"Controls:\")\n    print(\"  - Select the rig and go to Pose Mode\")\n    print(\"  - Select the control circles (green, blue, etc.) to pose\")\n    print(\"  - Use the Properties panel for IK/FK switching\")\n\n# Run it:\n# setup_character_rig(\"MyHero\")\n\n# ===== MANUAL RIG: IK/FK System =====\nimport bpy\n\ndef create_ik_fk_arm(name=\"Arm\"):\n    \"\"\"Create an arm rig with IK/FK switching.\"\"\"\n    bpy.ops.object.armature_add()\n    armature = bpy.context.active_object\n    armature.name = f\"{name}_Rig\"\n\n    # Enter edit mode to build bones\n    bpy.ops.object.mode_set(mode='EDIT')\n    edit_bones = armature.data.edit_bones\n\n    # Create FK chain\n    upper_arm = edit_bones.new(f\"{name}_FK_Upper\")\n    upper_arm.head = (0, 0, 1)  # Shoulder\n    upper_arm.tail = (0, 0, 0.5)  # Elbow\n\n    forearm = edit_bones.new(f\"{name}_FK_Forearm\")\n    forearm.parent = upper_arm\n    forearm.head = upper_arm.tail\n    forearm.tail = (0, 0, 0)  # Wrist\n\n    # Create IK bone (same positions, different parenting)\n    ik_target = edit_bones.new(f\"{name}_IK_Target\")\n    ik_target.head = (0, 0, 0)  # Wrist\n    ik_target.tail = (0, 0, -0.3)  # Below wrist\n\n    # Pole target for IK (controls elbow direction)\n    pole = edit_bones.new(f\"{name}_Pole\")\n    pole.head = (-0.3, 0, 0.5)  # Behind elbow\n    pole.tail = (-0.4, 0, 0.5)\n\n    # Switch to pose mode to add constraints\n    bpy.ops.object.mode_set(mode='OBJECT')\n    bpy.ops.object.mode_set(mode='POSE')\n    pose_bones = armature.pose.bones\n\n    # Add IK constraint to forearm\n    ik_constraint = pose_bones[forearm.name].constraints.new('IK')\n    ik_constraint.target = armature\n    ik_constraint.subtarget = ik_target.name\n    ik_constraint.pole_target = armature\n    ik_constraint.pole_subtarget = pole.name\n    ik_constraint.pole_angle = 0\n    ik_constraint.chain_count = 2\n\n    # Add custom bone shapes (circles for controls)\n    # ... (would need to create widget objects)\n\n    print(f\"IK/FK arm rig created for {name}\")\n\n# Run it:\n# create_ik_fk_arm(\"Left\")"
+        },
+        {
+          "title": "Facial Rigging with Shape Keys (Blender)",
+          "code": "# ===== BLENDER PYTHON: FACIAL SHAPE KEY SYSTEM =====\nimport bpy\n\ndef create_facial_shape_keys(mesh_name=\"Character_Head\"):\n    \"\"\"Create a complete set of facial shape keys.\"\"\"\n\n    mesh = bpy.data.objects.get(mesh_name)\n    if not mesh or mesh.type != 'MESH':\n        print(f\"Mesh '{mesh_name}' not found\")\n        return\n\n    # Select the mesh\n    bpy.context.view_layer.objects.active = mesh\n    mesh.select_set(True)\n\n    # Enter edit mode to create shape keys\n    # First, add the Basis (base shape)\n    basis_key = mesh.data.shape_keys.key_blocks.get(\"Basis\")\n    if not basis_key:\n        mesh.shape_key_add(name=\"Basis\", from_mix=False)\n\n    # Define all the shape keys we need\n    shape_keys = [\n        # Brows\n        \"Brow_Raise_Left\", \"Brow_Raise_Right\", \"Brow_Lower_Left\", \"Brow_Lower_Right\",\n        # Eyes\n        \"Eye_Blink_Left\", \"Eye_Blink_Right\", \"Eye_Wide_Left\", \"Eye_Wide_Right\",\n        \"Eye_Squint_Left\", \"Eye_Squint_Right\", \"Eye_Look_Up\", \"Eye_Look_Down\",\n        \"Eye_Look_Left\", \"Eye_Look_Right\",\n        # Mouth\n        \"Mouth_Smile\", \"Mouth_Frown\", \"Mouth_Open\", \"Mouth_Ooh\",\n        \"Mouth_Pucker\", \"Mouth_Stretch\", \"Mouth_Dimpler\",\n        \"Lip_Raise_Upper\", \"Lip_Raise_Lower\", \"Lip_Corner_Puller\",\n        # Jaw\n        \"Jaw_Open\", \"Jaw_Left\", \"Jaw_Right\", \"Jaw_Forward\",\n        # Cheeks\n        \"Cheek_Suck\", \"Cheek_Puff\", \"Cheek_Raise\",\n        # Nose\n        \"Nose_Wrinkle\", \"Nose_Flare\",\n        # Tongue\n        \"Tongue_Out\", \"Tongue_Up\",\n        # Additional\n        \"Head_Tilt\", \"Neck_Flex\",\n    ]\n\n    for name in shape_keys:\n        key = mesh.shape_key_add(name=name, from_mix=True)\n        # Set value to 0 (it's created at 1.0 by default from_mix)\n        key.value = 0.0\n\n    print(f\"Created {len(shape_keys)} facial shape keys on {mesh_name}\")\n\n# The actual vertex positions would need to be edited manually\n# in Edit Mode with the shape key selected.\n# This function creates all the keys so you can edit them.\n\n# ===== DRIVEN FACIAL CONTROLS =====\n# Create a bone that drives shape keys\n\ndef create_facial_bone_drivers(rig_name=\"Head_Rig\", mesh_name=\"Character_Head\"):\n    \"\"\"Link facial bones to shape key values.\"\"\"\n\n    rig = bpy.data.objects.get(rig_name)\n    mesh = bpy.data.objects.get(mesh_name)\n\n    if not rig or not mesh:\n        print(\"Rig or mesh not found\")\n        return\n\n    # Example: Mouth_Open bone drives Jaw_Open shape key\n    mouth_bone = rig.pose.bones.get(\"Mouth_Open_Bone\")\n    if mouth_bone and mesh.data.shape_keys:\n        shape_key = mesh.data.shape_keys.key_blocks.get(\"Jaw_Open\")\n        if shape_key:\n            # Create a driver\n            driver = shape_key.driver_add(\"value\")\n            driver.driver.type = 'AVERAGE'\n\n            # Add variable: bone rotation\n            var = driver.driver.variables.new()\n            var.name = \"mouth_rot\"\n            var.type = 'TRANSFORMS'\n\n            # Target: the bone\n            target = var.targets[0]\n            target.id = rig\n            target.bone_target = mouth_bone.name\n            target.transform_type = 'ROT_Y'\n            target.transform_space = 'LOCAL_SPACE'\n\n            # Expression: simple mapping\n            driver.driver.expression = \"mouth_rot\"\n\n    print(\"Facial drivers created\")\n\n# Run:\n# create_facial_shape_keys(\"MyCharacter\")\n# create_facial_bone_drivers(\"Head_Rig\", \"MyCharacter\")"
+        }
+      ],
+      "learning_path": "Armature basics (bones, hierarchy) -> Parenting bones -> Weight painting fundamentals -> FK rigging -> IK rigging -> IK/FK switching -> Custom bone shapes (controls) -> Constraints (limit rotation, copy transform) -> Facial shape keys -> Drivers for facial controls -> Auto-rigging tools (Rigify) -> Quadruped rigs -> Advanced deformation (muscle systems, jiggle bones)"
+    }
+  ]
+}

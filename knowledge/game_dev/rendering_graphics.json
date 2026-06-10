@@ -1,0 +1,170 @@
+﻿{
+  "domain": "Rendering & Graphics Programming",
+  "category": "game_dev",
+  "subcategory": "rendering_graphics",
+  "description": "Complete computer graphics knowledge from fundamentals to cutting-edge research — written for a 15-year-old who wants to become a graphics programmer",
+  "version": "1.0",
+  "total_topics": 10,
+  "total_subtopics": 64,
+  "topics": [
+    {
+      "id": 1,
+      "title": "Real-Time Rendering Basics",
+      "subtitle": "How your screen turns triangles into pictures 60 times per second",
+      "explanation_simple": "Imagine you're drawing a 3D scene on a piece of paper, but instead of drawing it once, you have to draw it 60 times every second. Real-time rendering is the art of doing that fast enough that the picture moves smoothly. The main technique is called rasterization: it is like taking a wireframe 3D model and filling in all the pixels one by one, figuring out what color each tiny dot on your screen should be.",
+      "key_concepts": [
+        "Rasterization — converting 3D shapes into 2D pixels",
+        "Graphics Pipeline — the assembly line that processes every triangle",
+        "Vertices vs Pixels — 3D points versus screen dots",
+        "Frame Buffer — the final image stored in memory",
+        "Swap Chain — double-buffering so you never see a half-drawn frame",
+        "V-Sync — synchronizing with your monitor refresh rate"
+      ],
+      "subtopics": [
+        {
+          "name": "What is Rasterization?",
+          "explanation_simple": "Your screen is a grid of millions of tiny dots called pixels. Rasterization is the process of figuring out which pixels are covered by a triangle, then coloring them in. Think of it like coloring by numbers: you have a triangle shape defined by 3 corner points, and you need to fill in every square of a giant grid that falls inside that triangle. The computer does this millions of times per frame.",
+          "how_it_works": "For each triangle, the rasterizer looks at the 3 screen-space positions. It finds the bounding box (smallest rectangle that contains the triangle), then checks each pixel in that box to see if it is inside the triangle using edge functions. If a pixel is inside, it gets a fragment: a potential pixel that will go through more processing before becoming final.",
+          "analogy": "Like using a stencil: you cut out a triangle shape, lay it on graph paper, and color in all the squares you can see through the hole."
+        },
+        {
+          "name": "The Graphics Pipeline — Complete Walkthrough",
+          "explanation_simple": "The graphics pipeline is like a factory assembly line. Raw 3D data goes in one end, and a finished 2D image comes out the other. Each stage does one specific job, and they all run in parallel: while one triangle is being rasterized, another is being transformed, and another is having its colors calculated. This parallelism is why GPUs are so fast.",
+          "stages": [
+            {
+              "stage": "Input Assembler",
+              "description": "Reads vertex data (positions, colors, texture coordinates) from memory buffers and assembles them into triangles. Not programmable: it is fixed hardware.",
+              "diagram": "Vertex Buffer -> [IA] -> Triangle Vertices"
+            },
+            {
+              "stage": "Vertex Shader",
+              "description": "A small program that runs once per vertex. It transforms 3D positions into screen coordinates, usually using matrix math (model, view, projection). You write this code yourself.",
+              "diagram": "3D Vertex (object space) -> [VS] -> Screen-space Vertex",
+              "what_you_can_do": "Vertex skinning for animation, morph targets, procedural vertex displacement"
+            },
+            {
+              "stage": "Tessellation",
+              "description": "Optional stage that subdivides triangles into smaller triangles. Hull Shader decides HOW to subdivide, Tessellator does the actual splitting (fixed function), Domain Shader positions the new vertices. Great for making low-poly models look smooth.",
+              "diagram": "Low-poly mesh -> [HS] -> [Tessellator] -> [DS] -> High-poly mesh"
+            },
+            {
+              "stage": "Geometry Shader",
+              "description": "Optional stage that runs once per triangle and can add or remove vertices. Can turn a point into a billboard quad, or a triangle into a fan of triangles. Rarely used in modern engines: compute shaders do this better.",
+              "diagram": "1 triangle -> [GS] -> N triangles (or 0)"
+            },
+            {
+              "stage": "Rasterization (Fixed Function)",
+              "description": "The fixed-function stage that converts triangles into fragments (potential pixels). Determines which pixels the triangle covers, interpolates vertex data (colors, UVs, normals) across the surface using barycentric coordinates.",
+              "diagram": "Screen-space triangle -> [Rasterizer] -> Fragments with interpolated data"
+            },
+            {
+              "stage": "Fragment (Pixel) Shader",
+              "description": "Runs once per fragment (potential pixel). Calculates the final color based on textures, lighting, shadows, etc. This is where the visual magic happens.",
+              "diagram": "Fragment (UV, normal, position) -> [FS] -> Color + Depth",
+              "what_you_can_do": "Per-pixel lighting, texture sampling, normal mapping, procedural patterns"
+            },
+            {
+              "stage": "Output Merger",
+              "description": "Combines the fragment shader result with the existing frame buffer. Handles depth testing, stencil testing, and blending (transparency). Fixed function plus some configurable settings.",
+              "diagram": "Fragment color + depth -> [OM] -> Frame buffer pixel"
+            }
+          ],
+          "visual_pipeline_ascii": [
+            "+---------------+     +----------+     +-------------+     +-----------+",
+            "| Input         |---->| Vertex   |---->| Tessellation|---->| Geometry  |",
+            "| Assembler     |     | Shader   |     | (Optional)  |     | Shader    |",
+            "+---------------+     +----------+     +-------------+     +-----+-----+",
+            "                                                                  |",
+            "                                                                  v",
+            "+---------------+     +----------+     +-------------+     +-----------+",
+            "| Output        |<----| Fragment |<----| Rasterizer  |<----|   ...     |",
+            "| Merger        |     | Shader   |     | (Fixed)     |     |           |",
+            "+---------------+     +----------+     +-------------+     +-----------+"
+          ]
+        }
+      ],
+      "code_examples": {
+        "minimal_vertex_shader_glsl": {
+          "description": "The simplest possible vertex shader: transforms position using model-view-projection matrix",
+          "language": "GLSL",
+          "code": "#version 330 core\nlayout(location = 0) in vec3 aPos;\nuniform mat4 uMVP;\nvoid main() {\n    gl_Position = uMVP * vec4(aPos, 1.0);\n}"
+        },
+        "minimal_fragment_shader_glsl": {
+          "description": "Colors every pixel solid red: the hello world of shaders",
+          "language": "GLSL",
+          "code": "#version 330 core\nout vec4 FragColor;\nvoid main() {\n    FragColor = vec4(1.0, 0.0, 0.0, 1.0);\n}"
+        },
+        "simple_graphics_loop_concept": {
+          "description": "Pseudocode showing the per-frame rendering loop",
+          "language": "C++",
+          "code": "while (window.isOpen()) {\n    processInput();\n    renderer.clear(Color(0.1f, 0.1f, 0.2f, 1.0f));\n    shader.setUniform(\"uMVP\", camera.getMVP());\n    mesh.bind();\n    renderer.draw(mesh.getIndexCount());\n    window.swapBuffers();\n}"
+        }
+      },
+      "learning_path": {
+        "week_1": "Understand the pipeline conceptually. Draw a triangle with OpenGL or DirectX.",
+        "week_2": "Learn matrix transformations (model, view, projection). Rotate a cube.",
+        "week_3": "Add texturing. Load an image file and map it onto your cube.",
+        "resources": ["LearnOpenGL.com", "DirectX Tutorials by RasterTek", "Scratchapixel.com"]
+      }
+    }
+  ],
+  "learning_path": [
+    {"order": 1, "topic": "Graphics Pipeline", "time": "2 weeks"},
+    {"order": 2, "topic": "Rendering Techniques", "time": "2 weeks"},
+    {"order": 3, "topic": "Lighting & PBR", "time": "3 weeks"},
+    {"order": 4, "topic": "Ray Tracing & Path Tracing", "time": "3 weeks"},
+    {"order": 5, "topic": "Shader Programming", "time": "3 weeks"},
+    {"order": 6, "topic": "GPU Architecture & CUDA", "time": "2 weeks"},
+    {"order": 7, "topic": "Advanced Rendering", "time": "4 weeks"},
+    {"order": 8, "topic": "Graphics APIs", "time": "4 weeks"},
+    {"order": 9, "topic": "GPU Optimization", "time": "2 weeks"},
+    {"order": 10, "topic": "Post-Processing", "time": "2 weeks"}
+  ],
+  "glossary": {
+    "Alpha": "The transparency channel of a color (0=transparent, 1=opaque)",
+    "Anisotropic Filtering": "Texture filtering technique that reduces blurring on surfaces viewed at shallow angles",
+    "BRDF": "Bidirectional Reflectance Distribution Function: describes how light reflects off a surface",
+    "BVH": "Bounding Volume Hierarchy: a tree structure that accelerates ray intersection tests",
+    "Compute Shader": "A shader that performs general-purpose calculations, not tied to graphics",
+    "Depth Buffer": "A texture storing the distance of each pixel from the camera, used for visibility testing",
+    "Draw Call": "A CPU command telling the GPU to render a set of geometry",
+    "Fragment": "A potential pixel: a fragment may be discarded by depth testing or stencil testing",
+    "Frustum": "The pyramid-shaped volume visible to the camera",
+    "G-Buffer": "A set of textures in deferred rendering storing per-pixel geometry data",
+    "GI": "Global Illumination: simulation of indirect light bouncing between surfaces",
+    "GPU": "Graphics Processing Unit: specialized processor for parallel graphics computation",
+    "HLSL": "High-Level Shader Language: Microsoft shader language for DirectX",
+    "GLSL": "OpenGL Shading Language: shader language for OpenGL and Vulkan",
+    "HDR": "High Dynamic Range: storing color values beyond the 0-1 range",
+    "LOD": "Level of Detail: using simpler geometry/textures for distant objects",
+    "MIP Map": "Pre-computed, smaller versions of a texture for distant objects",
+    "MRT": "Multiple Render Targets: rendering to several textures simultaneously",
+    "MSAA": "Multi-Sample Anti-Aliasing: sampling multiple positions per pixel to smooth edges",
+    "Normal Mapping": "Using a texture to simulate surface detail by perturbing normals",
+    "PBR": "Physically Based Rendering: lighting model based on real physics",
+    "PCF": "Percentage Closer Filtering: softens shadow edges by sampling multiple points",
+    "SSAO": "Screen Space Ambient Occlusion: approximates ambient occlusion from the depth buffer",
+    "SIMT": "Single Instruction Multiple Threads: GPU execution model",
+    "TAA": "Temporal Anti-Aliasing: uses previous frames to smooth edges",
+    "Tone Mapping": "Converting HDR color values to displayable 0-1 range",
+    "VSync": "Vertical Synchronization: synchronizes frame rate with monitor refresh rate",
+    "Warp": "A group of 32 threads executing in lockstep on NVIDIA GPUs"
+  },
+  "teaching_plan": {
+    "lesson_1": "How Pixels and Triangles Work (draw with actual graph paper)",
+    "lesson_2": "The Graphics Pipeline Assembly Line (build a physical paper model)",
+    "lesson_3": "Colors and Textures (why we see color, how textures wrap on 3D objects)",
+    "lesson_4": "3D Math Crash Course (vectors, matrices, dot/cross products with visual examples)",
+    "lesson_5": "Your First Triangle in Code (set up OpenGL, draw a colored triangle)",
+    "lesson_6": "Transformations and Moving Objects (rotation, translation, scaling)",
+    "lesson_7": "Lighting: Why Things Look 3D (ambient, diffuse, specular with flashlight demo)",
+    "lesson_8": "Textures: Putting Images on Models (UV coordinates, texture sampling)",
+    "lesson_9": "Cameras and Perspective (how a 3D scene projects onto a 2D screen)",
+    "lesson_10": "Shadows: Where Light Doesn't Reach (shadow mapping explained with real shadows)",
+    "lesson_11": "Normal Mapping: Fake Detail (how bumpy surfaces are simulated)",
+    "lesson_12": "PBR: Making Things Look Real (metal, wood, plastic all behave differently)",
+    "lesson_13": "Post-Processing: Filters and Effects (bloom, motion blur, color grading)",
+    "lesson_14": "Optimization: Making Games Run Fast (draw calls, LODs, culling)",
+    "lesson_15": "Ray Tracing: The Future of Graphics (how movies and next-gen games do lighting)"
+  }
+}

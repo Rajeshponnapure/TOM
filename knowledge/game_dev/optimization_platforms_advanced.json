@@ -1,0 +1,151 @@
+{
+  "domain": "Optimization, Platforms, AAA Specializations & Reverse Engineering",
+  "category": "game_dev",
+  "subcategory": "optimization_platforms_advanced",
+  "description": "Complete coverage of game performance optimization, platform development, AAA-level specializations, reverse engineering, modding, and game security",
+  "teaching_plan": {
+    "lesson_1": {
+      "title": "Making Games Run Faster",
+      "concepts": ["Why games get slow", "GPU vs CPU bottlenecks", "Draw calls", "Profiling tools"],
+      "projects": ["Profile a game scene and identify bottlenecks", "Optimize a scene to run at 60fps"]
+    },
+    "lesson_2": {
+      "title": "Console & Mobile Optimization",
+      "concepts": ["Memory limits", "Texture compression", "LOD systems", "Platform-specific APIs"],
+      "projects": ["Port a PC scene to mobile spec", "Optimize textures for console"]
+    },
+    "lesson_3": {
+      "title": "AAA Studio Techniques",
+      "concepts": ["Photogrammetry", "MetaHuman", "Virtual production", "Digital humans"],
+      "projects": ["Create a photogrammetry scan workflow", "Set up a MetaHuman character"]
+    },
+    "lesson_4": {
+      "title": "Reverse Engineering Games",
+      "concepts": ["Binary analysis", "Memory editing", "Modding APIs", "Plugin systems"],
+      "projects": ["Create a simple game trainer", "Build a mod for an existing game"]
+    }
+  },
+  "sections": [
+    {
+      "name": "Performance Optimization Fundamentals",
+      "difficulty": "intermediate",
+      "explanation_simple": "Game optimization is about making your game run smoothly on its target hardware. A game running at 30fps has only 33 milliseconds to do EVERYTHING per frame: process input, update AI, run physics, and draw everything. Optimization is about spending those milliseconds wisely. The golden rule is: FIND THE BOTTLENECK FIRST. Don't optimize randomly - use profilers to find what's actually slow. 90% of the time, the slow part is one or two systems, and fixing those gives you 90% of the performance gain.",
+      "key_concepts": [
+        "Bottleneck: The slowest part of your frame (CPU, GPU, or memory bound)",
+        "Draw Call: Command to GPU to render something (keep under 2000 on console, 100 on mobile)",
+        "Frame Budget: Total time per frame (16.6ms for 60fps, 33.3ms for 30fps)",
+        "CPU Bound: Game logic/AI/physics is the bottleneck",
+        "GPU Bound: Rendering is the bottleneck",
+        "Fill Rate: How many pixels GPU can fill per second",
+        "Overdraw: Drawing the same pixel multiple times (transparency kills)",
+        "Cache Miss: CPU waiting for data from RAM (bigger problem than you think)",
+        "Memory Bandwidth: How fast data can move between RAM and GPU",
+        "Garbage Collection: Automatic memory cleanup (can cause frame stutters!)",
+        "Batching: Combining multiple draw calls into one",
+        "Instancing: Drawing many copies of the same mesh in one call",
+        "Occlusion Culling: Not rendering objects hidden behind walls",
+        "Level Streaming: Loading/unloading parts of the world as player moves"
+      ],
+      "code_examples": [
+        {
+          "title": "Profiling Tools & Bottleneck Detection",
+          "code": "// ===== UNITY PROFILER: Find what's slow =====\n/*\n1. Open Window -> Analysis -> Profiler\n2. Click \"Record\" and play your game\n3. Look for spikes in:\n   - Rendering (GPU bound? Reduce shader complexity, lower resolution)\n   - Scripts (CPU bound? Optimize code, use jobs/burst)\n   - Physics (Too many rigidbodies? Use simpler colliders)\n   - Garbage Collector (GC spikes? Object pooling, reduce allocations)\n*/\n\n// Profile a specific section of code:\nusing UnityEngine.Profiling;\n\nvoid Update()\n{\n    Profiler.BeginSample(\"AI_Update\");\n    UpdateAllAI();\n    Profiler.EndSample();\n\n    Profiler.BeginSample(\"Physics_Checks\");\n    CheckPhysicsQueries();\n    Profiler.EndSample();\n}\n\n// ===== UNREAL INSIGHTS: The AAA profiling tool =====\n/*\n1. Run with -stat command line flags\n2. Use Unreal Insights tool for deep frame analysis\n3. Look for:\n   - Game thread time (game logic)\n   - Render thread time (scene graph updates)\n   - GPU time (actual rendering)\n   - RHI thread (graphics API calls)\n*/\n\n// Custom stat in Unreal:\nDECLARE_CYCLE_STAT(TEXT(\"AI Processing\"), STAT_AIProcessing, STATGROUP_AI);\n\nvoid ProcessAI()\n{\n    SCOPE_CYCLE_COUNTER(STAT_AIProcessing);\n    // Your AI logic here\n}\n\n// ===== RENDERDOC: GPU debugging =====\n/*\n1. Launch your game through RenderDoc\n2. Capture a frame\n3. Inspect every draw call, shader, texture, and buffer\n4. See exactly what the GPU is doing\n*/\n\n// ===== COMMON PERFORMANCE PITFALLS =====\n\n// BAD: Creating objects every frame (causes GC spikes)\nvoid Update()\n{\n    GameObject bullet = Instantiate(bulletPrefab, firePoint.position, firePoint.rotation);\n    Destroy(bullet, 2f);\n}\n\n// GOOD: Object pooling\npublic class BulletPool : MonoBehaviour\n{\n    public GameObject bulletPrefab;\n    public int poolSize = 50;\n    private Queue<GameObject> pool = new Queue<GameObject>();\n\n    void Start()\n    {\n        for (int i = 0; i < poolSize; i++)\n        {\n            GameObject obj = Instantiate(bulletPrefab);\n            obj.SetActive(false);\n            pool.Enqueue(obj);\n        }\n    }\n\n    public GameObject GetBullet()\n    {\n        if (pool.Count == 0) pool.Enqueue(Instantiate(bulletPrefab));\n        GameObject obj = pool.Dequeue();\n        obj.SetActive(true);\n        return obj;\n    }\n\n    public void ReturnBullet(GameObject obj)\n    {\n        obj.SetActive(false);\n        pool.Enqueue(obj);\n    }\n}\n\n// BAD: FindGameObjectsWithTag every frame\nvoid Update()\n{\n    GameObject[] enemies = GameObject.FindGameObjectsWithTag(\"Enemy\");\n    foreach (var enemy in enemies) { /* check distance */ }\n}\n\n// GOOD: Cache references, use events\npublic class EnemyManager : MonoBehaviour\n{\n    public List<Enemy> enemies = new List<Enemy>();\n\n    public void RegisterEnemy(Enemy e) => enemies.Add(e);\n    public void UnregisterEnemy(Enemy e) => enemies.Remove(e);\n\n    void Update()\n    {\n        // Use cached list\n        foreach (var enemy in enemies) { /* check distance */ }\n    }\n}\n\n// BAD: LINQ creates garbage (foreach with LINQ = GC allocation)\nvoid FindNearestEnemy()\n{\n    var nearest = enemies.OrderBy(e => Vector3.Distance(transform.position, e.transform.position)).First();\n}\n\n// GOOD: Manual loop, no allocation\nEnemy FindNearestEnemy()\n{\n    float minDist = float.MaxValue;\n    Enemy nearest = null;\n    foreach (var enemy in enemies)\n    {\n        float dist = Vector3.Distance(transform.position, enemy.transform.position);\n        if (dist < minDist) { minDist = dist; nearest = enemy; }\n    }\n    return nearest;\n}"
+        },
+        {
+          "title": "GPU Optimization: Draw Calls, Batching & Instancing",
+          "code": "// ===== UNITY: Static Batching =====\n/*\nStatic batching combines static (non-moving) objects that share the same material\ninto a single mesh, drastically reducing draw calls.\n\nHow to enable:\n1. Tag objects as \"Batching Static\" in the Inspector\n2. Edit -> Project Settings -> Player -> \"Static Batching\" checkbox\n*/\n\n// ===== GPU Instancing (draw many copies in one call) =====\nusing UnityEngine;\n\npublic class InstancedRendering : MonoBehaviour\n{\n    public Mesh instanceMesh;\n    public Material instanceMaterial;\n    public int instanceCount = 100000;\n\n    void Start()\n    {\n        // Enable GPU instancing on the material\n        instanceMaterial.enableInstancing = true;\n\n        // Generate random transforms\n        Matrix4x4[] matrices = new Matrix4x4[instanceCount];\n        Vector4[] colors = new Vector4[instanceCount];\n\n        for (int i = 0; i < instanceCount; i++)\n        {\n            Vector3 position = new Vector3(\n                Random.Range(-50f, 50f),\n                Random.Range(-50f, 50f),\n                Random.Range(-50f, 50f)\n            );\n            Quaternion rotation = Random.rotation;\n            Vector3 scale = Vector3.one * Random.Range(0.5f, 2f);\n\n            matrices[i] = Matrix4x4.TRS(position, rotation, scale);\n            colors[i] = Random.ColorHSV();\n        }\n\n        // Draw all instances in ONE draw call (instead of 100000!)\n        // This runs in OnRenderObject or similar\n        Graphics.DrawMeshInstanced(\n            instanceMesh,\n            0,\n            instanceMaterial,\n            matrices,\n            instanceCount\n        );\n    }\n\n    // Alternative: Unity's built-in SRP Batcher\n    // Works automatically when using SRP (URP/HDRP) and ShaderGraph materials\n    // Reduces draw calls by batching across different meshes with same shader\n}\n\n// ===== UNREAL: Draw Call Optimization =====\n/*\nConsole commands for optimization:\n  r.ScreenPercentage 100    - Render resolution\n  r.BloomQuality 1          - Bloom quality (0-5)\n  r.ShadowQuality 1         - Shadow quality\n  r.ViewDistanceScale 1     - View distance\n  foliage.LODDistanceScale 1 - Foliage LOD\n  r.VolumetricFog 0         - Disable volumetric fog\n\nC++ settings:\n  // Merge materials where possible\n  // Use material instances instead of unique materials\n  // Enable mesh merging in World Settings\n*/\n\n// ===== MEMORY OPTIMIZATION CHART =====\n/*\n| Asset Type   | PS4/Xbox          | Switch        | Mobile         |\n|-------------|-------------------|---------------|----------------|\n| Textures    | < 2GB total       | < 800MB total | < 256MB total  |\n| Meshes      | < 500k tris/frame | < 200k        | < 100k         |\n| Audio       | < 500MB           | < 300MB       | < 100MB        |\n| Animations  | < 200MB           | < 100MB       | < 50MB         |\n| Total RAM   | 5GB available     | 3GB available | 1.5GB available|\n| Loading Time | < 30s (HDD)      | < 20s         | < 10s          |\n*/"
+        }
+      ],
+      "learning_path": "Profiling basics (Unity Profiler, Unreal Insights) -> Draw call optimization -> GPU instancing -> Batching (static/dynamic) -> LOD systems -> Occlusion culling -> Texture compression -> Memory management -> Shader optimization -> Console-specific optimization -> Loading time optimization"
+    },
+    {
+      "name": "Console & Platform Development",
+      "difficulty": "advanced",
+      "explanation_simple": "Making a game for consoles (PlayStation, Xbox, Nintendo Switch) is very different from making a PC game. Consoles have FIXED hardware - every PS5 has the same GPU, CPU, and RAM. This means you can optimize specifically for that hardware, but it also means you have strict limits. Console SDKs (Software Development Kits) from Sony, Microsoft, and Nintendo come with specific rules: no accessing the file system freely, no dynamic linking, specific controller APIs, and certification requirements (the game must pass their tests before release). VR adds even more rules: you MUST maintain 90fps or players get motion sick.",
+      "key_concepts": [
+        "NDA: Console SDKs require signing non-disclosure agreements",
+        "Development Kit (Dev Kit): Special console hardware for development",
+        "Certification (TRC/XR): Console manufacturer's testing requirements",
+        "PS5: Custom SSD architecture, Tempest Engine (3D audio), DualSense features",
+        "Xbox Series X/S: GDK (Game Development Kit), Xbox Velocity Architecture",
+        "Nintendo Switch: Lower power, unique dual-mode (docked/portable), ARM CPU",
+        "VR: 90fps minimum requirement, async timewarp, foveated rendering",
+        "Steam: No cert requirements but extensive API (achievements, cloud saves, multiplayer)",
+        "Epic Games Store: Revenue share terms, account services",
+        "Mobile: Fragmentation (thousands of Android devices), thermal throttling",
+        "Cross-Platform: Building the same game for multiple platforms with shared code"
+      ],
+      "code_examples": [
+        {
+          "title": "Cross-Platform Build System (CMake)",
+          "code": "# CMakeLists.txt - Build for multiple platforms\ncmake_minimum_required(VERSION 3.20)\nproject(MyGame)\n\n# Platform detection\nif(WIN32)\n    add_definitions(-DPLATFORM_WINDOWS)\n    set(PLATFORM_SOURCES\n        src/Platform/Windows/Window_Win32.cpp\n        src/Platform/Windows/Input_Win32.cpp\n    )\nelseif(APPLE)\n    add_definitions(-DPLATFORM_MACOS)\n    set(PLATFORM_SOURCES\n        src/Platform/MacOS/Window_MacOS.mm\n        src/Platform/MacOS/Input_MacOS.mm\n    )\nelseif(ANDROID)\n    add_definitions(-DPLATFORM_ANDROID)\n    set(PLATFORM_SOURCES\n        src/Platform/Android/Window_Android.cpp\n        src/Platform/Android/Input_Android.cpp\n    )\nendif()\n\n# Renderer selection\noption(USE_VULKAN \"Use Vulkan renderer\" ON)\noption(USE_DX12 \"Use DirectX 12 renderer\" OFF)\n\nif(USE_VULKAN)\n    add_definitions(-DUSE_VULKAN)\n    find_package(Vulkan REQUIRED)\nendif()\n\n# Game code (platform-independent)\nadd_library(GameCore STATIC\n    src/Game/GameLoop.cpp\n    src/Game/Entity.cpp\n    src/Game/Physics.cpp\n    src/Game/Renderer.cpp\n    ${PLATFORM_SOURCES}\n)\n\n# Platform-specific executables\nif(WIN32)\n    add_executable(MyGame_Win32 main.cpp)\n    target_link_libraries(MyGame_Win32 GameCore)\nelseif(APPLE)\n    add_executable(MyGame_Mac main.cpp)\n    target_link_libraries(MyGame_Mac GameCore)\nendif()"
+        },
+        {
+          "title": "VR Performance & Optimization Checklist",
+          "code": "// ===== VR: THE 90FPS REQUIREMENT =====\n/*\nVR is the most demanding gaming platform. You have:\n  - 16.6ms for 60fps (normal)\n  - 11.1ms for 90fps (VR minimum!)\n  - 5.5ms for 180fps (high-end VR)\n  \n  AND you render TWO views (left + right eye)\n  = each eye has HALF the budget\n  \n  At 90fps per eye: ~5.5ms TOTAL per frame\n*/\n\n// ===== FOVEATED RENDERING =====\n// Render center of vision at full resolution, edges at lower resolution\n// Reduces pixel count by 40-60% with no visible quality loss\n\n// OpenXR foveation:\nXrFoveationProfileCreateInfoMETA foveationInfo = {\n    .type = XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_META,\n    .level = XR_FOVEATION_LEVEL_HIGH_META\n};\n\n// ===== ASYNC TIMEWARP =====\n// If frame takes too long, use last frame's rendered image\n// and warp it to match current head rotation\n// This is why VR doesn't stutter even when frames are missed\n\n// ===== VR OPTIMIZATION CHECKLIST =====\n/*\n[ ] Use forward rendering (not deferred - MSAA doesn't work with deferred in VR)\n[ ] Single-pass instanced rendering (render both eyes at once)\n[ ] Foveated rendering (Meta Quest dev kit)\n[ ] Fixed foveated rendering (all mobile VR)\n[ ] Reduce shader complexity (no complex pixel shaders)\n[ ] Limit overdraw (minimize transparent objects)\n[ ] Use occlusion culling aggressively\n[ ] Lower shadow resolution\n[ ] Disable post-processing in VR\n[ ] Use level streaming to keep memory low\n[ ] Test on lowest spec target hardware\n*/\n\n// ===== STEAM AUDIO FOR VR =====\n// Spatial audio is critical for VR immersion\n// Steam Audio provides HRTF-based 3D audio\n// Also: Oculus Audio SDK, Windows Sonic"
+        }
+      ],
+      "learning_path": "Understand platform differences -> Set up dev kits -> Cross-platform build systems -> Platform-specific APIs -> Console certification requirements -> VR optimization -> Mobile optimization -> Steam/EGS store integration -> Cross-platform testing"
+    },
+    {
+      "name": "AAA Specializations: Digital Humans, Photogrammetry & Virtual Production",
+      "difficulty": "advanced",
+      "explanation_simple": "AAA games use Hollywood-level techniques to create realistic characters and worlds. Digital humans (like MetaHuman from Epic Games) create photorealistic people that you can't tell are CGI. Photogrammetry is taking hundreds of photos of real objects and converting them into 3D models - this is how games like The Last of Us Part 2 create incredibly realistic environments. Virtual production uses real-time game engines to make movies (The Mandalorian uses Unreal Engine with giant LED walls). These techniques blur the line between game development and filmmaking.",
+      "key_concepts": [
+        "MetaHuman: Epic's free digital human system - creates realistic characters in minutes",
+        "Photogrammetry: Taking photos from multiple angles to create 3D models from real life",
+        "RealityCapture: Industry standard photogrammetry software (fast, high quality)",
+        "Agisoft Metashape: Alternative photogrammetry tool (easier to learn)",
+        "Virtual Production: Using game engine for real-time filmmaking (The Mandalorian, 1899)",
+        "LED Volume: Giant curved LED screen that shows the virtual background (replaces green screen)",
+        "Camera Tracking: Tracking camera position in real-time so perspective matches the scene",
+        "Digital Twin: A virtual copy of a real location (for film/game use)",
+        "Facial Capture: Recording actor's face with helmet camera for realistic expressions",
+        "Procedural Cities: Houdini + UE5 generating entire cities (like Spider-Man's NYC)",
+        "Military Simulation: Games used for training (VBS4, Steel Beasts)",
+        "Streaming Infrastructure: How massive open worlds stream in content as you move"
+      ],
+      "code_examples": [
+        {
+          "title": "Photogrammetry Pipeline",
+          "code": "# ===== COMPLETE PHOTOGRAMMETRY WORKFLOW =====\n\n\"\"\"\nSTEP 1: CAPTURE\n  - Camera: DSLR or high-end phone (iPhone 14 Pro or better)\n  - Settings: Manual mode, fixed aperture, fixed ISO, RAW format\n  - Subject: 30-50% overlap between adjacent photos\n  - Coverage: Photograph from ALL angles (top, bottom, sides)\n  - Lighting: Even, diffused lighting (cloudy day or studio lights)\n  - Calibration: Include a scale reference object\n\nSTEP 2: PROCESSING (RealityCapture)\n  1. Import photos\n  2. Align images (calculate camera positions)\n  3. Create dense point cloud\n  4. Build mesh (high polygon)\n  5. Create texture (unwrap UVs, bake color from photos)\n  6. Export as FBX/OBJ with textures\n\nSTEP 3: OPTIMIZATION FOR GAMES\n  1. Decimate mesh (reduce polygons: 10M -> 50K)\n  2. Retopologize (create clean edge flow)\n  3. Bake normal map from high-poly to low-poly\n  4. Bake ambient occlusion map\n  5. Create LODs\n  6. Import to game engine\n\"\"\"\n\n# RealityCapture command line (batch processing):\n# rc --input \"D:\\scans\\statue\\photos\" --align --quality medium --output \"D:\\scans\\statue\\output\"\n\n# ===== MEGASCANS: The easy way =====\n# Quixel Megascans and Epic Games provide\n# thousands of ready-to-use photogrammetry assets\n# for free in Unreal Engine\n\n# ===== METAHUMAN SETUP =====\n# 1. Go to metahuman.unrealengine.com\n# 2. Create a face by morphing presets (or use MetaHuman Animator from iPhone scan)\n# 3. Customize: hair, skin, eyes, clothing\n# 4. Export to your Unreal project\n# 5. Character comes fully rigged, with LODs, with facial controls\n# 6. Use with LiveLink Face app for real-time facial mocap\n\n// MetaHuman C++ control in Unreal:\nvoid AMyGameMode::SpawnMetaHumanCharacter()\n{\n    // MetaHuman is just a Character blueprint\n    ACharacter* MH = GetWorld()->SpawnActor<ACharacter>(\n        MetaHumanClass,\n        SpawnLocation,\n        SpawnRotation\n    );\n\n    // Facial animation through LiveLink\n    if (LiveLinkComponent)\n    {\n        LiveLinkComponent->SetSubjectName(FName(\"FaceCapture\"));\n        LiveLinkComponent->Initialize();\n    }\n}"
+        },
+        {
+          "title": "Procedural City Generation with Houdini",
+          "code": "# ===== HOUDINI PROCEDURAL CITY =====\n# This Houdini Digital Asset generates a complete city block\n\n\"\"\"\nHOUDINI NODE NETWORK:\n\n1. HeightField -> Ground plane\n   \n2. Curve -> Define roads/paths\n   |\n3. Resample -> Evenly space points along curves\n   |\n4. Copy to Points -> Place buildings along roads\n   |\n5. Attribute Wrangle -> Set building height/color variation\n\n6. HeightField_Vegetation -> Randomly place trees\n7. HeightField_Scatter -> Scatter debris/details\n\"\"\"\n\n// VEX Code for building variation:\n// Runs on each building primitive\n\nfloat minHeight = chf(\"min_height\");\nfloat maxHeight = chf(\"max_height\");\n\n// Random height based on seed\nfloat height = fit01(rand(@ptnum), minHeight, maxHeight);\n@P.y += height;\n\n// Set color based on zone\nstring zone = @zone;\nif (zone == \"residential\")\n    @Cd = {0.8, 0.6, 0.4}; // warm colors\nelse if (zone == \"commercial\")\n    @Cd = {0.5, 0.6, 0.8}; // cool colors\nelse if (zone == \"industrial\")\n    @Cd = {0.4, 0.4, 0.4}; // gray\n\n// Set random rotation for variety\n@orient = quaternion(rint(fit01(rand(@ptnum + 50), 0, 4)) * 1.5708, {0,1,0});"
+        }
+      ],
+      "learning_path": "Digital human creation (MetaHuman) -> Photogrammetry capture -> RealityCapture workflow -> Mesh optimization -> Megascans integration -> Virtual production basics -> Houdini procedural cities -> Military simulation pipelines -> Digital twin creation"
+    },
+    {
+      "name": "Reverse Engineering, Modding & Game Security",
+      "difficulty": "advanced",
+      "explanation_simple": "Reverse engineering is taking something apart to understand how it works - like a watchmaker who disassembles a watch to see how all the gears fit together. In games, this means analyzing compiled game code to understand how systems work. Modding is modifying games to add new content, fix bugs, or change gameplay. Game security is about preventing cheating and protecting the game from tampering. Understanding all three makes you a better game developer because you understand how games REALLY work under the hood.",
+      "key_concepts": [
+        "Binary Analysis: Reading compiled machine code (assembly) to understand the program",
+        "Disassembler: Tool that converts machine code to assembly (IDA Pro, Ghidra, x64dbg)",
+        "Memory Editing: Changing values in RAM (health, ammo, position) while game runs (Cheat Engine)",
+        "Detour/Hook: Intercepting function calls to modify behavior",
+        "DLL Injection: Injecting custom code into a running game process",
+        "Mod SDK: Official tools provided by game developers for creating mods",
+        "Plugin Architecture: Allowing third-party code to extend the game",
+        "Anti-Cheat: Systems that detect tampering (Easy Anti-Cheat, BattlEye, VAC)",
+        "Server Authority: Server makes final decisions, client can't override (prevents cheating)",
+        "Obfuscation: Making code hard to read by reverse engineers",
+        "Encryption: Protecting game assets and network traffic",
+        "Cheat Detection: Analyzing player behavior patterns for anomalies"
+      ],
+      "code_examples": [
+        {
+          "title": "Creating a Basic Game Mod (Plugin Architecture)",
+          "code": "// ===== MOD PLUGIN SYSTEM =====\n// A simple plugin system that lets mods extend the game\n\n// Plugin.h - Core plugin interface\n#pragma once\n#include <string>\n#include <vector>\n\nclass IGamePlugin\n{\npublic:\n    virtual ~IGamePlugin() = default;\n    virtual std::string GetName() const = 0;\n    virtual std::string GetVersion() const = 0;\n    virtual bool OnLoad() = 0;         // Called when plugin is loaded\n    virtual void OnUnload() = 0;        // Called when plugin is unloaded\n    virtual void OnUpdate(float dt) = 0; // Called every frame\n    virtual void OnRender() = 0;        // Called every render frame\n};\n\n// PluginManager.cpp - Loads and manages plugins\n#include \"PluginManager.h\"\n#include <iostream>\n#include <filesystem>\n#ifdef _WIN32\n#include <windows.h>\n#endif\n\nclass PluginManager\n{\n    std::vector<IGamePlugin*> plugins;\n    std::vector<void*> handles;\n\npublic:\n    bool LoadPlugins(const std::string& directory)\n    {\n        for (const auto& entry : std::filesystem::directory_iterator(directory))\n        {\n            if (entry.path().extension() == \".dll\" || entry.path().extension() == \".so\")\n            {\n                LoadPlugin(entry.path().string());\n            }\n        }\n        return true;\n    }\n\n    bool LoadPlugin(const std::string& path)\n    {\n#ifdef _WIN32\n        HMODULE handle = LoadLibraryA(path.c_str());\n        if (!handle)\n        {\n            std::cerr << \"Failed to load plugin: \" << path << std::endl;\n            return false;\n        }\n\n        using CreatePluginFunc = IGamePlugin*(*)();\n        CreatePluginFunc createFunc = (CreatePluginFunc)GetProcAddress(handle, \"CreatePlugin\");\n\n        if (!createFunc)\n        {\n            FreeLibrary(handle);\n            return false;\n        }\n\n        IGamePlugin* plugin = createFunc();\n        if (plugin && plugin->OnLoad())\n        {\n            plugins.push_back(plugin);\n            handles.push_back(handle);\n            std::cout << \"Loaded plugin: \" << plugin->GetName() << \" v\" << plugin->GetVersion() << std::endl;\n            return true;\n        }\n#endif\n        return false;\n    }\n\n    void UpdateAll(float dt)\n    {\n        for (auto* plugin : plugins)\n            plugin->OnUpdate(dt);\n    }\n};\n\n// Example mod: SimpleMobPlugin.cpp\nclass SimpleMobPlugin : public IGamePlugin\n{\npublic:\n    std::string GetName() const override { return \"SimpleMobPlugin\"; }\n    std::string GetVersion() const override { return \"1.0.0\"; }\n\n    bool OnLoad() override\n    {\n        std::cout << \"SimpleMobPlugin loaded! Adding zombie mobs...\" << std::endl;\n        return true;\n    }\n\n    void OnUnload() override\n    {\n        std::cout << \"SimpleMobPlugin unloaded.\" << std::endl;\n    }\n\n    void OnUpdate(float dt) override\n    {\n        // Spawn AI-controlled mobs that follow player\n        // Add custom behavior\n    }\n\n    void OnRender() override\n    {\n        // Custom rendering\n    }\n};\n\n// DLL export\n#ifdef _WIN32\nextern \"C\" __declspec(dllexport) IGamePlugin* CreatePlugin()\n{\n    return new SimpleMobPlugin();\n}\n#endif"
+        },
+        {
+          "title": "Anti-Cheat: Server Authority Patterns",
+          "code": "// ===== SERVER AUTHORITY: THE GOLDEN RULE =====\n/*\nNEVER trust the client. The server must validate EVERYTHING.\n\nIf the client sends \"I hit an enemy\", the server should:\n1. Check: Is the player close enough?\n2. Check: Does the player have line of sight?\n3. Check: Is the weapon ready (cooldown)?\n4. Check: Does the player have ammo?\n5. THEN apply damage\n*/\n\n// ===== SERVER-SIDE HIT VALIDATION =====\nstruct ClientHitRequest\n{\n    int playerId;\n    int targetId;\n    Vector3 hitPoint;\n    Vector3 weaponPosition;\n    float shotTime;\n};\n\nbool Server_ValidateHit(const ClientHitRequest& request)\n{\n    // 1. Check timing (prevent speed hacks)\n    float roundTrip = GetCurrentTime() - request.shotTime;\n    if (roundTrip < 50) // 50ms minimum ping\n        return false; // Too fast = speed hack\n\n    // 2. Check range\n    Player* shooter = GetPlayer(request.playerId);\n    float range = (shooter->GetPosition() - request.weaponPosition).Length();\n    if (range > WEAPON_MAX_RANGE)\n        return false; // Out of range\n\n    // 3. Check line of sight (server-side raycast)\n    RaycastHit hit;\n    if (!Raycast(request.weaponPosition, request.hitPoint, hit))\n        return false; // No line of sight\n\n    // 4. Check weapon state\n    if (!shooter->GetWeapon()->CanFire())\n        return false; // Weapon on cooldown\n\n    // 5. Check ammo\n    if (shooter->GetWeapon()->GetAmmo() <= 0)\n        return false; // No ammo\n\n    // ALL CHECKS PASSED - apply damage\n    return true;\n}\n\n// ===== ANTI-CHEAT TECHNIQUES =====\n/*\n1. SERVER AUTHORITY\n   - Server owns all final state\n   - Client is just a \"dumb terminal\" sending inputs\n\n2. INTEGRITY CHECKS\n   - Hash game executable and memory\n   - Check for known cheat injection points\n   - Verify file signatures\n\n3. BEHAVIORAL ANALYSIS\n   - Track player stats: if headshot % > 80%, flag for review\n   - Check impossible movement (speed hacks)\n   - Monitor for pattern that matches known cheats\n\n4. OBVUSCATION\n   - Encrypt network traffic\n   - Obfuscate pointer references\n   - Anti-debugging tricks (IsDebuggerPresent checks)\n\n5. TECHNICAL MEASURES\n   - Kernel-mode anti-cheat (Easy Anti-Cheat, BattlEye)\n   - Hardware ID banning\n   - VM detection\n\nALWAYS use server authority as PRIMARY defense.\nAnti-cheat software is SECONDARY.\n*/\n\n// ===== DETECT MEMORY EDITORS =====\nbool IsMemoryEditorPresent()\n{\n    #ifdef _WIN32\n    // Check for Cheat Engine process\n    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);\n    PROCESSENTRY32 entry;\n    entry.dwSize = sizeof(PROCESSENTRY32);\n\n    if (Process32First(snapshot, &entry))\n    {\n        do\n        {\n            std::string name = entry.szExeFile;\n            if (name.find(\"cheatengine\") != std::string::npos ||\n                name.find(\"Cheat Engine\") != std::string::npos ||\n                name.find(\"x64dbg\") != std::string::npos)\n            {\n                CloseHandle(snapshot);\n                return true;\n            }\n        } while (Process32Next(snapshot, &entry));\n    }\n    CloseHandle(snapshot);\n    #endif\n    return false;\n}"
+        }
+      ],
+      "learning_path": "Binary analysis basics -> Memory editing with Cheat Engine -> Disassembler tools (Ghidra/IDA) -> DLL injection -> Function hooking -> Mod SDK creation -> Plugin architecture -> Anti-cheat fundamentals -> Server authority patterns -> Security hardening"
+    }
+  ]
+}

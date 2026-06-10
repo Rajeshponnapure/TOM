@@ -1,0 +1,77 @@
+{
+  "domain": "Game Design & Production",
+  "category": "game_dev",
+  "subcategory": "game_design_production",
+  "description": "Complete game design principles, systems design, player psychology, production workflows, and studio pipelines",
+  "sections": [
+    {
+      "name": "Core Game Design Principles",
+      "difficulty": "beginner",
+      "explanation_simple": "Game design is the art of making fun interactive experiences. It's not about graphics or code - it's about what the player DOES and how it FEELS. The core loop is the most important concept: what does the player do every minute? In Mario, it's run -> jump -> collect coin -> reach flag. In Call of Duty, it's move -> see enemy -> shoot -> win round. Everything in your game should support and enhance the core loop. A great game can have terrible graphics (Minecraft), but a game with a bad core loop will fail no matter how pretty it is.",
+      "key_concepts": [
+        "Core Loop: The main action the player repeats (the 'fun' part)",
+        "Progression Loop: How the game changes as you play (level up, get new abilities)",
+        "Mastery Loop: Learning and improving skills over time",
+        "Juiciness: How satisfying actions feel (screen shake, particles, sound)",
+        "Player Agency: Giving players meaningful choices",
+        "Emergent Gameplay: Unexpected fun that arises from systems interacting",
+        "Flow State: Being fully absorbed in the game (not too easy, not too hard)",
+        "Reward Schedules: When and how to reward the player (random vs fixed)",
+        "Pacing: Alternating intense and calm moments"
+      ],
+      "code_examples": [
+        {
+          "title": "Core Loop Prototype Checklist",
+          "code": "// Before writing code, design your core loop:\n/*\n\nGAME: Simple Dungeon Crawler\n\nCORE LOOP:\n1. Player moves through dungeon room\n2. Enemies appear and attack\n3. Player fights back (click to attack)\n4. Player defeats enemies\n5. Player gets loot (random item)\n6. Player chooses: go deeper (harder) or leave?\n\nSECONDARY SYSTEMS:\n- Health potions (found or bought)\n- Weapon upgrades (more damage)\n- Score tracking\n- Death = lose everything (roguelike style)\n\nPROGRESSION:\n- Floor 1-3: Easy skeletons\n- Floor 4-6: Armored skeletons + mages  \n- Floor 7-9: Dark knights + necromancers\n- Floor 10: Final boss\n\nPLAYER FEELING GOALS:\n- Combat should feel punchy (screen shake, hit flash)\n- Finding loot should feel exciting (sparkle, sound, stats comparison)\n- Death should feel punishing but fair\n\n*/\n\n// The game loop that makes this work:\nvoid gameLoop() {\n    while (!gameOver) {\n        handleInput();       // W,A,S,D movement + mouse click to attack\n        updateWorld();       // Enemy AI, physics, projectiles\n        checkCollisions();   // Sword hitting enemy? Enemy hitting player?\n        updateUI();          // Health bar, score, loot popup\n        renderFrame();       // Draw everything\n    }\n}"
+        }
+      ],
+      "learning_path": "Learn what makes games fun -> Study game genres -> Deconstruct games you love -> Design paper prototypes -> Build quick digital prototypes -> Playtest and iterate"
+    },
+    {
+      "name": "Game Economy & Systems Design",
+      "difficulty": "intermediate",
+      "explanation_simple": "Game economies control the flow of resources (coins, XP, health potions, rare swords) through your game. A well-balanced economy keeps players engaged but not frustrated. Think of it like a real economy: there are faucets (ways to GET resources - kill enemies, complete quests) and sinks (ways to SPEND resources - buy items, upgrade gear). If you only have faucets, players get everything too fast and get bored. If you only have sinks, players feel like they never get anywhere. Great games balance this perfectly.",
+      "key_concepts": [
+        "Faucets: Ways players earn resources (killing enemies, selling items, quest rewards)",
+        "Sinks: Ways players spend resources (buying gear, fast travel, crafting)",
+        "Inflation: When players have too much currency, nothing feels valuable",
+        "Progression Curve: How fast should players level up? (exponential, linear, S-curve)",
+        "Diminishing Returns: Each point in a stat gives less benefit (keeps balance)",
+        "Soft Currency: Easily earned (gold, coins)",
+        "Hard Currency: Premium, limited (gems, premium currency)",
+        "Grind: Repetitive actions to earn resources (needs to feel rewarding)",
+        "Pay-to-Win: When real money gives unfair advantage (avoid this)"
+      ],
+      "code_examples": [
+        {
+          "title": "RPG Economy Balance Calculator",
+          "code": "#include <iostream>\n#include <cmath>\n\nstruct EconomyBalance {\n    // Player earns this many coins per hour of play\n    float coinsPerHour = 1000.0f;\n    \n    // How much things cost at each level\n    float getUpgradeCost(int level) const {\n        // Exponential curve: costs increase as you level up\n        return 100.0f * std::pow(1.5f, level);\n    }\n    \n    // How many hours to afford the next upgrade\n    float hoursToNextUpgrade(int currentLevel) const {\n        float cost = getUpgradeCost(currentLevel + 1);\n        return cost / coinsPerHour;\n    }\n    \n    // XP required for each level (S-curve)\n    int xpForLevel(int level) const {\n        // Early levels: fast. Mid levels: slower. Late levels: very slow\n        if (level < 10) return 100 * level;           // 100, 200, 300...\n        if (level < 30) return 1000 + 200 * (level - 10);  // 1000, 1200...\n        return 5000 + 500 * (level - 30);              // 5000, 5500...\n    }\n    \n    // Total XP to reach a level\n    int totalXpToReachLevel(int targetLevel) const {\n        int total = 0;\n        for (int i = 1; i < targetLevel; ++i)\n            total += xpForLevel(i);\n        return total;\n    }\n    \n    void printBalanceReport(int maxLevel = 50) {\n        std::cout << \"=== ECONOMY BALANCE REPORT ===\\n\\n\";\n        std::cout << \"Level | XP to next | Total XP | Upgrade Cost | Hours to grind\\n\";\n        std::cout << \"------|------------|----------|--------------|----------------\\n\";\n        \n        for (int level = 1; level <= maxLevel; level += 5) {\n            int xpNext = xpForLevel(level);\n            int totalXp = totalXpToReachLevel(level);\n            float upgradeCost = getUpgradeCost(level);\n            float hours = hoursToNextUpgrade(level);\n            \n            std::cout << level << \"     | \" << xpNext << \"         | \" \n                      << totalXp << \"       | \" << upgradeCost << \"          | \"\n                      << hours << \"h\\n\";\n        }\n        \n        // Check for balance issues\n        std::cout << \"\\n=== BALANCE CHECKS ===\\n\";\n        float timeToMaxLevel = 0;\n        for (int i = 1; i < maxLevel; ++i) {\n            // Assuming 500 XP per hour from gameplay\n            timeToMaxLevel += xpForLevel(i) / 500.0f;\n        }\n        std::cout << \"Time to reach max level: \" << timeToMaxLevel << \" hours\\n\";\n        std::cout << (timeToMaxLevel > 40 && timeToMaxLevel < 200 \n                     ? \"BALANCE OK\" : \"ADJUST XP CURVE\");\n        std::cout << \"\\n\";\n    }\n};\n\nint main() {\n    EconomyBalance economy;\n    economy.printBalanceReport();\n    return 0;\n}"
+        }
+      ],
+      "learning_path": "Understanding game resources -> Faucet/sink model -> Progression curves -> Spreadsheet balancing -> Playtest and iterate -> Live economy monitoring"
+    },
+    {
+      "name": "Production & Team Workflows",
+      "difficulty": "intermediate",
+      "explanation_simple": "Making a game is a team effort, and without good production practices, your project will fail. Think of game production like building a house: you need blueprints (game design document), a schedule (timeline), someone to manage the workers (producer), and quality checks. The industry standard is Agile/Scrum - working in 2-week sprints where you plan what to build, build it, test it, and review it. Then repeat. This beats the old 'waterfall' method where you design everything for 6 months then build for 6 months only to find nothing works together.",
+      "key_concepts": [
+        "Sprint: 2-week work period with a specific goal",
+        "Stand-up: Daily 15-minute meeting (what did you do, what will you do, blockers)",
+        "Scrum Master: Person who removes obstacles and keeps process running",
+        "Product Owner: Person who decides what features are most important",
+        "Backlog: List of all features to build (prioritized)",
+        "Sprint Planning: Team decides what to build this sprint",
+        "Retrospective: After sprint, review what went well and what to improve",
+        "Milestone: Major deadline (Alpha = all features, Beta = polish, Gold = ship it)",
+        "Vertical Slice: A small, complete piece of the game that shows all systems working together"
+      ],
+      "code_examples": [
+        {
+          "title": "Game Production Timeline",
+          "code": "/*\n\n=== GAME PRODUCTION TIMELINE (18 months) ===\n\nPHASE 0: PROTOTYPING (Month 1-2)\n- Goal: Is the game fun? Can we build it?\n- Small team (3-5 people)\n- Rough playable prototype with placeholder art\n- Go/No-go decision at end\n\nPHASE 1: PRE-PRODUCTION (Month 3-4)\n- Goal: Everything is planned\n- Game Design Document\n- Tech architecture\n- Art style guide\n- Production schedule\n\nPHASE 2: PRODUCTION (Month 5-14)\n- Sprint 1-5: Core mechanics (movement, combat, health)\n- Sprint 6-10: Content creation (levels, enemies, weapons)\n- Sprint 11-15: Menus, UI, settings, audio\n- Sprint 16-19: Polish and optimization\n- MILESTONE: Alpha build (playable start to finish)\n- MILESTONE: Beta build (feature complete, needs polish)\n\nPHASE 3: POLISH (Month 15-16)\n- Bug fixing\n- Performance optimization\n- Balance tuning\n- Player testing\n\nPHASE 4: SHIP (Month 17-18)\n- Platform certification (console/Steam)\n- Localization\n- Marketing materials\n- Launch!\n\n=== DAILY WORKFLOW ===\n09:00 - Stand-up (15 min)\n09:15 - Focus work (coding, art, design)\n12:30 - Lunch\n13:30 - Focus work\n16:00 - Reviews/testing\n17:00 - Wrap up, log hours\n\nWEEKLY:\n- Friday: Demo what you built this week to the team\n- Code reviews for all submissions\n\nSPRINT (2 WEEKS):\n- Day 1: Sprint planning\n- Days 2-9: Work\n- Day 10: Review + Retrospective\n\n*/\n\n// Tools configuration:\nstruct DevTools {\n    // Source control: Perforce for large assets, Git for code\n    // Task tracking: Jira with custom game dev workflow\n    // Communication: Discord/Slack\n    // Art review: ShotGrid/Ftrack\n    // Build automation: Jenkins/GitHub Actions\n    // Testing: Unity Test Framework / Unreal Automation\n};"
+        }
+      ],
+      "learning_path": "Learn project management basics -> Understand game dev cycles -> Master version control (Git/Perforce) -> Learn Agile/Scrum -> Practice sprint planning -> Build something with a team"
+    }
+  ]
+}

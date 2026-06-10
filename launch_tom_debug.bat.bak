@@ -1,0 +1,16 @@
+@echo off
+cd /d "%~dp0"
+echo === TOM WebUI Debug Launch ===
+echo.
+
+if exist "venv\Scripts\python.exe" (
+  echo Using venv Python...
+  "venv\Scripts\python.exe" tom_web_ui.py
+) else (
+  echo Using system Python...
+  python tom_web_ui.py
+)
+
+echo.
+echo === TOM exited. Press any key to close ===
+pause >nul

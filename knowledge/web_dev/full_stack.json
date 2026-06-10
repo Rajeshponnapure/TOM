@@ -1,0 +1,136 @@
+{
+  "domain": "Full Stack Web Development",
+  "category": "web_dev",
+  "subcategory": "full_stack",
+  "description": "Complete full-stack web development knowledge - frontend frameworks, backend APIs, databases, DevOps, deployment, and modern best practices",
+  "teaching_plan": {
+    "lesson_1": {
+      "title": "How the Web Actually Works",
+      "concepts": ["HTTP/HTTPS", "DNS", "Client-server model", "URL structure", "Browsers and servers"],
+      "projects": ["Open browser dev tools and watch network requests", "Build a simple HTML page"]
+    },
+    "lesson_2": {
+      "title": "Building Your First Website",
+      "concepts": ["HTML structure", "CSS styling", "Basic JavaScript", "DOM manipulation"],
+      "projects": ["Build a personal portfolio page", "Add interactive elements with JS"]
+    },
+    "lesson_3": {
+      "title": "Making Dynamic Sites with React",
+      "concepts": ["Components", "Props and state", "Hooks (useState, useEffect)", "API calls"],
+      "projects": ["Build a todo app", "Build a weather dashboard"]
+    },
+    "lesson_4": {
+      "title": "Backend and Databases",
+      "concepts": ["Node.js/Express", "REST APIs", "Database CRUD", "Authentication"],
+      "projects": ["Build a notes API", "Full stack blog with auth"]
+    },
+    "lesson_5": {
+      "title": "Deploy to the World",
+      "concepts": ["Cloud hosting", "Docker", "CI/CD", "Domain and SSL"],
+      "projects": ["Deploy a site to Vercel/Netlify", "Dockerize an app"]
+    }
+  },
+  "sections": [
+    {
+      "name": "Frontend - React & Modern JS",
+      "difficulty": "beginner",
+      "explanation_simple": "React is the most popular way to build websites today. Instead of the old way (loading a new HTML page for every click), React updates only the parts of the page that change - making everything feel fast and app-like. Everything in React is a 'component' - a reusable piece of UI like a button, a form, or a whole page. Components can hold 'state' (data that changes, like a counter or form input) and respond to 'props' (data passed from parent components). Think of components as Lego bricks that snap together to build complex UIs.",
+      "key_concepts": [
+        "Component: A reusable piece of UI (function returning JSX)",
+        "JSX: HTML-like syntax in JavaScript (looks like HTML, but it's JavaScript)",
+        "Props: Data passed TO a component (like function arguments)",
+        "State: Data that belongs TO a component (can change over time)",
+        "useState: Hook that adds state to a component",
+        "useEffect: Hook for side effects (API calls, timers, subscriptions)",
+        "Virtual DOM: React's smart way of updating only what changed",
+        "SPA: Single Page Application (one HTML page, JS handles everything)",
+        "Next.js: React framework with server-side rendering (SEO friendly)",
+        "TypeScript: JavaScript with types (catches bugs before they happen)"
+      ],
+      "code_examples": [
+        {
+          "title": "React + TypeScript Todo App",
+          "code": "import React, { useState } from 'react';\n\n// TypeScript interfaces define the shape of our data\ninterface Todo {\n  id: number;\n  text: string;\n  completed: boolean;\n}\n\n// Component with TypeScript props\ninterface TodoItemProps {\n  todo: Todo;\n  onToggle: (id: number) => void;\n  onDelete: (id: number) => void;\n}\n\nfunction TodoItem({ todo, onToggle, onDelete }: TodoItemProps) {\n  return (\n    <div style={{\n      display: 'flex',\n      alignItems: 'center',\n      gap: '8px',\n      padding: '8px',\n      borderBottom: '1px solid #eee'\n    }}>\n      <input\n        type=\"checkbox\"\n        checked={todo.completed}\n        onChange={() => onToggle(todo.id)}\n      />\n      <span style={{\n        textDecoration: todo.completed ? 'line-through' : 'none',\n        flex: 1\n      }}>\n        {todo.text}\n      </span>\n      <button onClick={() => onDelete(todo.id)}>\n        \u2716\n      </button>\n    </div>\n  );\n}\n\n// Main App component\nfunction App() {\n  const [todos, setTodos] = useState<Todo[]>([]);\n  const [input, setInput] = useState('');\n\n  const addTodo = () => {\n    if (!input.trim()) return;\n    \n    const newTodo: Todo = {\n      id: Date.now(),\n      text: input,\n      completed: false,\n    };\n    \n    setTodos([...todos, newTodo]);\n    setInput('');\n  };\n\n  const toggleTodo = (id: number) => {\n    setTodos(todos.map(todo =>\n      todo.id === id ? { ...todo, completed: !todo.completed } : todo\n    ));\n  };\n\n  const deleteTodo = (id: number) => {\n    setTodos(todos.filter(todo => todo.id !== id));\n  };\n\n  return (\n    <div style={{ maxWidth: '400px', margin: '0 auto', padding: '20px' }}>\n      <h1>Todo App</h1>\n      \n      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>\n        <input\n          value={input}\n          onChange={(e) => setInput(e.target.value)}\n          onKeyDown={(e) => e.key === 'Enter' && addTodo()}\n          placeholder=\"What needs to be done?\"\n          style={{ flex: 1, padding: '8px' }}\n        />\n        <button onClick={addTodo}>Add</button>\n      </div>\n      \n      <div>\n        {todos.map(todo => (\n          <TodoItem\n            key={todo.id}\n            todo={todo}\n            onToggle={toggleTodo}\n            onDelete={deleteTodo}\n          />\n        ))}\n      </div>\n      \n      <p>{todos.filter(t => !t.completed).length} items remaining</p>\n    </div>\n  );\n}\n\nexport default App;"
+        },
+        {
+          "title": "Next.js API Route + Database",
+          "code": "// pages/api/todos.ts - Next.js API Route\nimport type { NextApiRequest, NextApiResponse } from 'next';\n\n// In-memory database (replace with PostgreSQL/MongoDB in production)\nlet todos = [\n  { id: 1, text: 'Learn Next.js', completed: false },\n  { id: 2, text: 'Build something cool', completed: false },\n];\n\n// CRUD API for todos\nexport default function handler(\n  req: NextApiRequest,\n  res: NextApiResponse\n) {\n  switch (req.method) {\n    case 'GET':\n      // Return all todos\n      res.status(200).json(todos);\n      break;\n      \n    case 'POST':\n      // Create new todo\n      const { text } = req.body;\n      const newTodo = {\n        id: Date.now(),\n        text,\n        completed: false,\n      };\n      todos.push(newTodo);\n      res.status(201).json(newTodo);\n      break;\n      \n    case 'PUT':\n      // Update a todo (toggle complete)\n      const { id, completed } = req.body;\n      todos = todos.map(t =>\n        t.id === id ? { ...t, completed } : t\n      );\n      res.status(200).json({ success: true });\n      break;\n      \n    case 'DELETE':\n      // Delete a todo\n      const todoId = parseInt(req.query.id as string);\n      todos = todos.filter(t => t.id !== todoId);\n      res.status(200).json({ success: true });\n      break;\n      \n    default:\n      res.setHeader('Allow', ['GET', 'POST', 'PUT', 'DELETE']);\n      res.status(405).end(`Method ${req.method} Not Allowed`);\n  }\n}"
+        }
+      ],
+      "learning_path": "HTML/CSS basics -> JavaScript fundamentals (ES6+) -> React basics (create-react-app) -> Next.js (full framework) -> TypeScript -> State management -> Advanced patterns"
+    },
+    {
+      "name": "Backend - Node.js, Python & Databases",
+      "difficulty": "intermediate",
+      "explanation_simple": "The backend is the 'engine room' of a website - it stores data, handles authentication, processes payments, and serves content to the frontend. It runs on a server (not in the browser) and communicates with the frontend through APIs. Node.js lets you use JavaScript on the server (so you know one language for everything), FastAPI/Django let you use Python (great for data-heavy apps), and both can talk to databases like PostgreSQL or MongoDB.",
+      "key_concepts": [
+        "REST API: Standard way for frontend to talk to backend (GET, POST, PUT, DELETE)",
+        "Express/FastAPI: Web frameworks for building APIs quickly",
+        "CRUD: Create, Read, Update, Delete (the four basic database operations)",
+        "SQL: Structured Query Language (talking to relational databases like PostgreSQL)",
+        "NoSQL: Non-relational databases (MongoDB stores JSON-like documents)",
+        "ORM: Object-Relational Mapping (Prisma, SQLAlchemy - database without writing SQL)",
+        "Authentication: Passwords, JWT tokens, OAuth (login with Google/GitHub)",
+        "Middleware: Code that runs between request and response (auth checks, logging)",
+        "WebSockets: Real-time two-way communication (chat, live updates, games)"
+      ],
+      "code_examples": [
+        {
+          "title": "FastAPI Backend with PostgreSQL",
+          "code": "from fastapi import FastAPI, HTTPException, Depends\nfrom pydantic import BaseModel\nfrom typing import List, Optional\nfrom sqlalchemy import create_engine, Column, Integer, String, Boolean\nfrom sqlalchemy.ext.declarative import declarative_base\nfrom sqlalchemy.orm import Session, sessionmaker\n\n# Database setup\nDATABASE_URL = \"postgresql://user:password@localhost/todoapp\"\nengine = create_engine(DATABASE_URL)\nSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)\nBase = declarative_base()\n\n# Database model\nclass TodoDB(Base):\n    __tablename__ = \"todos\"\n    \n    id = Column(Integer, primary_key=True, index=True)\n    text = Column(String, nullable=False)\n    completed = Column(Boolean, default=False)\n\n# Create tables\nBase.metadata.create_all(bind=engine)\n\n# Pydantic schemas (for API validation)\nclass TodoCreate(BaseModel):\n    text: str\n\nclass TodoUpdate(BaseModel):\n    completed: bool\n\nclass TodoResponse(BaseModel):\n    id: int\n    text: str\n    completed: bool\n    \n    class Config:\n        from_attributes = True\n\n# FastAPI app\napp = FastAPI(title=\"Todo API\", version=\"1.0\")\n\n# Dependency to get DB session\ndef get_db():\n    db = SessionLocal()\n    try:\n        yield db\n    finally:\n        db.close()\n\n# CRUD Endpoints\n@app.get(\"/todos\", response_model=List[TodoResponse])\ndef get_todos(db: Session = Depends(get_db)):\n    return db.query(TodoDB).all()\n\n@app.post(\"/todos\", response_model=TodoResponse, status_code=201)\ndef create_todo(todo: TodoCreate, db: Session = Depends(get_db)):\n    db_todo = TodoDB(text=todo.text)\n    db.add(db_todo)\n    db.commit()\n    db.refresh(db_todo)\n    return db_todo\n\n@app.put(\"/todos/{todo_id}\", response_model=TodoResponse)\ndef update_todo(todo_id: int, todo: TodoUpdate, db: Session = Depends(get_db)):\n    db_todo = db.query(TodoDB).filter(TodoDB.id == todo_id).first()\n    if not db_todo:\n        raise HTTPException(status_code=404, detail=\"Todo not found\")\n    db_todo.completed = todo.completed\n    db.commit()\n    db.refresh(db_todo)\n    return db_todo\n\n@app.delete(\"/todos/{todo_id}\", status_code=204)\ndef delete_todo(todo_id: int, db: Session = Depends(get_db)):\n    db_todo = db.query(TodoDB).filter(TodoDB.id == todo_id).first()\n    if not db_todo:\n        raise HTTPException(status_code=404, detail=\"Todo not found\")\n    db.delete(db_todo)\n    db.commit()\n\nif __name__ == \"__main__\":\n    import uvicorn\n    uvicorn.run(app, host=\"0.0.0.0\", port=8000)"
+        },
+        {
+          "title": "Docker Compose for Full Stack",
+          "code": "# docker-compose.yml\nversion: '3.8'\n\nservices:\n  # Frontend\n  frontend:\n    build: ./frontend\n    ports:\n      - \"3000:3000\"\n    environment:\n      - NEXT_PUBLIC_API_URL=http://localhost:8000\n    depends_on:\n      - backend\n  \n  # Backend\n  backend:\n    build: ./backend\n    ports:\n      - \"8000:8000\"\n    environment:\n      - DATABASE_URL=postgresql://user:password@db:5432/todoapp\n    depends_on:\n      - db\n  \n  # Database\n  db:\n    image: postgres:16\n    environment:\n      - POSTGRES_USER=user\n      - POSTGRES_PASSWORD=password\n      - POSTGRES_DB=todoapp\n    volumes:\n      - postgres_data:/var/lib/postgresql/data\n    ports:\n      - \"5432:5432\"\n\nvolumes:\n  postgres_data:"
+        }
+      ],
+      "learning_path": "Node.js/Express basics -> REST API design -> Database setup (PostgreSQL) -> Authentication (JWT) -> ORM (Prisma/SQLAlchemy) -> FastAPI or Django for Python -> Docker deployment"
+    },
+    {
+      "name": "Databases - SQL & NoSQL",
+      "difficulty": "intermediate",
+      "explanation_simple": "Databases store your app's data permanently. Think of SQL (PostgreSQL, MySQL) as a spreadsheet with strict rules - every row has specific columns, you can do complex math and filtering, and everything is connected through IDs. NoSQL (MongoDB, Redis) is more like a folder of JSON files - very flexible, each document can have different fields, and it's faster for certain use cases. SQL is usually better for complex data relationships (user -> orders -> products), while NoSQL is better for simple, fast, or huge-scale data.",
+      "key_concepts": [
+        "PostgreSQL: Most powerful open-source SQL database (used by Instagram, Reddit)",
+        "MySQL: Very popular SQL database (used by Facebook, YouTube, Twitter originally)",
+        "MongoDB: Document database (stores JSON-like documents, very flexible)",
+        "Redis: In-memory cache/database (super fast, stores key-value pairs)",
+        "SQL Queries: SELECT, INSERT, UPDATE, DELETE, JOIN, GROUP BY",
+        "Indexes: Speed up searches (like a book's index, makes queries 100x faster)",
+        "Migrations: Version control for your database schema (changing table structures)",
+        "Normalization: Organizing data to avoid duplication",
+        "Transactions: Multiple operations that must all succeed or all fail (money transfer)"
+      ],
+      "code_examples": [
+        {
+          "title": "SQL Queries for a Game Database",
+          "code": "-- Create tables for a game leaderboard system\n\nCREATE TABLE players (\n    id SERIAL PRIMARY KEY,\n    username VARCHAR(50) UNIQUE NOT NULL,\n    email VARCHAR(255) UNIQUE NOT NULL,\n    created_at TIMESTAMP DEFAULT NOW(),\n    last_login TIMESTAMP\n);\n\nCREATE TABLE scores (\n    id SERIAL PRIMARY KEY,\n    player_id INTEGER REFERENCES players(id),\n    score INTEGER NOT NULL CHECK (score >= 0),\n    level_reached INTEGER DEFAULT 1,\n    time_played_seconds INTEGER DEFAULT 0,\n    achieved_at TIMESTAMP DEFAULT NOW()\n);\n\nCREATE INDEX idx_scores_player ON scores(player_id);\nCREATE INDEX idx_scores_value ON scores(score DESC);\n\n-- Insert a player\nINSERT INTO players (username, email) \nVALUES ('ProGamer99', 'pro@example.com');\n\n-- Insert a score\nINSERT INTO scores (player_id, score, level_reached, time_played_seconds)\nVALUES (1, 15000, 12, 3600);\n\n-- Get the leaderboard (top 10 players)\nSELECT \n    p.username,\n    MAX(s.score) as best_score,\n    MAX(s.level_reached) as max_level,\n    COUNT(s.id) as games_played\nFROM players p\nJOIN scores s ON p.id = s.player_id\nGROUP BY p.id, p.username\nORDER BY best_score DESC\nLIMIT 10;\n\n-- Get player stats\nSELECT \n    p.username,\n    s.score,\n    s.level_reached,\n    s.achieved_at\nFROM players p\nJOIN scores s ON p.id = s.player_id\nWHERE p.username = 'ProGamer99'\nORDER BY s.score DESC\nLIMIT 1;\n\n-- Average score per level\nSELECT \n    level_reached,\n    AVG(score) as avg_score,\n    COUNT(*) as attempts\nFROM scores\nGROUP BY level_reached\nORDER BY level_reached;"
+        }
+      ],
+      "learning_path": "Learn SQL basics (SELECT, INSERT, UPDATE, DELETE) -> Table design (normalization) -> JOINs -> Indexes -> PostgreSQL -> ORM (Prisma/TypeORM) -> MongoDB for NoSQL -> Redis for caching"
+    },
+    {
+      "name": "DevOps & Deployment",
+      "difficulty": "advanced",
+      "explanation_simple": "DevOps is how you get your code from your laptop to the internet where people can use it. In the old days, you'd copy files to a server by hand. Today, it's an automated pipeline: you push code to GitHub, tests run automatically, Docker packages your app into a 'container' (like a shipping container that works everywhere), and it deploys to cloud servers. This automation means you can update your website 100 times a day without breaking anything.",
+      "key_concepts": [
+        "CI/CD: Continuous Integration (auto-test code) / Continuous Deployment (auto-release)",
+        "Docker: Packages your app with everything it needs to run (no \"but it works on my machine!\")",
+        "Kubernetes: Orchestrates multiple Docker containers (scales to millions of users)",
+        "GitHub Actions: Automate tasks when you push code (test, build, deploy)",
+        "Cloud Providers: AWS (biggest), Google Cloud, Azure, Vercel (easiest for frontend)",
+        "Nginx: Web server that routes traffic, handles SSL, load balancing",
+        "SSL/TLS: Encrypts traffic between user and server (padlock icon in browser)",
+        "Domain + DNS: Your website name (google.com) points to your server IP",
+        "Monitoring: Tracking errors, performance, and uptime (Datadog, Sentry)"
+      ],
+      "code_examples": [
+        {
+          "title": "GitHub Actions CI/CD Pipeline",
+          "code": "# .github/workflows/deploy.yml\nname: Deploy to Production\n\non:\n  push:\n    branches: [main]\n\njobs:\n  test:\n    runs-on: ubuntu-latest\n    \n    services:\n      postgres:\n        image: postgres:16\n        env:\n          POSTGRES_PASSWORD: testpass\n        options: >-\n          --health-cmd pg_isready\n          --health-interval 10s\n          --health-timeout 5s\n          --health-retries 5\n        ports:\n          - 5432:5432\n    \n    steps:\n      - uses: actions/checkout@v4\n      \n      - name: Set up Python\n        uses: actions/setup-python@v5\n        with:\n          python-version: '3.11'\n      \n      - name: Install dependencies\n        run: |\n          python -m pip install --upgrade pip\n          pip install -r requirements.txt\n      \n      - name: Run tests\n        run: pytest\n        env:\n          DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres\n  \n  deploy:\n    needs: test\n    runs-on: ubuntu-latest\n    \n    steps:\n      - uses: actions/checkout@v4\n      \n      - name: Build Docker image\n        run: docker build -t myapp .\n      \n      - name: Push to container registry\n        run: |\n          docker tag myapp registry.example.com/myapp:latest\n          docker push registry.example.com/myapp:latest\n      \n      - name: Deploy to server\n        uses: appleboy/ssh-action@v1.0.0\n        with:\n          host: ${{ secrets.SERVER_HOST }}\n          username: ${{ secrets.SERVER_USER }}\n          key: ${{ secrets.SERVER_SSH_KEY }}\n          script: |\n            docker pull registry.example.com/myapp:latest\n            docker-compose up -d\n            docker system prune -f"
+        }
+      ],
+      "learning_path": "Git and GitHub -> Basic server management -> Docker containers -> Docker Compose -> CI/CD (GitHub Actions) -> Cloud deployment (AWS/Vercel) -> Kubernetes for scaling"
+    }
+  ]
+}

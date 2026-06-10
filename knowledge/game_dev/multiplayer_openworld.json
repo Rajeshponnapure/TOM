@@ -1,0 +1,120 @@
+{
+  "domain": "Multiplayer, Open World & Combat Systems",
+  "category": "game_dev",
+  "subcategory": "multiplayer_openworld_combat",
+  "description": "Complete knowledge for building networked multiplayer games, massive open worlds, and deep combat systems",
+  "teaching_plan": {
+    "lesson_1": {
+      "title": "How Online Games Work",
+      "concepts": ["Client vs Server", "TCP vs UDP", "What happens when you press a button in an online game"],
+      "projects": ["Build a simple chat server/client", "Ping-pong over UDP"]
+    },
+    "lesson_2": {
+      "title": "Making Multiplayer Feel Smooth",
+      "concepts": ["Lag compensation", "Client-side prediction", "Entity interpolation", "Rollback netcode"],
+      "projects": ["Add prediction to a simple game", "Implement interpolated movement"]
+    },
+    "lesson_3": {
+      "title": "Open World Streaming",
+      "concepts": ["World partitioning", "Asset streaming", "Level of detail (LOD)", "Terrain generation"],
+      "projects": ["Build a chunk-based world loader", "Implement streaming terrain"]
+    },
+    "lesson_4": {
+      "title": "Combat Systems",
+      "concepts": ["Hitscan vs projectile", "Damage calculation", "Animation-driven combat", "Combo systems"],
+      "projects": ["Build an FPS shooting system", "Souls-like melee combat prototype"]
+    }
+  },
+  "sections": [
+    {
+      "name": "Client-Server Architecture",
+      "difficulty": "intermediate",
+      "explanation_simple": "In multiplayer games, one computer (the server) is the 'source of truth' and everyone else (clients) connect to it. Think of it like a restaurant: the server is the kitchen that knows the real state of things (what food is actually ready), and clients are the waiters who tell the kitchen what you want and bring you updates. The server prevents cheating because it doesn't trust what clients say - it validates everything. This is why you can't just tell the server 'I have infinite health' - the server checks your actual health.",
+      "key_concepts": [
+        "Server Authority: Server makes all final decisions (player position, health, game state)",
+        "Client: Runs your game, sends inputs to server, renders what server says",
+        "Dedicated Server: Server-only program with no graphics (used by big games)",
+        "Listen Server: One player's game also acts as server (peer-to-peer-ish)",
+        "Tick Rate: How many times per second the server updates (64 Hz typical)",
+        "Packet: A single chunk of data sent over network",
+        "Bandwidth: How much data can be sent per second",
+        "Latency: Time for data to travel (your ping)",
+        "Packet Loss: When packets don't arrive"
+      ],
+      "code_examples": [
+        {
+          "title": "Simple UDP Game Server in C++",
+          "code": "#include <iostream>\n#include <string>\n#include <cstring>\n#include <thread>\n#include <unordered_map>\n\n#ifdef _WIN32\n#include <winsock2.h>\n#include <ws2tcpip.h>\n#pragma comment(lib, \"ws2_32.lib\")\n#else\n#include <sys/socket.h>\n#include <netinet/in.h>\n#include <unistd.h>\n#define SOCKET int\n#define closesocket close\n#endif\n\n#pragma pack(push, 1)\nstruct PlayerInput {\n    int playerId;\n    bool w, a, s, d;  // movement keys\n    bool shoot;\n    float mouseX, mouseY;\n};\n\nstruct PlayerState {\n    int playerId;\n    float x, y, z;\n    float health;\n    int ammo;\n    int score;\n};\n#pragma pack(pop)\n\nclass GameServer {\n    SOCKET sock;\n    sockaddr_in serverAddr;\n    std::unordered_map<int, PlayerState> players;\n    std::unordered_map<std::string, int> addressToId;\n    int nextPlayerId = 1;\n    \npublic:\n    GameServer(int port) {\n#ifdef _WIN32\n        WSADATA wsaData;\n        WSAStartup(MAKEWORD(2, 2), &wsaData);\n#endif\n        sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);\n        \n        serverAddr.sin_family = AF_INET;\n        serverAddr.sin_port = htons(port);\n        serverAddr.sin_addr.s_addr = INADDR_ANY;\n        \n        bind(sock, (sockaddr*)&serverAddr, sizeof(serverAddr));\n        \n        // Set non-blocking\n        u_long mode = 1;\n        ioctlsocket(sock, FIONBIO, &mode);\n        \n        std::cout << \"Server started on port \" << port << \"\\n\";\n    }\n    \n    void run() {\n        char buffer[1024];\n        sockaddr_in clientAddr;\n        int addrLen = sizeof(clientAddr);\n        \n        while (true) {\n            int bytesRead = recvfrom(sock, buffer, sizeof(buffer), 0,\n                                     (sockaddr*)&clientAddr, &addrLen);\n            \n            if (bytesRead > 0) {\n                std::string clientKey = std::to_string(clientAddr.sin_addr.s_addr)\n                                      + \":\" + std::to_string(ntohs(clientAddr.sin_port));\n                \n                // Handle connection\n                if (buffer[0] == 'C') {  // Connect message\n                    int id = nextPlayerId++;\n                    addressToId[clientKey] = id;\n                    players[id] = {id, 0, 0, 0, 100, 30, 0};\n                    \n                    // Send player ID back\n                    sendto(sock, (char*)&id, sizeof(id), 0,\n                           (sockaddr*)&clientAddr, addrLen);\n                    std::cout << \"Player \" << id << \" connected!\\n\";\n                    continue;\n                }\n                \n                // Handle input\n                if (buffer[0] == 'I' && bytesRead >= sizeof(PlayerInput) + 1) {\n                    PlayerInput input;\n                    memcpy(&input, buffer + 1, sizeof(PlayerInput));\n                    \n                    processInput(input);\n                }\n            }\n            \n            // Broadcast game state to all players\n            broadcastState();\n            \n            std::this_thread::sleep_for(std::chrono::milliseconds(16));\n        }\n    }\n    \n    void processInput(const PlayerInput& input) {\n        auto& player = players[input.playerId];\n        float speed = 5.0f / 60.0f;\n        \n        if (input.w) player.z -= speed;\n        if (input.s) player.z += speed;\n        if (input.a) player.x -= speed;\n        if (input.d) player.x += speed;\n        \n        if (input.shoot && player.ammo > 0) {\n            player.ammo--;\n            // Check hit against other players\n            // (simplified - real game uses raycast)\n        }\n    }\n    \n    void broadcastState() {\n        for (auto& [id, state] : players) {\n            // Send state to every player\n            // Real implementation would send to each address\n        }\n    }\n    \n    ~GameServer() {\n        closesocket(sock);\n#ifdef _WIN32\n        WSACleanup();\n#endif\n    }\n};\n\nint main() {\n    GameServer server(7777);\n    server.run();\n    return 0;\n}"
+        }
+      ],
+      "learning_path": "Understand TCP vs UDP -> Build a simple chat server -> Add game state replication -> Implement server authority -> Add client prediction -> Add lag compensation -> Scale to many players"
+    },
+    {
+      "name": "Lag Compensation Techniques",
+      "difficulty": "advanced",
+      "explanation_simple": "Lag compensation makes online games feel smooth even when players have high ping. Imagine you're playing on a server in New York, but your friend is in Australia with 300ms ping. Without lag compensation, your friend would see things happening 0.3 seconds late - everything would feel sluggish. There are three main tricks to fix this: 1) Client-side prediction - your game predicts what will happen before the server confirms it, 2) Entity interpolation - smooths out the jerky position updates into smooth movement, and 3) Rollback netcode (used in fighting games) - rewinds time to check if a punch actually landed.",
+      "key_concepts": [
+        "Client-side Prediction: Client moves immediately, then corrects when server responds",
+        "Server Reconciliation: Client compares its state with server's authoritative state",
+        "Entity Interpolation: Smoothly moves other players between known positions",
+        "Extrapolation: Guessing where someone will be based on current velocity",
+        "Rollback Netcode: Saves past states, processes inputs, and corrects if wrong (used in Street Fighter 6, Guilty Gear)",
+        "Input Delay: Waiting a few frames before showing action (helps feel consistent)",
+        "Latency Hiding: Showing effects/animations immediately even if damage hasn't been confirmed"
+      ],
+      "code_examples": [
+        {
+          "title": "Client-Side Prediction (Pseudocode)",
+          "code": "// ===== Client Side =====\n\nstruct ClientPrediction {\n    std::vector<Input> pendingInputs;  // Inputs not yet confirmed by server\n    Vector3 lastServerPosition;\n};\n\nvoid onKeyPress(Input input) {\n    // Apply input immediately (client-side prediction)\n    localPlayer.position += calculateMovement(input, deltaTime);\n    \n    // Queue input for server\n    pendingInputs.push_back(input);\n    \n    // Send input to server\n    sendToServer(input, lastProcessedSequenceNumber);\n}\n\nvoid onServerStateUpdate(ServerState state) {\n    // Server position is the truth\n    lastServerPosition = state.playerPosition;\n    \n    // Remove all inputs the server has processed\n    while (!pendingInputs.empty() && \n           pendingInputs[0].sequenceNum <= state.lastProcessedSequence) {\n        pendingInputs.erase(pendingInputs.begin());\n    }\n    \n    // Re-apply all pending inputs on top of server state\n    localPlayer.position = lastServerPosition;\n    for (auto& input : pendingInputs) {\n        localPlayer.position += calculateMovement(input, input.deltaTime);\n    }\n}\n\n// ===== Server Side =====\nvoid onClientInput(int clientId, Input input) {\n    Player& player = players[clientId];\n    \n    // Server validates and applies\n    player.position += calculateMovement(input, input.deltaTime);\n    \n    // Send position back to all clients\n    broadcastState();\n}"
+        }
+      ],
+      "learning_path": "Understand the lag problem -> Client-side prediction -> Server reconciliation -> Entity interpolation -> Extrapolation -> Rollback netcode (advanced)"
+    },
+    {
+      "name": "Open World Streaming & Optimization",
+      "difficulty": "advanced",
+      "explanation_simple": "Open world games like GTA V, Skyrim, and Breath of the Wild have massive worlds that can't fit in memory all at once. The trick is streaming - only loading the parts of the world near the player. Imagine a book with thousands of pages - you don't carry the whole book in your hands, you just read the page you're on. When you turn the page, you load the next one. Open world games do the same thing with chunks of the world. UE5's World Partition system does this automatically.",
+      "key_concepts": [
+        "World Partition: Divides map into grid cells, loads cells near player",
+        "Streaming: Loading/unloading assets as needed (not all at once)",
+        "LOD (Level of Detail): Far-away objects use simpler models",
+        "Chunk Loading: Standard 2D grid for dividing open worlds",
+        "Async Loading: Loading assets in background while game runs",
+        "Memory Budget: Maximum memory the game can use",
+        "Seamless World: No loading screens as you traverse (most impressive)",
+        "Fast Travel: Teleporting between discovered locations"
+      ],
+      "code_examples": [
+        {
+          "title": "Chunk-Based World Streaming System",
+          "code": "#include <vector>\n#include <unordered_map>\n#include <string>\n#include <thread>\n#include <iostream>\n\nstruct Chunk {\n    int x, z;\n    bool loaded = false;\n    float* heightMap = nullptr;  // terrain data\n    int* objectIds = nullptr;     // trees, rocks, buildings\n    \n    Chunk(int cx, int cz) : x(cx), z(cz) {}\n    \n    void load() {\n        if (loaded) return;\n        std::cout << \"Loading chunk (\" << x << \", \" << z << \")...\\n\";\n        // Read from disk or generate\n        heightMap = new float[256];\n        objectIds = new int[64];\n        loaded = true;\n    }\n    \n    void unload() {\n        if (!loaded) return;\n        std::cout << \"Unloading chunk (\" << x << \", \" << z << \")...\\n\";\n        delete[] heightMap;\n        delete[] objectIds;\n        loaded = false;\n    }\n    \n    ~Chunk() { unload(); }\n};\n\nclass WorldStreamer {\n    std::unordered_map<int, std::unique_ptr<Chunk>> chunks;\n    int viewDistance = 4;  // Load 4 chunks in each direction\n    int chunkSize = 64;     // Meters per chunk\n    int lastChunkX = 999999, lastChunkZ = 999999;\n    \n    int getChunkKey(int x, int z) { return x * 100000 + z; }\n    \npublic:\n    void update(float playerX, float playerZ) {\n        int currentChunkX = (int)(playerX / chunkSize);\n        int currentChunkZ = (int)(playerZ / chunkSize);\n        \n        // Only update when player moves to a new chunk\n        if (currentChunkX == lastChunkX && currentChunkZ == lastChunkZ) return;\n        lastChunkX = currentChunkX;\n        lastChunkZ = currentChunkZ;\n        \n        // Mark all chunks for potential unload\n        std::unordered_map<int, bool> shouldKeep;\n        \n        // Load chunks in view distance\n        for (int dx = -viewDistance; dx <= viewDistance; ++dx) {\n            for (int dz = -viewDistance; dz <= viewDistance; ++dz) {\n                int cx = currentChunkX + dx;\n                int cz = currentChunkZ + dz;\n                int key = getChunkKey(cx, cz);\n                shouldKeep[key] = true;\n                \n                if (!chunks.count(key)) {\n                    chunks[key] = std::make_unique<Chunk>(cx, cz);\n                    chunks[key]->load();\n                }\n            }\n        }\n        \n        // Unload chunks outside view distance\n        auto it = chunks.begin();\n        while (it != chunks.end()) {\n            if (!shouldKeep.count(it->first)) {\n                it->second->unload();\n                it = chunks.erase(it);\n            } else ++it;\n        }\n        \n        std::cout << \"Active chunks: \" << chunks.size() << \"\\n\";\n    }\n};\n\nint main() {\n    WorldStreamer streamer;\n    \n    // Simulate player moving through the world\n    for (int i = 0; i < 5; ++i) {\n        float x = i * 70.0f;  // Move 70 meters each step\n        float z = 0;\n        std::cout << \"\\nPlayer at (\" << x << \", \" << z << \")\\n\";\n        streamer.update(x, z);\n    }\n    \n    return 0;\n}"
+        }
+      ],
+      "learning_path": "Understand memory limits -> Chunk-based systems -> Basic streaming -> LOD for meshes -> Texture streaming -> Async loading -> World partition (UE5) -> Advanced: virtual geometry"
+    },
+    {
+      "name": "FPS & TPS Combat Systems",
+      "difficulty": "intermediate",
+      "explanation_simple": "First-person and third-person shooter combat is the most popular game genre. At its core, it's about pointing a weapon and clicking. But the details make the difference between a great shooter (Call of Duty, Destiny, Apex Legends) and a clunky one. The big questions: Is it hitscan (instant hit, like a laser pointer) or projectile (bullet travels, like in real life)? How does recoil work (does the gun kick up, or does the spread randomize)? How does the game know if you hit something? These systems work together to make shooting feel satisfying.",
+      "key_concepts": [
+        "Hitscan: Instant hit detection (bullet arrives the same frame you fire)",
+        "Projectile: Bullet with travel time and drop (used in Battlefield, PUBG)",
+        "ADS: Aim Down Sights (zooming in for accuracy)",
+        "Recoil: Gun moves upward as you fire (pattern or random)",
+        "Spread/Accuracy: Random deviation of bullets (hip fire is less accurate)",
+        "Raycast: Shooting a ray from camera to check what it hits",
+        "Headshot: Extra damage for hitting the head (critical hit)",
+        "Damage Falloff: Less damage over distance",
+        "FOV: Field of View (how much you can see)",
+        "Hip Fire: Shooting without aiming (less accurate but faster)"
+      ],
+      "code_examples": [
+        {
+          "title": "Complete FPS Shooting System",
+          "code": "#include <cmath>\n#include <random>\n#include <iostream>\n\nstruct Weapon {\n    float damage = 25.0f;\n    float fireRate = 0.1f;        // seconds between shots\n    float reloadTime = 1.5f;\n    int maxAmmo = 30;\n    int currentAmmo = 30;\n    bool isAutomatic = true;\n    float recoilAmount = 2.5f;\n    float maxSpread = 0.1f;\n    float spreadRecoveryRate = 10.0f;\n    float currentSpread = 0.0f;\n    float damageFalloffStart = 1000.0f;\n    float damageFalloffEnd = 5000.0f;\n    float range = 10000.0f;\n    \n    // Recoil pattern (advanced - cod-style)\n    // Each shot adds to a pattern offset\n    int shotsFired = 0;\n    float recoilPatternX[30] = {\n        0, 0, 0, 0, -0.5f, -0.8f, -0.5f, 0, 0.5f, 0.8f,\n        0.5f, 0, -0.5f, -0.8f, -0.5f, 0, 0.5f, 1.0f, 0.5f, 0,\n        -0.3f, -0.6f, -0.3f, 0, 0.3f, 0.6f, 0.3f, 0, -0.2f, 0\n    };\n    float recoilPatternY[30] = {\n        1, 1.5f, 1.8f, 2.0f, 2.2f, 2.5f, 2.3f, 2.0f, 2.2f, 2.5f,\n        2.3f, 2.0f, 2.2f, 2.5f, 2.3f, 2.0f, 2.2f, 2.5f, 2.0f, 1.8f,\n        1.5f, 1.8f, 2.0f, 1.5f, 1.8f, 2.0f, 1.5f, 1.3f, 1.0f, 1.5f\n    };\n    \n    bool fire() {\n        if (currentAmmo <= 0 || fireTimer > 0) return false;\n        \n        currentAmmo--;\n        shotsFired++;\n        fireTimer = fireRate;\n        \n        // Increase spread\n        currentSpread = std::min(currentSpread + 0.02f, maxSpread);\n        \n        return true;\n    }\n    \n    void update(float dt) {\n        fireTimer = std::max(0.0f, fireTimer - dt);\n        currentSpread = std::max(0.0f, currentSpread - spreadRecoveryRate * dt);\n        \n        if (fireTimer <= 0) shotsFired = 0;  // Reset recoil pattern\n    }\n    \n    Vector2 getRecoilOffset() const {\n        if (shotsFired <= 0) return {0, 0};\n        int idx = std::min(shotsFired - 1, 29);\n        return {recoilPatternX[idx], recoilPatternY[idx]};\n    }\n    \n    float fireTimer = 0;\n};\n\nstruct RaycastHit {\n    bool hit;\n    float distance;\n    Vector3 point;\n    Vector3 normal;\n    Entity* hitEntity;\n    bool isHeadshot;\n};\n\nclass ShootingSystem {\n    std::mt19937 rng{std::random_device{}()};\n    \npublic:\n    RaycastHit shoot(const Weapon& weapon, const Vector3& origin, const Vector3& direction) {\n        // Apply spread\n        std::normal_distribution<float> spreadDist(0, weapon.currentSpread);\n        float spreadX = spreadDist(rng);\n        float spreadY = spreadDist(rng);\n        \n        Vector3 shotDir = direction;\n        shotDir.x += spreadX;\n        shotDir.y += spreadY;\n        shotDir = shotDir.normalize();\n        \n        // Raycast (simplified - real engine does this against collision)\n        RaycastHit hit;\n        hit.hit = raycast(origin, origin + shotDir * weapon.range, hit);\n        \n        if (hit.hit) {\n            // Damage falloff\n            float damage = weapon.damage;\n            if (hit.distance > weapon.damageFalloffStart) {\n                float t = (hit.distance - weapon.damageFalloffStart) /\n                          (weapon.damageFalloffEnd - weapon.damageFalloffStart);\n                t = std::clamp(t, 0.0f, 1.0f);\n                damage *= (1.0f - t * 0.5f);  // 50% damage at max range\n            }\n            \n            // Headshot multiplier\n            if (hit.isHeadshot) damage *= 2.0f;\n            \n            // Apply damage to hit entity\n            if (hit.hitEntity) hit.hitEntity->takeDamage(damage);\n        }\n        \n        return hit;\n    }\n};"
+        }
+      ],
+      "learning_path": "Basic raycast shooting -> Hitscan vs projectile -> Recoil patterns -> Spread mechanics -> Damage system -> Animation-driven shooting -> Multiplayer hit validation"
+    }
+  ]
+}

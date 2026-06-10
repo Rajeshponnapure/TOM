@@ -1,0 +1,104 @@
+{
+  "domain": "Industry Software & Pipeline Tools",
+  "category": "blender_cgi",
+  "subcategory": "industry_software",
+  "description": "Complete coverage of professional 3D software ecosystem - Maya, Houdini, Substance, ZBrush, render engines, motion capture, and production pipelines",
+  "sections": [
+    {
+      "name": "Professional 3D Software",
+      "difficulty": "intermediate",
+      "explanation_simple": "While Blender is free and amazing, the professional film and game industries use specific tools for specific jobs. Maya is the industry standard for animation (used by Disney, Pixar, most AAA game studios). Houdini is the king of VFX and procedural work (used for explosions, fire, water in movies). ZBrush is for high-detail sculpting (used for every character in modern games and films). Think of these like specialized tools in a workshop - you CAN build a chair with just a hammer, but having a saw, plane, and chisel makes it faster and better.",
+      "key_concepts": [
+        "Maya: Industry standard for animation and rigging (used at Disney, ILM, most game studios)",
+        "3ds Max: Popular for hard surface modeling and game asset creation (used in many game studios)",
+        "Cinema 4D: Favorite for motion graphics and broadcast design (easier to learn than Maya)",
+        "Houdini: Node-based procedural VFX (industry standard for fire, smoke, water, destruction)",
+        "ZBrush: Digital sculpting with millions of polygons (used by every character artist)",
+        "Substance Painter: 3D texture painting (like Photoshop for 3D models)",
+        "Substance Designer: Procedural material creation (create materials with node graphs)",
+        "Marmoset Toolbag: Real-time rendering for game art (portfolio presentations)"
+      ],
+      "code_examples": [
+        {
+          "title": "Maya Python: Create a Hierarchical Rig",
+          "code": "import maya.cmds as cmds\n\ndef create_basic_joint_chain(name=\"arm\", segments=3, length=5.0):\n    \"\"\"Create a basic joint chain for animation.\"\"\"\n    joints = []\n    for i in range(segments):\n        pos_y = (length / segments) * i\n        joint = cmds.joint(name=f\"{name}_{i}\", p=(0, pos_y, 0))\n        joints.append(joint)\n    return joints\n\n# Create arm joint chain\narm_joints = create_basic_joint_chain(\"arm\", 3, 5.0)\n\n# Add IK handle\nik_handle = cmds.ikHandle(\n    name=\"arm_IK\",\n    startJoint=arm_joints[0],\n    endEffector=arm_joints[-1],\n    solver=\"ikRPsolver\"  # Rotate Plane solver\n)\n\n# Create control curve (circle)\nctrl = cmds.circle(name=\"arm_IK_ctrl\", nr=(0, 1, 0), r=0.5)[0]\n# Move controller to end of chain\ncmds.move(0, length, 0, ctrl)\n\n# Parent IK handle to control\ncmds.parent(ik_handle[0], ctrl)\n\nprint(f\"Created arm rig with {len(arm_joints)} joints and IK\")\nprint(\"Move arm_IK_ctrl to pose the arm\")"
+        },
+        {
+          "title": "Houdini VEX: Procedural Destroyed Wall",
+          "code": "// Houdini VEX code for procedural destruction\n// This runs on each point/primitive in the geometry\n\n// Get the impact position from a detail attribute\nvector impactPos = point(1, \"P\", 0);\nfloat impactRadius = chf(\"impact_radius\");\nfloat strength = chf(\"strength\");\n\n// Get current point position\nvector pos = @P;\n\n// Calculate distance from impact\nfloat dist = distance(pos, impactPos);\n\n// Falloff\nfloat falloff = 1 - smooth(0, impactRadius, dist);\n\n// Apply explosion force (push points away from impact)\nvector dir = normalize(pos - impactPos);\n@P += dir * strength * falloff;\n\n// Add random variation for debris\n@P += rand(@ptnum) * 0.1 * falloff;\n\n// Store velocity for simulation (if needed)\n@v = dir * strength * falloff * 10;\n\n// Set color for visual feedback\n@Cd = falloff;\n\n// Create fracture lines: if close to impact, break apart\nif (falloff > 0.3) {\n    @group_debris = 1;\n}"
+        }
+      ],
+      "learning_path": "Start with Blender (free, all-in-one) -> Learn Maya for studio work -> Houdini for VFX -> ZBrush for sculpting -> Substance for texturing -> Integrate with game engine pipeline"
+    },
+    {
+      "name": "Render Engines (Cycles, Arnold, V-Ray, Redshift)",
+      "difficulty": "intermediate",
+      "explanation_simple": "A render engine turns your 3D scene into the final image or animation. Think of it like a camera - you set up the scene, lighting, and materials, and the render engine calculates how light bounces around and creates the final picture. Different render engines have different strengths: Cycles is built into Blender and is great for general use, Arnold is the film industry standard (used at ILM, Disney), V-Ray is popular in architecture, and Redshift is the fastest because it uses your GPU (graphics card) instead of CPU.",
+      "key_concepts": [
+        "Cycles: Blender's built-in path tracer - free, open source, good quality",
+        "Eevee: Blender's real-time renderer - fast, good for preview, lower quality",
+        "Arnold: Film industry standard - physically accurate, used by major VFX studios",
+        "V-Ray: Architecture and design standard - known for quality and reliability",
+        "Redshift: GPU-accelerated renderer - fastest of the major engines",
+        "Octane: Fully GPU-based, unbiased renderer - photorealistic results",
+        "Path Tracing: Tracing light rays as they bounce through the scene",
+        "Denoising: Removing grain/noise from render (AI denoisers are amazing now)",
+        "Render Passes: Separate layers (diffuse, specular, shadows) for compositing",
+        "Light Paths: How many times light bounces (more = more realistic, slower)"
+      ],
+      "code_examples": [
+        {
+          "title": "Blender Python: Set Up Render Settings",
+          "code": "import bpy\n\ndef setup_render(output_path, resolution=(1920, 1080), engine='CYCLES', samples=128):\n    \"\"\"Configure Blender render settings for production quality.\"\"\"\n    scene = bpy.context.scene\n    \n    # Render engine\n    scene.render.engine = engine\n    \n    # Resolution\n    scene.render.resolution_x = resolution[0]\n    scene.render.resolution_y = resolution[1]\n    scene.render.resolution_percentage = 100\n    scene.render.fps = 24\n    \n    # Output\n    scene.render.filepath = output_path\n    scene.render.image_settings.file_format = 'PNG'\n    scene.render.image_settings.color_mode = 'RGBA'\n    \n    if engine == 'CYCLES':\n        # Cycles specific settings\n        cycles = scene.cycles\n        cycles.samples = samples\n        cycles.use_denoising = True\n        cycles.denoiser = 'OPENIMAGEDENOISE'\n        cycles.max_bounces = 8\n        cycles.diffuse_bounces = 4\n        cycles.glossy_bounces = 4\n        cycles.transmission_bounces = 8\n        cycles.volume_bounces = 2\n        \n        # Use GPU if available\n        cycles.device = 'GPU'\n        \n    elif engine == 'BLENDER_EEVEE':\n        # Eevee specific settings\n        eevee = scene.eevee\n        eevee.taa_samples = 64\n        eevee.use_ssr = True  # Screen Space Reflections\n        eevee.use_gtao = True  # Ambient Occlusion\n        eevee.use_bloom = True\n        eevee.bloom_intensity = 0.5\n    \n    # Color management\n    scene.view_settings.view_transform = 'Filmic'\n    scene.view_settings.look = 'None'\n    scene.display_settings.display_device = 'sRGB'\n    \n    print(f\"Render configured: {resolution[0]}x{resolution[1]} @ 24fps\")\n    print(f\"Engine: {engine}, Samples: {samples}\")\n    print(f\"Output: {output_path}\")\n\n# Usage\nsetup_render(\n    output_path=\"//renders/final_frame_\",\n    resolution=(3840, 2160),  # 4K\n    engine='CYCLES',\n    samples=512\n)"
+        }
+      ],
+      "learning_path": "Eevee for preview -> Cycles for final renders -> Light path concepts -> Render passes -> Arnold for film -> Redshift for GPU speed -> Compositing passes in post"
+    },
+    {
+      "name": "Motion Capture & Virtual Production",
+      "difficulty": "advanced",
+      "explanation_simple": "Motion capture records real human movements and transfers them to 3D characters. It's how Gollum, Thanos, and Na'vi characters in Avatar come to life - real actors perform, and their movements drive the digital characters. Modern mocap can be marker-based (special suit with reflective balls, used by studios) or markerless (just video, AI figures out the pose). The captured data goes through cleanup and retargeting (mapping the actor's skeleton to the character's skeleton, which may be different proportions).",
+      "key_concepts": [
+        "Marker-Based Mocap: Reflective markers on suit, tracked by cameras (Vicon, OptiTrack)",
+        "Markerless Mocap: AI extracts pose from video (Move AI, Rokoko, DeepMotion)",
+        "Facial Mocap: Capturing face movements (head-mounted camera, Faceware)",
+        "Finger Mocap: Gloves with sensors for hand/finger tracking",
+        "Retargeting: Mapping captured motion to a different skeleton (human to alien, etc)",
+        "Motion Cleanup: Fixing foot sliding, noise, and tracking errors",
+        "Virtual Production: Using game engines for real-time filmmaking (The Mandalorian)",
+        "LED Volume: Giant LED screens showing backgrounds (instead of green screens)",
+        "Live Compositing: Characters and effects rendered in real-time on set"
+      ],
+      "code_examples": [
+        {
+          "title": "Python: Retargeting Motion Capture Data",
+          "code": "# Simplified retargeting example\n# Takes motion capture data and maps it to a game character\n\nimport numpy as np\n\nclass MotionRetarget:\n    def __init__(self, source_skeleton, target_skeleton):\n        \"\"\"\n        source_skeleton: dict of bone names to bone lengths\n        target_skeleton: dict of bone names to bone lengths (game character)\n        \"\"\"\n        self.source = source_skeleton\n        self.target = target_skeleton\n        self.bone_map = self._create_bone_map()\n    \n    def _create_bone_map(self):\n        \"\"\"Map source bones to target bones.\"\"\"\n        # Standard bone mapping\n        return {\n            'Hips': 'Hips',\n            'Spine': 'Spine',\n            'Chest': 'Chest',\n            'Neck': 'Neck',\n            'Head': 'Head',\n            'LeftUpperArm': 'LeftArm',\n            'LeftLowerArm': 'LeftForearm',\n            'LeftHand': 'LeftHand',\n            'RightUpperArm': 'RightArm',\n            'RightLowerArm': 'RightForearm',\n            'RightHand': 'RightHand',\n            'LeftUpperLeg': 'LeftThigh',\n            'LeftLowerLeg': 'LeftLeg',\n            'LeftFoot': 'LeftFoot',\n            'RightUpperLeg': 'RightThigh',\n            'RightLowerLeg': 'RightLeg',\n            'RightFoot': 'RightFoot',\n        }\n    \n    def retarget_frame(self, source_poses):\n        \"\"\"Convert a frame of source motion to target skeleton.\"\"\"\n        target_poses = {}\n        \n        for source_bone, target_bone in self.bone_map.items():\n            if source_bone in source_poses:\n                # Get source rotation\n                source_rotation = source_poses[source_bone]\n                \n                # Scale rotation based on bone length ratio\n                source_len = self.source.get(source_bone, 1)\n                target_len = self.target.get(target_bone, 1)\n                scale = target_len / source_len if source_len > 0 else 1\n                \n                # Apply scale to position (rotation stays the same, position adjusts)\n                # In practice, this uses more complex IK solving\n                target_poses[target_bone] = source_rotation * scale\n        \n        return target_poses\n    \n    def retarget_animation(self, animation_data):\n        \"\"\"Retarget entire animation.\"\"\"\n        retargeted = []\n        for frame in animation_data:\n            retargeted.append(self.retarget_frame(frame))\n        return retargeted\n\n# Example usage\nsource_skeleton = {\n    'Hips': 0.3, 'Spine': 0.4, 'Chest': 0.3,\n    'LeftUpperArm': 0.3, 'LeftLowerArm': 0.25, 'LeftHand': 0.1,\n    'RightUpperArm': 0.3, 'RightLowerArm': 0.25, 'RightHand': 0.1,\n    'LeftUpperLeg': 0.4, 'LeftLowerLeg': 0.4, 'LeftFoot': 0.15,\n    'RightUpperLeg': 0.4, 'RightLowerLeg': 0.4, 'RightFoot': 0.15,\n}\n\ntarget_skeleton = {\n    'Hips': 0.25, 'Spine': 0.35, 'Chest': 0.3,\n    'LeftArm': 0.25, 'LeftForearm': 0.2, 'LeftHand': 0.08,\n    'RightArm': 0.25, 'RightForearm': 0.2, 'RightHand': 0.08,\n    'LeftThigh': 0.35, 'LeftLeg': 0.35, 'LeftFoot': 0.12,\n    'RightThigh': 0.35, 'RightLeg': 0.35, 'RightFoot': 0.12,\n}\n\nretarget = MotionRetarget(source_skeleton, target_skeleton)\nprint(\"Motion retargeting system ready!\")\nprint(f\"Mapped {len(retarget.bone_map)} bones from source to target\")"
+        }
+      ],
+      "learning_path": "Understanding mocap principles -> Markerless mocap (Move AI) -> Data cleanup -> Retargeting -> Finger/face mocap -> Virtual production pipeline -> LED volume workflows"
+    },
+    {
+      "name": "AI-Powered Creation Tools",
+      "difficulty": "intermediate",
+      "explanation_simple": "AI is revolutionizing 3D creation. Instead of spending hours modeling, texturing, and animating by hand, artists now use AI tools to accelerate their workflow. AI can generate textures from text descriptions, animate characters from video, upscale low-res images, and even generate 3D models from photos. These tools don't replace artists - they handle the tedious parts so artists can focus on creative decisions. Think of AI as a super-efficient assistant that never gets tired.",
+      "key_concepts": [
+        "AI Texture Generation: Describe what you want, AI creates the texture (Stable Diffusion, Midjourney)",
+        "AI Motion Generation: AI creates animations from text or video (Cascadeur, DeepMotion)",
+        "AI Upscaling: Making low-res textures/images high-res (Topaz Gigapixel, ESRGAN)",
+        "AI 3D from Image: Creating 3D models from photos (NeRF, Gaussian Splatting, RealityCapture)",
+        "AI Lip Sync: Auto-matching mouth movements to dialogue audio (NVIDIA Audio2Face, Oculus Lipsync)",
+        "AI Rigging: Auto-rigging characters from a mesh (Mixamo, AccuRIG)",
+        "AI Scene Generation: Creating full 3D scenes from text (Stable Zero123, DreamFusion)",
+        "Runway: AI video generation and editing",
+        "Wonder Dynamics: AI VFX - auto-apply CG characters to live footage"
+      ],
+      "code_examples": [
+        {
+          "title": "AI-Assisted Workflow Pipeline",
+          "code": "# AI-Assisted 3D Asset Pipeline\n# This is a workflow outline, not automated script\n\n\"\"\"\nAI-ASSISTED 3D CHARACTER PIPELINE:\n\n1. CONCEPT\n   - Use Midjourney/Stable Diffusion to generate character concepts\n   - Prompt: \"fantasy warrior female, full body concept art, cinematic lighting\"\n   - Choose best concept, iterate on details\n\n2. BASE MESH\n   - Use AI base mesh generator or start with primitive\n   - Alternative: Photo-scan a real person with RealityCapture\n\n3. SCULPTING\n   - ZBrush or Blender sculpt manually\n   - AI can help with: auto-completing symmetrical details\n   - Use AI reference: generate multiple face/body variations fast\n\n4. RETOPOLOGY\n   - Manual or automatic (ZRemesher, QuadRemesher)\n   - AI tools: co-retopology that respects edge flow\n\n5. UV UNWRAPPING\n   - Automatic with RizomUV or Blender\n   - AI could handle seam placement (future tech)\n\n6. TEXTURING\n   - Use Stable Diffusion to generate PBR textures\n   - Prompt: \"worn leather armor texture, PBR, 4K, metal studs\"\n   - Use AI inpainting to fix seams\n   - Substance Painter with AI smart materials\n\n7. RIGGING\n   - Auto-rig with AccuRIG or Mixamo\n   - AI helps with weight painting optimization\n\n8. ANIMATION\n   - Use Cascadeur for AI-assisted keyframing\n   - DeepMotion for AI motion capture from video\n   - Mixamo for quick animation library\n\n9. RENDERING\n   - Use AI denoising (OptiX, OpenImageDenoise)\n   - AI upscaling for final render (4K -> 8K)\n\nTHE RESULT: A production-ready 3D character in 1-3 days\ninstead of 1-3 weeks using traditional methods alone.\n\"\"\"\n\nprint(\"AI-Assisted Pipeline ready for use\")\nprint(\"Tools needed: Stable Diffusion, RealityCapture,\")\nprint(\"  ZBrush/Blender, Substance Painter, Cascadeur, Mixamo\")"
+        }
+      ],
+      "learning_path": "Understand AI capabilities -> Stable Diffusion for textures -> AI motion (Cascadeur) -> AI upscaling -> AI 3D reconstruction -> Integrate into existing pipeline"
+    }
+  ]
+}

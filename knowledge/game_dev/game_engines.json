@@ -1,0 +1,164 @@
+{
+  "domain": "Game Engines",
+  "category": "game_dev",
+  "subcategory": "game_engines",
+  "description": "Complete knowledge of all major game engines - AAA engines, indie engines, open-source engines, and custom engine development",
+  "teaching_plan": {
+    "lesson_1": {
+      "title": "Choosing Your First Engine",
+      "concepts": ["Unity vs Unreal vs Godot", "2D vs 3D engines", "Programming language requirements", "Platform targets"],
+      "projects": ["Install and create a blank project in each engine", "Compare the editors"]
+    },
+    "lesson_2": {
+      "title": "Unity Engine Mastery",
+      "concepts": ["GameObjects and Components", "Prefab system", "Scene management", "Physics", "UI Toolkit"],
+      "projects": ["Build a first-person exploration game", "Build a 2D platformer"]
+    },
+    "lesson_3": {
+      "title": "Unreal Engine 5 Mastery",
+      "concepts": ["Blueprints vs C++", "Gameplay Framework", "Nanite and Lumen", "World Partition", "Niagara VFX"],
+      "projects": ["Build a third-person shooter prototype", "Create an open-world landscape"]
+    },
+    "lesson_4": {
+      "title": "Godot Engine",
+      "concepts": ["Scene system", "Signals", "GDScript", "Node composition"],
+      "projects": ["Build a 2D RPG in Godot"]
+    }
+  },
+  "sections": [
+    {
+      "name": "Unreal Engine 5 Deep Dive",
+      "difficulty": "beginner",
+      "explanation_simple": "Unreal Engine 5 is like having a Hollywood movie studio on your computer - for free. It's the engine behind Fortnite, Gears of War, Hellblade 2, and Black Myth: Wukong. What makes UE5 special is Nanite (which lets you use movie-quality 3D models directly in your game without slowing down) and Lumen (which makes lighting look realistic automatically). You can build games using Blueprints (visual scripting - no coding needed) or C++ (for maximum power).",
+      "key_concepts": [
+        "GameMode: The rules of your game (who wins, how scoring works)",
+        "GameState: Information every player needs to know (scores, time left)",
+        "PlayerController: Takes input and controls a Pawn (keyboard/mouse/controller)",
+        "Pawn/Character: The physical thing in the world (player model, enemy)",
+        "Actor: Everything in the game world (lights, cameras, props, characters)",
+        "Component: Attachable behavior (movement, sound, health)",
+        "Blueprint: Visual scripting - drag and connect nodes to make game logic",
+        "Nanite: Virtual geometry that auto-manages detail - use million-poly models directly",
+        "Lumen: Dynamic global illumination that bounces light realistically",
+        "World Partition: Automatically manages large open worlds"
+      ],
+      "code_examples": [
+        {
+          "title": "UE5 C++ Character Class",
+          "code": "#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Character.h\"\n#include \"MyCharacter.generated.h\"\n\nUCLASS()\nclass MYGAME_API AMyCharacter : public ACharacter\n{\n    GENERATED_BODY()\n\npublic:\n    AMyCharacter();\n\nprotected:\n    virtual void BeginPlay() override;\n\npublic:\n    virtual void Tick(float DeltaTime) override;\n    virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;\n\n    // Health system\n    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = \"Health\")\n    float MaxHealth = 100.0f;\n\n    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = \"Health\")\n    float CurrentHealth;\n\n    UFUNCTION(BlueprintCallable, Category = \"Health\")\n    void TakeDamage(float DamageAmount);\n\n    UFUNCTION(BlueprintImplementableEvent, Category = \"Health\")\n    void OnDeath();\n\n    // Weapon system\n    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = \"Weapon\")\n    TSubclassOf<class AWeapon> StartingWeaponClass;\n\n    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = \"Weapon\")\n    class AWeapon* CurrentWeapon;\n\n    UFUNCTION(BlueprintCallable, Category = \"Weapon\")\n    void EquipWeapon(class AWeapon* Weapon);\n\n    UFUNCTION(BlueprintCallable, Category = \"Weapon\")\n    void Fire();\n\nprivate:\n    UPROPERTY()\n    class USpringArmComponent* CameraBoom;\n\n    UPROPERTY()\n    class UCameraComponent* FollowCamera;\n};\n\n// In .cpp file:\n#include \"MyCharacter.h\"\n#include \"GameFramework/SpringArmComponent.h\"\n#include \"Camera/CameraComponent.h\"\n#include \"Weapon.h\"\n\nAMyCharacter::AMyCharacter()\n{\n    PrimaryActorTick.bCanEverTick = true;\n\n    // Create camera\n    CameraBoom = CreateDefaultSubobject<USpringArmComponent>(\"CameraBoom\");\n    CameraBoom->SetupAttachment(RootComponent);\n    CameraBoom->TargetArmLength = 300.0f;\n\n    FollowCamera = CreateDefaultSubobject<UCameraComponent>(\"FollowCamera\");\n    FollowCamera->SetupAttachment(CameraBoom);\n\n    CurrentHealth = MaxHealth;\n}\n\nvoid AMyCharacter::BeginPlay()\n{\n    Super::BeginPlay();\n\n    // Spawn starting weapon\n    if (StartingWeaponClass)\n    {\n        FActorSpawnParameters SpawnParams;\n        AWeapon* Weapon = GetWorld()->SpawnActor<AWeapon>(StartingWeaponClass, SpawnParams);\n        EquipWeapon(Weapon);\n    }\n}\n\nvoid AMyCharacter::TakeDamage(float DamageAmount)\n{\n    CurrentHealth = FMath::Clamp(CurrentHealth - DamageAmount, 0.0f, MaxHealth);\n\n    if (CurrentHealth <= 0.0f)\n    {\n        OnDeath();\n    }\n}\n\nvoid AMyCharacter::EquipWeapon(AWeapon* Weapon)\n{\n    if (Weapon)\n    {\n        CurrentWeapon = Weapon;\n        Weapon->AttachToComponent(GetMesh(), FAttachmentTransformRules::SnapToTargetIncludingScale, TEXT(\"WeaponSocket\"));\n    }\n}\n\nvoid AMyCharacter::Fire()\n{\n    if (CurrentWeapon)\n    {\n        CurrentWeapon->Fire();\n    }\n}"
+        },
+        {
+          "title": "UE5 Blueprint-Style Behavior Tree for Enemy AI",
+          "code": "// In UE5, enemy AI is made with Behavior Trees, Blackboards, and AIController\n// Here's the C++ code equivalent for a patrolling and chasing AI\n\n#include \"CoreMinimal.h\"\n#include \"AIController.h\"\n#include \"BehaviorTree/BehaviorTree.h\"\n#include \"BehaviorTree/BlackboardComponent.h\"\n#include \"Perception/AIPerceptionComponent.h\"\n#include \"Perception/AISenseConfig_Sight.h\"\n#include \"EnemyAIController.generated.h\"\n\nUCLASS()\nclass AEnemyAIController : public AAIController\n{\n    GENERATED_BODY()\n\npublic:\n    AEnemyAIController()\n    {\n        PrimaryActorTick.bCanEverTick = true;\n\n        // Set up AI perception (sight)\n        SightConfig = CreateDefaultSubobject<UAISenseConfig_Sight>(\"SightConfig\");\n        SightConfig->SightRadius = 1500.0f;\n        SightConfig->LoseSightRadius = 2000.0f;\n        SightConfig->PeripheralVisionAngleDegrees = 90.0f;\n        SightConfig->DetectionByAffiliation.bDetectEnemies = true;\n        SightConfig->DetectionByAffiliation.bDetectFriendlies = true;\n        SightConfig->DetectionByAffiliation.bDetectNeutrals = true;\n\n        PerceptionComponent = CreateDefaultSubobject<UAIPerceptionComponent>(\"Perception\");\n        PerceptionComponent->ConfigureSense(*SightConfig);\n        PerceptionComponent->SetDominantSense(SightConfig->GetSenseImplementation());\n        PerceptionComponent->OnPerceptionUpdated.AddDynamic(this, &AEnemyAIController::OnPerceptionUpdated);\n    }\n\nprotected:\n    UPROPERTY()\n    UAISenseConfig_Sight* SightConfig;\n\n    UPROPERTY(EditDefaultsOnly, Category = \"AI\")\n    UBehaviorTree* BehaviorTree;\n\n    virtual void BeginPlay() override\n    {\n        Super::BeginPlay();\n\n        if (BehaviorTree)\n        {\n            RunBehaviorTree(BehaviorTree);\n        }\n    }\n\n    UFUNCTION()\n    void OnPerceptionUpdated(const TArray<AActor*>& UpdatedActors)\n    {\n        for (AActor* Actor : UpdatedActors)\n        {\n            FActorPerceptionBlueprintInfo Info;\n            PerceptionComponent->GetActorsPerception(Actor, Info);\n\n            if (Actor->ActorHasTag(\"Player\"))\n            {\n                GetBlackboardComponent()->SetValueAsObject(\"TargetActor\", Actor);\n                GetBlackboardComponent()->SetValueAsBool(\"HasSeenPlayer\", true);\n                return;\n            }\n        }\n\n        GetBlackboardComponent()->SetValueAsBool(\"HasSeenPlayer\", false);\n    }\n};"
+        },
+        {
+          "title": "UE5 Weapon System C++",
+          "code": "#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Weapon.generated.h\"\n\nUCLASS()\nclass AWeapon : public AActor\n{\n    GENERATED_BODY()\n\npublic:\n    AWeapon();\n\n    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = \"Weapon\")\n    float Damage = 25.0f;\n\n    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = \"Weapon\")\n    float FireRate = 0.2f;\n\n    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = \"Weapon\")\n    int32 MaxAmmo = 30;\n\n    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = \"Weapon\")\n    float ReloadTime = 2.0f;\n\n    UFUNCTION(BlueprintCallable, Category = \"Weapon\")\n    void Fire();\n\n    UFUNCTION(BlueprintCallable, Category = \"Weapon\")\n    void Reload();\n\nprotected:\n    UPROPERTY(VisibleAnywhere, Category = \"Weapon\")\n    class USkeletalMeshComponent* WeaponMesh;\n\n    UPROPERTY(EditAnywhere, Category = \"Weapon\")\n    class UParticleSystem* MuzzleFlash;\n\n    UPROPERTY(EditAnywhere, Category = \"Weapon\")\n    class USoundBase* FireSound;\n\n    int32 CurrentAmmo;\n    bool bIsReloading = false;\n    FTimerHandle ReloadTimerHandle;\n\n    void PerformRaycast();\n    void OnReloadComplete();\n\npublic:\n    virtual void Tick(float DeltaTime) override;\n};\n\n// .cpp implementation\n#include \"Weapon.h\"\n#include \"Components/SkeletalMeshComponent.h\"\n#include \"Kismet/GameplayStatics.h\"\n#include \"DrawDebugHelpers.h\"\n\nAWeapon::AWeapon()\n{\n    PrimaryActorTick.bCanEverTick = true;\n\n    WeaponMesh = CreateDefaultSubobject<USkeletalMeshComponent>(\"WeaponMesh\");\n    RootComponent = WeaponMesh;\n\n    CurrentAmmo = MaxAmmo;\n}\n\nvoid AWeapon::Fire()\n{\n    if (bIsReloading || CurrentAmmo <= 0) return;\n\n    CurrentAmmo--;\n\n    // Visual effects\n    if (MuzzleFlash)\n        UGameplayStatics::SpawnEmitterAtLocation(GetWorld(), MuzzleFlash, WeaponMesh->GetSocketLocation(\"Muzzle\"));\n\n    if (FireSound)\n        UGameplayStatics::PlaySoundAtLocation(GetWorld(), FireSound, GetActorLocation());\n\n    PerformRaycast();\n}\n\nvoid AWeapon::PerformRaycast()\n{\n    FVector StartLocation = WeaponMesh->GetSocketLocation(\"Muzzle\");\n    FVector EndLocation = StartLocation + GetActorForwardVector() * 10000.0f;\n\n    FHitResult HitResult;\n    FCollisionQueryParams Params;\n    Params.AddIgnoredActor(this);\n    Params.AddIgnoredActor(GetOwner());\n\n    bool bHit = GetWorld()->LineTraceSingleByChannel(\n        HitResult,\n        StartLocation,\n        EndLocation,\n        ECC_Visibility,\n        Params\n    );\n\n    if (bHit)\n    {\n        AActor* HitActor = HitResult.GetActor();\n        if (HitActor && HitActor->CanBeDamaged())\n        {\n            FPointDamageEvent DamageEvent(Damage, HitResult, -GetActorForwardVector(), nullptr);\n            HitActor->TakeDamage(Damage, DamageEvent, GetInstigatorController(), this);\n        }\n\n        // Spawn impact effect\n        UGameplayStatics::SpawnEmitterAtLocation(GetWorld(), MuzzleFlash, HitResult.Location);\n    }\n}\n\nvoid AWeapon::Reload()\n{\n    if (bIsReloading || CurrentAmmo == MaxAmmo) return;\n\n    bIsReloading = true;\n    GetWorld()->GetTimerManager().SetTimer(ReloadTimerHandle, this, &AWeapon::OnReloadComplete, ReloadTime, false);\n}\n\nvoid AWeapon::OnReloadComplete()\n{\n    CurrentAmmo = MaxAmmo;\n    bIsReloading = false;\n}"
+        }
+      ],
+      "learning_path": "Blueprints (no coding) -> UE5 Editor basics -> Basic Blueprint game -> C++ setup in UE5 -> Character class -> AI with Behavior Trees -> Multiplayer replication -> Niagara VFX"
+    },
+    {
+      "name": "Unity Engine Deep Dive",
+      "difficulty": "beginner",
+      "explanation_simple": "Unity is the world's most popular game engine - it powers games like Hollow Knight, Hearthstone, Genshin Impact, and Pokemon GO. Think of Unity as a giant Lego set for making games. Every piece in your game is a GameObject, and you give it abilities by adding Components (like a Renderer to make it visible, a Collider so things bump into it, a Rigidbody so it falls with gravity). You write C# scripts to create custom Components. Unity is great for 2D, 3D, mobile, and console games alike.",
+      "key_concepts": [
+        "GameObject: Everything in your scene (empty container)",
+        "Component: A piece of functionality attached to a GameObject",
+        "Transform: Position, rotation, and scale (every object has one)",
+        "MonoBehaviour: The base class for all C# scripts",
+        "Prefabs: Reusable object templates (like blueprints)",
+        "Scenes: Containers for game levels/menus",
+        "Physics: Rigidbody + Collider = things that bump and fall",
+        "URP: Universal Render Pipeline (fast, mobile-friendly)",
+        "HDRP: High Definition Render Pipeline (beautiful, high-end)",
+        "Animator: Controls animation blending with state machines"
+      ],
+      "code_examples": [
+        {
+          "title": "Unity 2D Platformer Controller",
+          "code": "using UnityEngine;\n\npublic class PlatformerController : MonoBehaviour\n{\n    [Header(\"Movement\")]\n    public float moveSpeed = 8f;\n    public float jumpForce = 12f;\n    \n    [Header(\"Ground Check\")]\n    public Transform groundCheckPoint;\n    public float groundCheckRadius = 0.2f;\n    public LayerMask groundLayer;\n    \n    private Rigidbody2D rb;\n    private SpriteRenderer sprite;\n    private Animator animator;\n    private bool isGrounded;\n    private float moveInput;\n    \n    void Awake()\n    {\n        rb = GetComponent<Rigidbody2D>();\n        sprite = GetComponent<SpriteRenderer>();\n        animator = GetComponent<Animator>();\n    }\n    \n    void Update()\n    {\n        // Input\n        moveInput = Input.GetAxisRaw(\"Horizontal\");\n        \n        // Flip sprite based on direction\n        if (moveInput != 0)\n            sprite.flipX = moveInput < 0;\n        \n        // Jump\n        if (Input.GetButtonDown(\"Jump\") && isGrounded)\n        {\n            rb.velocity = new Vector2(rb.velocity.x, jumpForce);\n        }\n        \n        // Animator\n        animator.SetFloat(\"Speed\", Mathf.Abs(moveInput));\n        animator.SetBool(\"IsGrounded\", isGrounded);\n    }\n    \n    void FixedUpdate()\n    {\n        // Ground check\n        isGrounded = Physics2D.OverlapCircle(groundCheckPoint.position, groundCheckRadius, groundLayer);\n        \n        // Horizontal movement\n        rb.velocity = new Vector2(moveInput * moveSpeed, rb.velocity.y);\n    }\n    \n    void OnDrawGizmosSelected()\n    {\n        if (groundCheckPoint)\n        {\n            Gizmos.color = Color.green;\n            Gizmos.DrawWireSphere(groundCheckPoint.position, groundCheckRadius);\n        }\n    }\n}"
+        },
+        {
+          "title": "Unity Inventory System",
+          "code": "using UnityEngine;\nusing System.Collections.Generic;\n\n// ScriptableObject for item definitions (no duplication of data!)\n[CreateAssetMenu(fileName = \"NewItem\", menuName = \"Inventory/Item\")]\npublic class ItemData : ScriptableObject\n{\n    public string itemName;\n    public Sprite icon;\n    public GameObject worldPrefab;\n    public int maxStackSize = 64;\n    public bool isConsumable;\n    [TextArea(3, 5)]\n    public string description;\n}\n\n// Inventory slot holds an item and a count\n[System.Serializable]\npublic class InventorySlot\n{\n    public ItemData item;\n    public int count;\n    \n    public bool IsEmpty => item == null || count <= 0;\n    \n    public void Set(ItemData newItem, int newCount)\n    {\n        item = newItem;\n        count = newCount;\n    }\n    \n    public void Clear()\n    {\n        item = null;\n        count = 0;\n    }\n}\n\n// The inventory itself\npublic class Inventory : MonoBehaviour\n{\n    public int slotCount = 20;\n    public List<InventorySlot> slots = new List<InventorySlot>();\n    \n    public static Inventory Instance { get; private set; }\n    \n    void Awake()\n    {\n        Instance = this;\n        for (int i = 0; i < slotCount; i++)\n            slots.Add(new InventorySlot());\n    }\n    \n    public bool AddItem(ItemData item, int count = 1)\n    {\n        // Try to stack with existing\n        foreach (var slot in slots)\n        {\n            if (!slot.IsEmpty && slot.item == item && slot.count < slot.item.maxStackSize)\n            {\n                int canAdd = Mathf.Min(count, slot.item.maxStackSize - slot.count);\n                slot.count += canAdd;\n                count -= canAdd;\n                if (count <= 0) return true;\n            }\n        }\n        \n        // Find empty slot\n        foreach (var slot in slots)\n        {\n            if (slot.IsEmpty)\n            {\n                int toAdd = Mathf.Min(count, item.maxStackSize);\n                slot.Set(item, toAdd);\n                count -= toAdd;\n                if (count <= 0) return true;\n            }\n        }\n        \n        Debug.LogWarning(\"Inventory full!\");\n        return false;\n    }\n    \n    public void RemoveItem(ItemData item, int count = 1)\n    {\n        foreach (var slot in slots)\n        {\n            if (slot.item == item)\n            {\n                int toRemove = Mathf.Min(count, slot.count);\n                slot.count -= toRemove;\n                count -= toRemove;\n                if (slot.count <= 0) slot.Clear();\n                if (count <= 0) return;\n            }\n        }\n    }\n    \n    public int GetItemCount(ItemData item)\n    {\n        int total = 0;\n        foreach (var slot in slots)\n            if (slot.item == item) total += slot.count;\n        return total;\n    }\n}"
+        },
+        {
+          "title": "Unity Object Pooling (Performance Essential)",
+          "code": "using UnityEngine;\nusing System.Collections.Generic;\n\n// Object pool reuses bullets/particles instead of creating/destroying them\n// This prevents lag from garbage collection\npublic class ObjectPool : MonoBehaviour\n{\n    public static ObjectPool Instance;\n    \n    [System.Serializable]\n    public class Pool\n    {\n        public string tag;\n        public GameObject prefab;\n        public int size = 10;\n    }\n    \n    public List<Pool> pools;\n    public Dictionary<string, Queue<GameObject>> poolDictionary;\n    \n    void Awake()\n    {\n        Instance = this;\n        poolDictionary = new Dictionary<string, Queue<GameObject>>();\n        \n        foreach (var pool in pools)\n        {\n            Queue<GameObject> objectPool = new Queue<GameObject>();\n            \n            for (int i = 0; i < pool.size; i++)\n            {\n                GameObject obj = Instantiate(pool.prefab);\n                obj.SetActive(false);\n                objectPool.Enqueue(obj);\n            }\n            \n            poolDictionary.Add(pool.tag, objectPool);\n        }\n    }\n    \n    public GameObject Spawn(string tag, Vector3 position, Quaternion rotation)\n    {\n        if (!poolDictionary.ContainsKey(tag))\n        {\n            Debug.LogWarning($\"Pool with tag {tag} doesn't exist!\");\n            return null;\n        }\n        \n        GameObject objectToSpawn = poolDictionary[tag].Dequeue();\n        \n        objectToSpawn.SetActive(true);\n        objectToSpawn.transform.position = position;\n        objectToSpawn.transform.rotation = rotation;\n        \n        poolDictionary[tag].Enqueue(objectToSpawn);\n        \n        return objectToSpawn;\n    }\n}\n\n// Usage in a weapon script:\n// ObjectPool.Instance.Spawn(\"Bullet\", firePoint.position, firePoint.rotation);\n\n// Return-to-pool component (put on bullet prefab)\npublic class PooledObject : MonoBehaviour\n{\n    public float lifetime = 2f;\n    \n    void OnEnable()\n    {\n        Invoke(nameof(ReturnToPool), lifetime);\n    }\n    \n    void ReturnToPool()\n    {\n        gameObject.SetActive(false);\n    }\n    \n    void OnDisable()\n    {\n        CancelInvoke();\n        // Reset position and velocity for reuse\n    }\n}"
+        }
+      ],
+      "learning_path": "Unity Editor basics -> C# scripting essentials -> 2D game -> 3D game -> Physics -> UI system -> Audio -> Animation -> Build and deploy"
+    },
+    {
+      "name": "Godot Engine",
+      "difficulty": "beginner",
+      "explanation_simple": "Godot is the indie darling of game engines - it's completely free and open source (no royalties, no fees, ever). It uses a unique scene system where everything is a tree of nodes. Every node does one thing: a Sprite2D shows a picture, a CollisionShape2D handles physics, an AudioStreamPlayer plays sounds. You combine nodes into scenes, then you can put those scenes inside other scenes (like Russian nesting dolls). Godot uses GDScript (Python-like) or C# for scripting.",
+      "key_concepts": [
+        "Nodes: Smallest building block (Sprite2D, Label, CollisionShape2D)",
+        "Scene: A collection of nodes saved as a file (a level, a player, a menu)",
+        "Scene tree: The hierarchy of all active nodes",
+        "Signals: Events that nodes emit (button pressed, timer finished)",
+        "GDScript: Python-like scripting language built for Godot",
+        "Groups: Tags to organize nodes (all enemies, all pickups)",
+        "@export: Makes variables editable in the inspector",
+        "AnimationPlayer: Node for animating properties",
+        "TileMap: For building tile-based levels"
+      ],
+      "code_examples": [
+        {
+          "title": "Godot 4 Player Script (GDScript)",
+          "code": "extends CharacterBody2D\n\n# Export makes variables editable in the inspector\n@export var speed = 300.0\n@export var jump_velocity = -400.0\n@export var double_jump_velocity = -350.0\n\n# Get the gravity from project settings\nvar gravity = ProjectSettings.get_setting(\"physics/2d/default_gravity\")\nvar can_double_jump = false\nvar has_double_jumped = false\n\nfunc _ready():\n\t# Called when node enters scene tree\n\tadd_to_group(\"players\")\n\nfunc _physics_process(delta):\n\t# Add gravity\n\tif not is_on_floor():\n\t\tvelocity.y += gravity * delta\n\t\t# Allow double jump when in air\n\t\tif not has_double_jumped:\n\t\t\tcan_double_jump = true\n\telse:\n\t\tcan_double_jump = false\n\t\thas_double_jumped = false\n\n\t# Handle jump\n\tif Input.is_action_just_pressed(\"ui_accept\"):\n\t\tif is_on_floor():\n\t\t\tvelocity.y = jump_velocity\n\t\telif can_double_jump:\n\t\t\tvelocity.y = double_jump_velocity\n\t\t\thas_double_jumped = true\n\t\t\tcan_double_jump = false\n\n\t# Get input direction (-1, 0, or 1)\n\tvar direction = Input.get_axis(\"ui_left\", \"ui_right\")\n\t\n\tif direction:\n\t\tvelocity.x = direction * speed\n\telse:\n\t\tvelocity.x = move_toward(velocity.x, 0, speed)\n\n\tmove_and_slide()\n\n# Signal from an Area2D for collecting items\nfunc _on_collectible_area_entered(area):\n\tif area.is_in_group(\\"coins\"):\n\t\tarea.queue_free()\n\t\tSignalBus.emit_signal(\"coin_collected\", 1)\n\n# When the player falls off the world\nfunc _on_visible_on_screen_notifier_2d_screen_exited():\n\tif global_position.y > 1000:\n\t\tSignalBus.emit_signal(\"player_died\")"
+        },
+        {
+          "title": "Godot Signal Bus Pattern",
+          "code": "# Singleton autoload for global communication\n# Save this as SignalBus.gd and add to Autoload in project settings\n\nextends Node\n\n# Define all custom signals here\nsignal coin_collected(amount)\nsignal player_died()\nsignal enemy_killed(points)\nsignal level_complete()\nsignal health_changed(new_health, max_health)\n\n# Usage in any script:\n# SignalBus.emit_signal(\"coin_collected\", 5)\n# SignalBus.connect(\"coin_collected\", Callable(self, \"_on_coin_collected\"))"
+        }
+      ],
+      "learning_path": "Godot interface -> Nodes and scenes -> GDScript basics -> Signals -> Simple 2D game -> Tilemaps -> Animation -> 3D basics"
+    },
+    {
+      "name": "Other Major Engines Overview",
+      "difficulty": "intermediate",
+      "explanation_simple": "Besides Unity, Unreal, and Godot, there are many specialized engines. Some are used by specific game studios (like the RAGE engine that Rockstar uses for GTA), others are open-source alternatives. Understanding them helps you choose the right tool for your project.",
+      "key_concepts": [
+        "CryEngine: Known for amazing graphics (Crysis), still used for some AAA titles",
+        "Frostbite: EA's engine (Battlefield, FIFA) - strong in destruction physics and large maps",
+        "id Tech: The engine behind DOOM and Quake (pure speed, id Software)",
+        "Source 2: Valve's engine (Dota 2, Half-Life: Alyx) - strong physics, VR support",
+        "RE Engine: Capcom's engine (Resident Evil 7/8/4R, Devil May Cry 5) - photorealistic horror",
+        "RAGE: Rockstar's engine (GTA V, RDR2) - massive open worlds, Euphoria physics",
+        "O3DE: Open 3D Engine (open-source, Linux Foundation) - AAA features, component-based"
+      ],
+      "code_examples": [
+        {
+          "title": "CryEngine C++ Character Example",
+          "code": "// CryEngine uses a component-based approach similar to Unity\n// Here's how you'd create a player in CryEngine C++:\n\n#include <CryEntitySystem/IEntityComponent.h>\n#include <CryPhysics/physinterface.h>\n\nclass CPlayerComponent : public IEntityComponent\n{\npublic:\n    // Register component\n    static void Register()\n    {\n        auto* factory = CScriptableBase::RegisterComponent<CPlayerComponent>();\n        factory->RegisterMember(\"Health\", &CPlayerComponent::m_health);\n        factory->RegisterMember(\"Speed\", &CPlayerComponent::m_speed);\n    }\n    \n    // Called when component is initialized\n    void Initialize() override\n    {\n        // Set up physics\n        SEntityPhysicalizeParams physParams;\n        physParams.type = PE_LIVING;\n        physParams.mass = 80.0f;\n        m_pEntity->Physicalize(physParams);\n        \n        // Set up camera\n        m_pEntity->LoadGeometry(1, \"Objects/Characters/Player/player.cgf\");\n    }\n    \n    // Called every frame\n    void ProcessEvent(const SEntityEvent& event) override\n    {\n        if (event.event == ENTITY_EVENT_UPDATE)\n        {\n            float frameTime = static_cast<float>(event.fParam[0]);\n            UpdateMovement(frameTime);\n        }\n    }\n    \n    void UpdateMovement(float deltaTime)\n    {\n        // Movement logic here\n        pe_action_move move;\n        move.dir = Vec3(1, 0, 0) * m_speed * deltaTime;\n        m_pEntity->GetPhysicalEntity()->Action(&move);\n    }\n\nprivate:\n    float m_health = 100.0f;\n    float m_speed = 5.0f;\n};"
+        }
+      ],
+      "learning_path": "Master one engine first -> Explore other engines to understand different approaches -> Study engine source code for custom needs"
+    },
+    {
+      "name": "Custom Engine Development",
+      "difficulty": "advanced",
+      "explanation_simple": "Sometimes you need to build your own engine. Maybe you want total control, maybe you're learning, or maybe none of the existing engines do what you need. Building an engine is like building a car from scratch instead of buying one - it's a LOT of work, but you'll understand every single piece. Most indie teams should use existing engines, but knowing how engines work internally makes you a better programmer in any engine.",
+      "key_concepts": [
+        "Game loop: The heart that beats 60 times per second (input -> update -> render)",
+        "Entity-Component System: Efficient data-oriented entity management",
+        "Rendering pipeline: Takes 3D data and draws it on a 2D screen",
+        "Physics integration: Bullet, PhysX, or custom physics",
+        "Asset pipeline: Loading models, textures, sounds from files",
+        "Memory management: Custom allocators for game-specific patterns",
+        "Platform abstraction: One engine that runs on PC, console, mobile",
+        "Profiling: Measuring where time is spent to optimize"
+      ],
+      "code_examples": [
+        {
+          "title": "Minimal Game Engine in C++",
+          "code": "#include <SDL2/SDL.h>\n#include <vector>\n#include <memory>\n\nclass Engine {\npublic:\n    Engine() : running(false) {}\n    \n    bool init(const char* title, int width, int height) {\n        if (SDL_Init(SDL_INIT_VIDEO) < 0) return false;\n        \n        window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,\n                                    width, height, SDL_WINDOW_SHOWN);\n        if (!window) return false;\n        \n        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);\n        if (!renderer) return false;\n        \n        running = true;\n        previousTime = SDL_GetTicks();\n        return true;\n    }\n    \n    void shutdown() {\n        SDL_DestroyRenderer(renderer);\n        SDL_DestroyWindow(window);\n        SDL_Quit();\n    }\n    \n    void run() {\n        while (running) {\n            // Calculate delta time\n            Uint32 currentTime = SDL_GetTicks();\n            float deltaTime = (currentTime - previousTime) / 1000.0f;\n            previousTime = currentTime;\n            \n            processInput();\n            update(deltaTime);\n            render();\n            \n            // Cap at 60 FPS\n            Uint32 frameTime = SDL_GetTicks() - currentTime;\n            if (frameTime < 16) SDL_Delay(16 - frameTime);\n        }\n    }\n    \nprivate:\n    void processInput() {\n        SDL_Event event;\n        while (SDL_PollEvent(&event)) {\n            if (event.type == SDL_QUIT) running = false;\n            if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)\n                running = false;\n            \n            // Forward to input system\n            for (auto& system : systems) system->handleInput(event);\n        }\n    }\n    \n    void update(float dt) {\n        for (auto& system : systems) system->update(dt);\n    }\n    \n    void render() {\n        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);\n        SDL_RenderClear(renderer);\n        \n        for (auto& system : systems) system->render(renderer);\n        \n        SDL_RenderPresent(renderer);\n    }\n    \n    // System interface\n    struct System {\n        virtual ~System() = default;\n        virtual void handleInput(const SDL_Event&) {}\n        virtual void update(float dt) {}\n        virtual void render(SDL_Renderer*) {}\n    };\n    \n    SDL_Window* window = nullptr;\n    SDL_Renderer* renderer = nullptr;\n    bool running;\n    Uint32 previousTime;\n    std::vector<std::unique_ptr<System>> systems;\n};\n\nint main() {\n    Engine engine;\n    if (!engine.init(\"My Engine\", 800, 600)) return 1;\n    engine.run();\n    engine.shutdown();\n    return 0;\n}"
+        }
+      ],
+      "learning_path": "Master C++ deeply -> Understand graphics APIs (OpenGL/Vulkan) -> Build a renderer -> Add physics -> Add audio -> Add scripting -> Add tooling -> Profile and optimize"
+    }
+  ]
+}

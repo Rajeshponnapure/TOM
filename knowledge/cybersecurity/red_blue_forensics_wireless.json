@@ -1,0 +1,162 @@
+{
+  "domain": "Red Teaming, Blue Teaming, Forensics & Wireless Security",
+  "category": "cybersecurity",
+  "subcategory": "red_blue_forensics_wireless",
+  "description": "Complete knowledge of red team operations, blue team defense, digital forensics, incident response, and wireless security auditing",
+  "disclaimer": "All content is for EDUCATIONAL PURPOSES ONLY. Always get explicit written permission before testing security.",
+  "teaching_plan": {
+    "lesson_1": {
+      "title": "Red Team: Thinking Like an Attacker",
+      "concepts": ["Adversary simulation", "Lateral movement", "C2 infrastructure", "Phishing campaigns"],
+      "projects": ["Set up a C2 framework", "Simulate a phishing attack in a lab"]
+    },
+    "lesson_2": {
+      "title": "Blue Team: Detecting the Attackers",
+      "concepts": ["SIEM systems", "Threat hunting", "Incident response", "Detection engineering"],
+      "projects": ["Set up a SIEM lab (Wazuh/Splunk)", "Create a detection rule for a specific attack"]
+    },
+    "lesson_3": {
+      "title": "Digital Forensics",
+      "concepts": ["Evidence preservation", "Disk forensics", "Memory forensics", "Timeline analysis"],
+      "projects": ["Forensic analysis of a disk image", "Capture and analyze memory with Volatility"]
+    },
+    "lesson_4": {
+      "title": "Wireless Hacking & Defense",
+      "concepts": ["Wi-Fi security protocols", "WPA2/WPA3 cracking", "Rogue APs", "Bluetooth attacks"],
+      "projects": ["Audit your home Wi-Fi security", "Set up a wireless IDS"]
+    }
+  },
+  "sections": [
+    {
+      "name": "Red Teaming: Adversary Simulation",
+      "difficulty": "advanced",
+      "explanation_simple": "Red teaming is the most advanced form of security testing. Unlike a regular penetration test where you test specific vulnerabilities, a red team exercise simulates a real, sophisticated attacker. The red team has a goal (access a specific server, steal specific data) and uses any means necessary - phishing, physical intrusion, social engineering, zero-day exploits, persistence, and lateral movement. Red team operations typically last weeks or months and test the full detection and response capabilities of the blue team. It's like a fire drill for your security team, except the 'fire' is a team of expert hackers trying to break in.",
+      "key_concepts": [
+        "Adversary Emulation: Mimicking a specific threat actor's TTPs (MITRE ATT&CK)",
+        "C2 (Command & Control): Infrastructure that the red team uses to control compromised systems",
+        "Cobalt Strike: Most popular red team framework (commercial, $3,500/year)",
+        "Sliver: Open-source C2 framework (free, becoming very popular)",
+        "Mythic: Another open-source C2 framework with many agents",
+        "Phishing: Sending convincing emails to trick users into clicking malicious links",
+        "Spear Phishing: Targeted phishing at specific individuals (researched and customized)",
+        "SMTP Relay: Setting up email servers for phishing (or using services like SendGrid)",
+        "Payload Delivery: Getting your initial foothold (macro, ISO, LNK, HTML smuggling)",
+        "Initial Access: The first compromise (usually phishing or exposed service)",
+        "Lateral Movement: Moving from the first compromised machine to other systems",
+        "Persistence: Maintaining access even after reboots (scheduled tasks, services, WMI)",
+        "Privilege Escalation: Getting from limited user to admin/system",
+        "Domain Dominance: Compromising the Domain Controller (game over for Active Directory)",
+        "Data Exfiltration: Getting the target data out without being detected",
+        "OpSec: Operational Security - not getting caught (covering tracks, living off the land)",
+        "Living Off the Land: Using built-in OS tools (PowerShell, WMI, certutil) instead of dropping malware",
+        "TTPs: Tactics, Techniques, and Procedures (how a specific attacker operates)"
+      ],
+      "code_examples": [
+        {
+          "title": "Red Team Infrastructure Setup",
+          "code": "# ===== C2 INFRASTRUCTURE SETUP =====\n# Setting up a professional red team C2 infrastructure\n\n\"\"\"\n\nRED TEAM INFRASTRUCTURE LAYOUT:\n\n         Internet\n            |\n      +-----+------+\n      |            |\n   Redirector    Redirector (backup)\n      |            |\n      +-----+------+\n            |\n       Team Server\n       (C2 Backend)\n       (isolated, no direct internet)\n            |\n      +-----+------+\n      |            |\n   Operator 1   Operator 2\n\n\nCOMPONENTS:\n1. Team Server: The main C2 backend (Cobalt Strike, Sliver, Mythic)\n2. Redirectors: Public-facing machines that forward traffic to the team server\n   - Apache/Nginx reverse proxy with SSL\n   - Domain fronting (using CDN like Cloudflare)\n   - Multiple redirectors for redundancy\n3. Domain Names:\n   - Look legitimate (update-notification.com, adobe-verify.com)\n   - Auto-renew with privacy protection\n   - Don't use your real info for registration\n4. SSL Certificates:\n   - Let's Encrypt for free\n5. Profiles:\n   - C2 profile (Malleable C2 for Cobalt Strike)\n   - Defines how traffic looks on the wire\n   - Mimics legitimate services (like Google Analytics API)\n\"\"\"\n\n# ===== C2 PROFILE EXAMPLE (Cobalt Strike Malleable C2) =====\n\"\"\"\n# myprofile.profile - This makes C2 traffic look like Google Analytics\n\nset sample_name \"My C2 Profile\";\nset sleeptime \"45000\";  # 45 second check-in interval\nset jitter \"20\";        # 20% jitter (so intervals are 36-54 seconds)\nset useragent \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\";\n\nhttp-get {\n    set uri \"/analytics.js\";\n    client {\n        header \"Accept\" \"*/*\";\n        metadata {\n            prepend \"session=\";\n            header \"Cookie\";\n        }\n    }\n    server {\n        header \"Content-Type\" \"application/javascript\";\n        output {\n            prepend \"/* \";\n            append \" */\";\n            print;\n        }\n    }\n}\n\nhttp-post {\n    set uri \"/collect\";\n    client {\n        header \"Content-Type\" \"application/json\";\n        id {\n            parameter \"tid\";\n        }\n        output {\n            prepend \"{\";\n            append \"}\";\n            print;\n        }\n    }\n    server {\n        header \"Content-Type\" \"application/json\";\n        output {\n            print;\n        }\n    }\n}\n\"\"\"\n\n# ===== RED TEAM AUTOMATION SCRIPT =====\n# AutoHotkey script for automated phishing simulation\n# (Educational: For internal phishing awareness training)\n\n; phishing.ahk - Automate opening email attachments (for testing only!)\n; This would be part of a social engineering test\n\nF1::  ; Press F1 to simulate clicking a link\n{\n    MouseClick, left, 100, 200  ; Click at coordinates\n    Sleep, 1000\n    Send, ^c  ; Copy to clipboard\n    Sleep, 500\n    ; Log what was clicked for reporting\n    FileAppend, %A_Now% - User clicked link`n, C:\\test\\phish_log.txt\n}\nreturn\n\nF2::  ; Press F2 to simulate entering credentials on a fake page\n{\n    Send, user@company.com{TAB}\n    Send, P@ssw0rd123!{ENTER}\n    Sleep, 1000\n    FileAppend, %A_Now% - User entered credentials`n, C:\\test\\phish_log.txt\n}\nreturn"
+        }
+      ],
+      "learning_path": "Adversary mindset -> Initial access techniques -> Phishing campaigns -> Payload creation -> C2 infrastructure setup -> C2 profiles (traffic mimicry) -> Hosting redirectors -> EDR/AV evasion -> Living off the land -> Credential theft -> Lateral movement (SMB, WinRM, PSExec) -> Active Directory attacks -> Domain dominance -> Data exfiltration -> Reporting"
+    },
+    {
+      "name": "Blue Teaming: Detection & Incident Response",
+      "difficulty": "intermediate",
+      "explanation_simple": "Blue teaming is the defensive side of cybersecurity. While red teams simulate attackers, blue teams detect and stop them. A blue team's job includes: monitoring security alerts, analyzing suspicious activity, containing threats, and improving defenses. The most important tools are SIEM (Security Information and Event Management - collects and analyzes logs from everywhere), EDR (Endpoint Detection and Response - monitors individual computers for malicious activity), and SOAR (Security Orchestration, Automation, and Response - automates incident response). The key skill is being able to tell the difference between a real attack and a false alarm.",
+      "key_concepts": [
+        "SIEM: Centralized log collection and analysis (Splunk, Elastic Security, Wazuh, Sentinel)",
+        "EDR: Endpoint monitoring (CrowdStrike, SentinelOne, Defender for Endpoint)",
+        "XDR: Extended Detection and Response - SIEM + EDR + network + cloud",
+        "SOAR: Automated incident response playbooks",
+        "Log Analysis: Finding attacks in mountains of log data",
+        "Correlation: Connecting related events across different systems",
+        "Alert Triage: Quickly determining if an alert is real or false positive",
+        "Incident Response (IR): Structured process for handling security incidents",
+        "Phases of IR: Preparation -> Detection -> Containment -> Eradication -> Recovery -> Lessons Learned",
+        "Threat Hunting: Proactively searching for threats that evaded automated detection",
+        "IOC (Indicator of Compromise): Evidence of a breach (IP, hash, domain, registry key)",
+        "IOA (Indicator of Attack): Behavior patterns indicating an attack in progress",
+        "Sigma Rules: Generic detection rules that can be converted to any SIEM format",
+        "Playbook: Step-by-step guide for handling specific incident types (ransomware, phishing, data breach)",
+        "Ransomware: The most critical incident type - every blue team needs a playbook for this"
+      ],
+      "code_examples": [
+        {
+          "title": "Incident Response Playbook: Ransomware",
+          "code": "# ===== RANSOMWARE INCIDENT RESPONSE PLAYBOOK =====\n\n\"\"\"\nSEVERITY: CRITICAL - Activate immediately\n\n=== STEP 1: DECLARE INCIDENT ===\n- Notify: SOC Manager, On-Call Incident Commander, Legal\n- Start IR log (timeline of every action taken)\n- Preserve all evidence before taking action\n\n=== STEP 2: CONTAINMENT (Stop the spread) ===\n[ ] Isolate affected systems from network\n    - Pull network cable / disable Wi-Fi\n    - Do NOT shut down (loses evidence)\n[ ] Disable Active Directory account if user account compromised\n[ ] Block ransomware C2 IPs on firewall\n[ ] Disable SMB if propagation is active\n[ ] Power off unaffected systems in same segment\n\n=== STEP 3: ERADICATION (Remove the threat) ===\n[ ] Identify patient zero (how did it get in?)\n[ ] Scan all systems for IOCs\n[ ] Remove persistence mechanisms\n[ ] Reset compromised credentials\n[ ] Patch vulnerability used for initial access\n\n=== STEP 4: RECOVERY (Restore operations) ===\n[ ] Restore from clean backups\n    - Verify backup integrity before restoring\n    - Scan restored files before bringing online\n[ ] Wipe and reimage affected systems\n[ ] Bring systems back in priority order\n\n=== STEP 5: COMMUNICATION ===\n[ ] Internal: Leadership, Legal, PR, affected teams\n[ ] External: Law enforcement (if required by policy)\n[ ] Regulatory: If PII/PHI involved (GDPR: 72 hours)\n[ ] Public: If customer data affected (coordinated with PR)\n\n=== STEP 6: POST-MORTEM ===\n[ ] Root cause analysis (how did this happen?)\n[ ] Identify gaps in defenses\n[ ] Implement improvements\n[ ] Update playbook\n\n--- TECHNICAL TRIAGE COMMANDS ---\n\"\"\"\n\n# PowerShell: Quick triage of a potentially infected system\n\nWrite-Host \"=== RANSOMWARE TRIAGE ===\" -ForegroundColor Red\n\n# 1. Check for file encryption in progress\nWrite-Host \"[1] Checking for mass file operations...\"\n# Look for processes with high file write activity\nGet-Process | Where-Object { $_.Responding -eq $true } | Sort-Object -Property WorkingSet -Descending | Select-Object -First 10\n\n# 2. Check for known ransomware extensions\n$ransom_extensions = @('.encrypted','.locked','.crypt','.cryptolocker','.locky','.wncry','.wcry')\nforeach ($ext in $ransom_extensions) {\n    $count = (Get-ChildItem -Path C:\\ -Recurse -ErrorAction SilentlyContinue -Filter \"*$ext\" | Measure-Object).Count\n    if ($count -gt 0) {\n        Write-Host \"[!] Found $count files with $ext extension\" -ForegroundColor Red\n    }\n}\n\n# 3. Check for ransom notes\n$ransom_notes = @('README','DECRYPT','HELP_DECRYPT','HOW_TO_DECRYPT','RESTORE_FILES')\nforeach ($note in $ransom_notes) {\n    $found = Get-ChildItem -Path C:\\ -Recurse -ErrorAction SilentlyContinue -Include \"$note*\" | Select-Object -First 1\n    if ($found) {\n        Write-Host \"[!] Ransom note found: $($found.FullName)\" -ForegroundColor Red\n        $content = Get-Content $found.FullName -First 5 -ErrorAction SilentlyContinue\n        Write-Host \"Content: $content\"\n    }\n}\n\n# 4. Check volume shadow copies (ransomware deletes them)\n$vss = Get-WmiObject -Class Win32_ShadowCopy -ErrorAction SilentlyContinue\nWrite-Host \"[i] Volume Shadow Copies: $($vss.Count) available\"\nif ($vss.Count -eq 0) { Write-Host \"[!] Shadow copies deleted (ransomware signature)\" -ForegroundColor Red }\n\n# 5. Check network connections\nWrite-Host \"[5] Checking suspicious outbound connections...\"\n$suspiciousPorts = @(4444, 1337, 8080, 8888, 9999)\nGet-NetTCPConnection -State Established | Where-Object { $_.RemotePort -in $suspiciousPorts } | Format-Table\n\n# 6. Check scheduled tasks (ransomware often adds persistence)\nWrite-Host \"[6] Checking new scheduled tasks...\"\n$recentlyModified = (Get-Date).AddHours(-24)\nGet-ScheduledTask | Where-Object { $_.Date -gt $recentlyModified -and $_.TaskPath -notlike '*Microsoft*' } | Format-Table TaskName, TaskPath\n\n# 7. Get process tree to find parent processes\nWrite-Host \"[7] Process tree for suspicious processes...\"\nGet-CimInstance Win32_Process | Where-Object { $_.Name -match '(powershell|cmd|wscript|cscript|rundll32)' } |\n    Select-Object ProcessId, Name, CommandLine, @{N='ParentPID';E={$_.ParentProcessId}}"
+        },
+        {
+          "title": "SIEM Detection Rule (Splunk) & Sigma",
+          "code": "# ===== SPLUNK DETECTION SEARCHES =====\n\n\"\"\"\n1. DETECT POWERSHELL ENCODED COMMAND\n\"\"\"\nindex=windows EventCode=4104 ScriptBlockText=*EncodedCommand*\n| stats count by ComputerName, UserId\n| where count > 3\n\n\"\"\"\n2. DETECT PASS-THE-HASH (NTLM anomaly)\"\"\"\nindex=windows EventCode=4624 LogonType=3 (network)\n NOT (WorkstationName=*$)\n| stats count by AccountName, WorkstationName, IpAddress\n| where count > 50\n\n\"\"\"\n3. DETECT RANSOMWARE: Mass file deletions\"\"\"\nindex=windows EventCode=4656 (file accessed)\n ObjectName=*.{docx,xlsx,pptx,pdf,jpg,png}\n| bucket _time span=5m\n| stats dc(ObjectName) as unique_files by ComputerName, _time\n| where unique_files > 100\n\n\"\"\"\n4. DETECT LATERAL MOVEMENT (SMB)\"\"\"\nindex=windows EventCode=4624 LogonType=3\n AccountName!={SYSTEM, LOCAL SERVICE, NETWORK SERVICE}\n| stats values(SourceIP) as source_ips by ComputerName, AccountName\n| where mvcount(source_ips) > 1\n\n# ===== SIGMA RULE (convertible to ANY SIEM) =====\ntitle: PowerShell Download From Suspicious Domain\nid: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\nstatus: experimental\ndescription: Detects PowerShell downloading files from suspicious domains\nreferences:\n    - https://attack.mitre.org/techniques/T1059/001/\nauthor: SOC Team\ndate: 2024/01/01\ntags:\n    - attack.execution\n    - attack.t1059.001\n    - attack.defense_evasion\n    - attack.t1140\nlogsource:\n    category: process_creation\n    product: windows\ndetection:\n    selection:\n        Image|endswith:\n            - '\\powershell.exe'\n            - '\\pwsh.exe'\n        CommandLine|contains:\n            - 'Net.WebClient'\n            - 'DownloadString('\n            - 'DownloadFile('\n            - 'Invoke-WebRequest'\n            - 'wget'\n            - 'curl'\n            - 'Start-BitsTransfer'\n    filter:\n        CommandLine|contains:\n            - 'github.com'\n            - 'microsoft.com'\n            - 'powershellgallery.com'\n    condition: selection and not filter\nfalsepositives:\n    - Legitimate administrative scripts downloading tools from approved sources\nlevel: medium\n\n# Convert Sigma to Splunk:\n# sigma convert -t splunk sigma_rule.yml\n\n# Convert Sigma to Elasticsearch/KQL:\n# sigma convert -t es-qs sigma_rule.yml\n\n# Convert Sigma to Microsoft Sentinel:\n# sigma convert -t sentinel sigma_rule.yml"
+        }
+      ],
+      "learning_path": "Security monitoring fundamentals -> SIEM deployment and configuration -> Log source integration -> Alert triage -> Common attack pattern recognition -> Incident response playbooks -> Threat hunting methodology -> EDR/XDR concepts -> Malware analysis for triage -> Memory forensics -> Disk forensics -> Post-mortem analysis -> SOC operations and metrics"
+    },
+    {
+      "name": "Digital Forensics & Incident Response (DFIR)",
+      "difficulty": "advanced",
+      "explanation_simple": "Digital forensics is the investigation of computer systems to find evidence of a crime or security incident. It follows strict procedures to ensure evidence is admissible in court (chain of custody, write blockers, cryptographic hashing). The main areas are disk forensics (analyzing hard drives for deleted files, artifacts, and timeline reconstruction), memory forensics (analyzing RAM for running processes, injected code, encryption keys), and network forensics (analyzing packet captures for evidence of communication with attackers). Volatility is the most important memory forensics tool, and Autopsy/Sleuth Kit are the standards for disk forensics.",
+      "key_concepts": [
+        "Chain of Custody: Documentation of who handled evidence and when (critical for legal admissibility)",
+        "Write Blocker: Hardware device that prevents any writes to a forensic drive (read-only access)",
+        "Forensic Image: Bit-for-bit copy of a drive (dd, E01, AFF formats)",
+        "Hashing: MD5/SHA256 of the original evidence to prove it wasn't modified",
+        "File Carving: Recovering deleted files by finding file headers in unallocated space",
+        "Master File Table (MFT): NTFS index of every file on the volume (goldmine of forensic data)",
+        "USN Journal: NTFS change journal (every file modification - critical for timeline)",
+        "Prefetch: Windows files that track program execution (shows what ran and when)",
+        "ShimCache/AmCache: Windows artifacts showing program execution (undocumented, very useful)",
+        "Jump Lists: Windows recent files lists (shows what files the user opened)",
+        "Recycle Bin: Shows deleted files (even after emptying, metadata remains)",
+        "Registry Analysis: NTUSER.DAT, SAM, SYSTEM, SOFTWARE hives (user activity, accounts, config)",
+        "Memory Acquisition: Capturing RAM contents (dumpit.exe, winpmem, LiME for Linux)",
+        "Volatility: Memory analysis framework (most important forensic tool)",
+        "Timeline Analysis: Reconstructing the sequence of events (critical for understanding incidents)",
+        "Browser Forensics: History, bookmarks, cookies, saved passwords (major evidence source)",
+        "Email Forensics: Headers analysis, deleted emails, mailbox artifacts",
+        "Mobile Forensics: Physical vs logical acquisition, app data extraction"
+      ],
+      "code_examples": [
+        {
+          "title": "Memory Forensics with Volatility 3",
+          "code": "# ===== VOLATILITY 3 MEMORY ANALYSIS =====\n# Volatility is the industry standard for memory forensics\n# Install: pip install volatility3\n\n\"\"\"\nMEMORY ACQUISITION (before analysis):\n\nWindows:\n  dumpit.exe -o memory.dmp (DumpIt from Comae)\n  winpmem.exe -o memory.raw (WinPMEM from Velocidex)\n\nLinux:\n  sudo ./linpmem -o memory.raw\n  sudo insmod lime.ko \"path=memory.dump format=lime\"\n\nmacOS:\n  sudo ./macpmem -o memory.raw\n\"\"\"\n\n# ===== VOLATILITY 3 COMMANDS =====\n\n# 1. Get system information\npython3 vol.py -f memory.dmp windows.info\n# Output: OS version, kernel base, number of CPUs, etc.\n\n# 2. List running processes\npython3 vol.py -f memory.dmp windows.pslist\npython3 vol.py -f memory.dmp windows.psscan  # Uses pool scanning (finds hidden processes!)\n\n# 3. Show process tree (parent-child relationships)\npython3 vol.py -f memory.dmp windows.pstree\n\n# 4. List network connections\npython3 vol.py -f memory.dmp windows.netscan\n# Shows: connections, listening ports, associated processes\n\n# 5. Extract command line arguments\npython3 vol.py -f memory.dmp windows.cmdline.CmdLine\n# Critical: shows ALL command lines of running processes\n\n# 6. Dump a specific process (for malware analysis)\npython3 vol.py -f memory.dmp windows.dumpfiles.DumpFiles --pid 1234\n\n# 7. Extract process environment variables\npython3 vol.py -f memory.dmp windows.envars.Envars --pid 1234\n\n# 8. Scan for injected code (MALICIOUS!)\npython3 vol.py -f memory.dmp windows.malfind.Malfind\n# Shows memory pages that are: executable, writable, but not a known DLL\n# This is how you find process injection\n\n# 9. Scan for handles (files, registry keys, etc. that a process has open)\npython3 vol.py -f memory.dmp windows.handles.Handles --pid 1234\n\n# 10. Extract clipboard contents\npython3 vol.py -f memory.dmp windows.clipboard\n\n# 11. Extract registry hives\npython3 vol.py -f memory.dmp windows.registry.hivescan\npython3 vol.py -f memory.dmp windows.registry.printkey -K \"HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Services\"\n\n# 12. Scan for Windows User Accounts\npython3 vol.py -f memory.dmp windows.hashdump.Hashdump\n# Dumps NTLM hashes (like Mimikatz from memory)\n\n# ===== ANALYZING SUSPICIOUS PROCESS =====\n# Full workflow for investigating PID 4321:\n\nvol.py -f memory.dmp windows.malfind.Malfind --pid 4321  # Check for injection\nvol.py -f memory.dmp windows.cmdline.CmdLine --pid 4321  # Check command line\nvol.py -f memory.dmp windows.handles.Handles --pid 4321  # Check handles\nvol.py -f memory.dmp windows.dlllist --pid 4321          # List loaded DLLs\nvol.py -f memory.dmp windows.netscan --pid 4321          # Network connections\nvol.py -f memory.dmp windows.dumpfiles --pid 4321        # Dump for further analysis\n\n# ===== TIMELINE CREATION =====\n# Create a timeline of all events from memory\nvol.py -f memory.dmp windows.timeliner.Timeliner > timeline.csv\n# Then analyze in Timeline Explorer (open source tool) or Excel"
+        },
+        {
+          "title": "Disk Forensics & Autopsy Workflow",
+          "code": "# ===== AUTOPSY/SLEUTH KIT DISK FORENSICS =====\n\n\"\"\"\nDISK ACQUISITION:\n\n  Physical acquisition (dd):\n    dd if=/dev/sda of=evidence.dd bs=4096 conv=noerror,sync status=progress\n\n  Forensic image with metadata (ewfacquire):\n    ewfacquire /dev/sda evidence.E01\n    - Compresses the image\n    - Stores metadata (case number, examiner, hash)\n    - Splits into manageable chunks\n\n  Windows (FTK Imager):\n    File -> Create Disk Image\n    - Evidence can be live or from write-blocked drive\n\nKEY FORENSIC ARTIFACTS TO CHECK:\n\"\"\"\n\n# ===== WINDOWS FORENSIC ARTIFACTS =====\n$artifacts = @\"\n\n1. PREFETCH FILES\n   Location: C:\\Windows\\Prefetch\\*.pf\n   What: Shows what programs ran, when, and how many times\n   Tool: PECmd.exe (Eric Zimmerman)\n\n2. JUMP LISTS\n   Location: C:\\Users\\%user%\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\*\n   What: Shows recently opened files per application\n   Tool: JLECmd.exe\n\n3. SHIMCACHE\n   Location: Registry (SYSTEM hive)\n   What: Shows program execution (even if deleted!)\n   Tool: AppCompatCacheParser.exe (Eric Zimmerman)\n\n4. RECYCLE BIN\n   Location: C:\\$Recycle.Bin\\*\n   What: Shows deleted files with original paths\n   Tool: RBCmd.exe\n\n5. REGISTRY\n   NTUSER.DAT: User configuration, MRU lists, typed URLs\n   SAM: Local user account hashes\n   SYSTEM: System configuration, mounted devices, services\n   SOFTWARE: Installed programs, Windows settings\n\n6. EVENT LOGS\n   Location: C:\\Windows\\System32\\winevt\\Logs\\*.evtx\n   Security: Logons, logoffs, privilege use, policy changes\n   System: Service start/stop, driver loads, errors\n   PowerShell: Script execution (if enabled)\n\n7. USN JOURNAL\n   Location: C:\\$Extend\\$UsnJrnl:$J\n   What: Every file change ever (name, timestamp, reason)\n   Critical for tracking malware file creation!\n\n8. BROWSER ARTIFACTS\n   Chrome: C:\\Users\\%user%\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\\n     - History, Downloads, Login Data (passwords), Cookies\n   Firefox: C:\\Users\\%user%\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles\\*\n   Edge: Similar to Chrome (Chromium-based)\n\n\"@\n\nWrite-Host $artifacts\n\n# ===== TIMELINE ANALYSIS POWERSHELL =====\n$timelineQuery = @\"\n\"\"\"\nUse MFTEcmd.exe (MFT parser) to create a timeline:\n  MFTEcmd.exe -f C:\\$MFT --de 5 --csv timeline.csv\n\nThis produces a CSV with EVERY file operation:\n  - File creation time\n  - File modification time\n  - MFT modification time\n  - Access time\n  - File size\n  - Parent directory\n  - File name\n\nIn Excel/SQL:\n  1. Sort by creation time (oldest first)\n  2. Look at files created around the incident time\n  3. Look for: EXE, DLL, PS1, VBS, JS, BAT files\n  4. Check if they were created by unusual processes\n  5. Trace back to the source process\n\"\"\"\n\n# ===== KEY FORENSIC QUESTIONS =====\n\"\"\"\nFor every investigation, answer:\n\n1. THREAT IDENTIFICATION\n   - What is the malware/attack?\n   - What is the indicator of compromise (IOC)?\n\n2. INFECTION VECTOR\n   - How did it enter? (Phishing? Drive-by? USB?)\n   - What file/download/email was the initial vector?\n\n3. SCOPE\n   - Which systems are affected?\n   - What data was accessed/exfiltrated?\n\n4. TIMELINE\n   - When did the initial compromise happen?\n   - When did lateral movement occur?\n   - When was data exfiltrated?\n\n5. ROOT CAUSE\n   - What vulnerability was exploited?\n   - What misconfiguration allowed spread?\n   - What security control was missing?\n\"\"\""
+        }
+      ],
+      "learning_path": "Evidence handling and chain of custody -> Forensic imaging (dd, E01) -> File system analysis (FAT, NTFS, ext4) -> Deleted file recovery -> MFT analysis -> Timeline creation -> Windows artifacts (Prefetch, Registry, Event Logs) -> Memory acquisition -> Volatility fundamentals -> Process analysis -> Network analysis -> Malware triage -> Report writing for legal proceedings"
+    },
+    {
+      "name": "Wireless Security Auditing",
+      "difficulty": "intermediate",
+      "explanation_simple": "Wireless security is about securing Wi-Fi networks and other wireless communications (Bluetooth, RFID, NFC, Zigbee). Wi-Fi is inherently less secure than wired because the signal travels through the air - anyone within range can attempt to connect or eavesdrop. Modern WPA3 is very secure, but many networks still use WPA2 (which can be cracked with enough time) or worse, WEP (which can be cracked in seconds). Wireless auditing involves checking network configurations, identifying weak encryption, detecting rogue access points, and testing for vulnerabilities in the wireless infrastructure.",
+      "key_concepts": [
+        "SSID: Network name (don't broadcast? Not real security - easily found)",
+        "BSSID: MAC address of the access point",
+        "WEP: Oldest security protocol (COMPLETELY broken - can crack in seconds)",
+        "WPA: Transitional protocol (TKIP encryption - also broken)",
+        "WPA2: Current standard (AES/CCMP encryption - can crack with dictionary attack on weak passwords)",
+        "WPA3: Newest standard (SAE handshake - resistant to dictionary attacks, much more secure)",
+        "PMKID: Key derived from password that can be used for cracking (even without clients!)",
+        "4-Way Handshake: The cryptographic exchange between client and AP (contains the password hash)",
+        "Rogue AP: Fake access point that looks legitimate (evil twin attack)",
+        "Deauthentication Attack: Disconnecting a client from their AP (forces reconnection - captures handshake)",
+        "Krack Attack: Vulnerability in WPA2's 4-way handshake (allows reinstallation of encryption key)",
+        "WPS (Wi-Fi Protected Setup): PIN-based setup - Bruteforce-able in hours",
+        "Bluetooth Low Energy (BLE): Short-range wireless (used by IoT devices, often insecure)",
+        "Bluetooth Hacking: BlueBorne, BlueSmack, Bluetooth Impersonation Attacks (BIAS)",
+        "SDR (Software Defined Radio): Using a radio receiver to analyze any wireless communication",
+        "RFID/NFC Hacking: Cloning access cards, payment card information"
+      ],
+      "code_examples": [
+        {
+          "title": "Wi-Fi Security Audit with aircrack-ng",
+          "code": "# ===== WIFI SECURITY AUDIT USING AIRCRACK-NG =====\n# Educational: For auditing your OWN network security\n\n\"\"\"\nPREREQUISITES:\n  - Linux (Kali/Parrot recommended)\n  - Wireless card that supports monitor mode (Alfa AWUS036ACH is standard)\n  - aircrack-ng suite\n\nSTEP 1: Put wireless card in monitor mode\n\"\"\"\n# Check wireless interfaces\n# airmon-ng\n\n# Kill interfering processes\n# airmon-ng check kill\n\n# Enable monitor mode on wlan0\n# airmon-ng start wlan0\n# Now your interface is wlan0mon\n\n\"\"\"\nSTEP 2: Scan for networks\n\"\"\"\n# airodump-ng wlan0mon\n\n# This shows:\n# BSSID - MAC of access point\n# PWR - Signal strength\n# CH - Channel\n# ENC - Encryption (WEP, WPA, WPA2, WPA3)\n# ESSID - Network name\n# STATION - Connected clients\n\n\"\"\"\nSTEP 3: Capture the 4-way handshake\n\"\"\"\n# Focus on a specific target:\n# airodump-ng -c 6 --bssid AA:BB:CC:DD:EE:FF -w capture wlan0mon\n\n# Wait for a client to connect, OR force a reconnect:\n# aireplay-ng -0 2 -a AA:BB:CC:DD:EE:FF wlan0mon\n# -0 = deauthentication attack\n# 2 = send 2 deauth packets (usually enough)\n# -a = target AP\n\n\"\"\"\nSTEP 4: Crack the password\n\"\"\"\n# Using a wordlist:\n# aircrack-ng -w /usr/share/wordlists/rockyou.txt capture-01.cap\n\n# Using hashcat (GPU accelerated - MUCH faster):\n# Convert cap to hashcat format:\n# cap2hccapx capture-01.cap capture.hccapx\n# hashcat -m 22000 -a 0 capture.hccapx rockyou.txt\n\n# Using mask attack (try all 8-digit numeric):\n# hashcat -m 22000 -a 3 capture.hccapx ?d?d?d?d?d?d?d?d\n\n\"\"\"\nWPA3 NOTE: WPA3 uses SAE handshake which is resistant\nto dictionary attacks. The only way to crack WPA3 is\nto attack weak passwords through the SAE handshake,\nwhich is MUCH slower than WPA2 cracking.\n\"\"\"\n\n# ===== WPS PIN ATTACK =====\n# Many routers have WPS enabled (even if you can't find the button)\n# WPS PIN is 8 digits, but the last digit is a checksum\n# And it's validated in two halves - so only 7 digits to crack!\n# 10^4 (first half) + 10^3 (second half) = 11,000 attempts max\n\n# Use reaver or bully:\n# reaver -i wlan0mon -b AA:BB:CC:DD:EE:FF -vv\n# bully -i wlan0mon -b AA:BB:CC:DD:EE:FF\n\n# ===== ROGUE AP DETECTION =====\n# Wireshark filter to find fake access points:\nwlan.fc.type_subtype == 8  # Beacon frames\n\n# Look for:\n# 1. APs with same SSID but different BSSID (evil twin)\n# 2. APs not on your authorized list\n# 3. APs with unusually strong signal (attacker nearby)\n# 4. APs with open encryption (no password)\n\n# ===== BLUETOOTH AUDIT TOOLS =====\n# Scan for Bluetooth devices:\n# hcitool scan\n# bleah -b (BLE device scan)\n# bluez-test-discovery\n\n# Classic Bluetooth attacks:\n# bluetoothctl\n# l2ping -f <MAC>  (DoS - flood with pings)\n# btscanner\n\n# BLE (Bluetooth Low Energy) analysis:\n# gatttool -b <MAC> -I  # Interact with BLE devices\n# Bettercap with BLE module:\n# sudo bettercap -eval \"ble.enum LEAA:BB:CC:DD:EE:FF\""
+        }
+      ],
+      "learning_path": "Wireless fundamentals (802.11 standards) -> Monitor mode setup -> WEP cracking -> WPA2 handshake capture -> Password cracking (dictionary, mask, rule-based) -> PMKID attack -> WPS PIN attack -> Evil twin/Rogue AP -> Bluetooth security -> BLE analysis -> RFID/NFC cloning -> SDR basics -> Wireless IDS deployment -> Rogue AP detection"
+    }
+  ]
+}

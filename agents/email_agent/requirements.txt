@@ -1,0 +1,2 @@
+# Uses the root TOM dependencies.
+-r ../../requirements.txt

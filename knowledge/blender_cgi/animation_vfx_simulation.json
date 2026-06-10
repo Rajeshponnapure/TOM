@@ -1,0 +1,161 @@
+{
+  "domain": "3D Animation, VFX & Simulation for Games and Film",
+  "category": "blender_cgi",
+  "subcategory": "animation_vfx_simulation",
+  "description": "Complete knowledge of 3D animation (keyframe, mocap, procedural), visual effects (fire, smoke, explosions, magic), and physics simulations (cloth, fluids, destruction)",
+  "teaching_plan": {
+    "lesson_1": {
+      "title": "Making Things Move Naturally",
+      "concepts": ["Keyframes and interpolation", "Timing and spacing", "The 12 principles of animation", "Graph editor"],
+      "projects": ["Animate a bouncing ball with squash and stretch", "Create a walk cycle"]
+    },
+    "lesson_2": {
+      "title": "Explosions and Magic Effects",
+      "concepts": ["Particle systems", "Fire and smoke simulation", "VFX for games (Niagara)", "EmberGen workflow"],
+      "projects": ["Create a fireball explosion", "Build a magic spell effect"]
+    },
+    "lesson_3": {
+      "title": "Cloth, Hair and Physics",
+      "concepts": ["Cloth simulation setup", "Hair/fur systems", "Rigid body destruction", "Fluid simulation"],
+      "projects": ["Simulate a cape on a character", "Create a physics-based destruction scene"]
+    }
+  },
+  "sections": [
+    {
+      "name": "The 12 Principles of Animation",
+      "difficulty": "beginner",
+      "explanation_simple": "The 12 principles of animation were created by Disney animators in the 1930s and they're STILL the foundation of ALL animation today - from Pixar movies to Fortnite dances to Nintendo games. These principles aren't optional rules - they're what separates professional animation that feels alive from amateur animation that feels robotic. Think of them as the grammar of movement: you need to know the rules before you can break them effectively.",
+      "key_concepts": [
+        "1. Squash and Stretch: Objects squish when hitting something and stretch when moving fast (gives a sense of weight and flexibility)",
+        "2. Anticipation: A small movement backward before a big movement forward (wind-up before a punch, crouch before a jump)",
+        "3. Staging: Presenting an action clearly so the audience sees it (positioning, timing, camera angle)",
+        "4. Straight Ahead vs Pose-to-Pose: Drawing frame-by-frame vs setting key poses and letting computer interpolate",
+        "5. Follow Through and Overlapping: Parts keep moving after the main action stops (hair settling, coat flapping)",
+        "6. Slow In and Slow Out: Objects accelerate and decelerate smoothly, not at constant speed (ease-in, ease-out)",
+        "7. Arcs: Most natural movement follows curved paths, not straight lines",
+        "8. Secondary Action: Smaller actions that support the main action (facial expressions while walking)",
+        "9. Timing: Number of frames determines the speed and weight of an action",
+        "10. Exaggeration: Pushing poses and expressions beyond realistic for clarity and impact",
+        "11. Solid Drawing: Making 3D characters feel solid and three-dimensional with proper weight",
+        "12. Appeal: Characters should be interesting and engaging to watch (charm, design, personality)"
+      ],
+      "code_examples": [
+        {
+          "title": "Animation Curves: Graph Editor Mastery",
+          "code": "# ===== GRAPH EDITOR CURVE TYPES =====\n\"\"\"\nBlender's Graph Editor: The most important tool for animation.\n\nKEY CURVE TYPES:\n\n1. CONSTANT (Step) - No interpolation, instant change\n   Uses: Blinking, toggle switches, sudden events\n   \n2. LINEAR - Constant speed from A to B\n   Uses: Mechanical movement, robots, conveyor belts\n   \n3. BEZIER - Smooth acceleration/deceleration (default)\n   Uses: Most natural movement\n   \n4. SINE WAVE - Smooth oscillation\n   Uses: Breathing, idle bobbing, pendulums\n\nIMPORTANT HANDLE TYPES:\n  - Auto: Blender smooths automatically\n  - Vector: Sharp corner (linear on both sides)\n  - Aligned: Handles are always a straight line (smooth)\n  - Free: Each handle moves independently\n\nGRAPH EDITOR SHORTCUTS:\n  V - Change handle type\n  S - Scale selected keyframes\n  Alt+S - Scale the curve values\n  T - Interpolation mode menu\n  Shift+E - Extrapolation mode (cyclic, linear, constant)\n\"\"\"\n\n# Python: Set animation interpolation\nimport bpy\n\ndef set_keyframe_interpolation(action_name, interpolation=\"BEZIER\"):\n    \"\"\"Change interpolation type for all keyframes in an action.\"\"\"\n    if action_name not in bpy.data.actions:\n        print(f\"Action '{action_name}' not found\")\n        return\n\n    action = bpy.data.actions[action_name]\n    for fcurve in action.fcurves:\n        for keyframe in fcurve.keyframe_points:\n            keyframe.interpolation = interpolation\n\n    print(f\"Set all keyframes in '{action_name}' to {interpolation}\")\n\n# Usage:\n# set_keyframe_interpolation(\"WalkAction\", \"BEZIER\")\n\n# ===== CYCLIC ANIMATION (Walk cycles, breathing loops) =====\ndef make_cyclic(action_name):\n    \"\"\"Make an animation loop seamlessly.\"\"\"\n    if action_name not in bpy.data.actions:\n        return\n\n    action = bpy.data.actions[action_name]\n    for fcurve in action.fcurves:\n        # Set extrapolation to cyclic\n        fcurve.extrapolation = 'CYCLIC'\n\n    print(f\"Made '{action_name}' cyclic\")\n\n# make_cyclic(\"RunCycle\")"
+        }
+      ],
+      "learning_path": "Bouncing ball (master this first!) -> Timing and spacing -> Graph editor -> The 12 principles -> Body mechanics -> Walk cycles -> Run cycles -> Acting and performance -> Lip sync -> Combat animation -> Creature animation -> Quadruped locomotion"
+    },
+    {
+      "name": "Body Mechanics & Character Performance",
+      "difficulty": "intermediate",
+      "explanation_simple": "Body mechanics is about making characters move with realistic weight, balance, and physics. When a character walks, their hips rotate, their shoulders counter-swing, their head bobs, and their weight shifts from foot to foot. Getting body mechanics right is what separates professional game animation from amateur. Good body mechanics make characters feel heavy, alive, and grounded. Bad body mechanics make characters feel like floating mannequins.",
+      "key_concepts": [
+        "Weight Shift: Transferring weight from one foot to the other (essential for all locomotion)",
+        "Center of Gravity: The balance point of the character (hips area for humans)",
+        "Contact Poses: The moment a foot hits the ground (the most important pose in a walk cycle)",
+        "Passing Pose: The moment both feet pass each other (legs straight, hips leveled)",
+        "Up/Down Motion: The natural bob as a character walks (lowest at double support, highest at passing)",
+        "Twist: The rotation of hips and shoulders in opposite directions (counter-animation)",
+        "Foot Roll: Heel down -> flat -> toe push-off (essential for natural walks)",
+        "Arm Swing: Arms counter-swing to legs (right leg forward, left arm forward)",
+        "Follow-Through: Body parts that keep moving after the main action stops",
+        "Overlap: Different body parts start/stop at different times (hair, clothing, fat jiggle)",
+        "Drag: A part that lags behind (a heavy sword being dragged)",
+        "Lead: A part that initiates movement (head leads the body, elbow leads the arm)"
+      ],
+      "code_examples": [],
+      "learning_path": "Pelvis and hip movement -> Walk cycle (contact, down, passing, up, contact) -> Run cycle -> Weight lifting -> Pushing/pulling -> Jumping and landing -> Fighting poses -> Emotional body language -> Quadruped walks"
+    },
+    {
+      "name": "VFX: Fire, Smoke, Explosions & Magic",
+      "difficulty": "intermediate",
+      "explanation_simple": "Visual effects (VFX) are the fire, smoke, explosions, magic spells, and environmental effects that make games and films exciting. In games, VFX run in real-time on the GPU using particle systems (thousands of tiny sprites or meshes that move with physics rules). In films, VFX are simulated offline with physics solvers (Houdini is the industry standard). The trick to great VFX is layering: a single explosion might have 5+ layers (core flash, expanding fire ring, smoke cloud, debris particles, shockwave ripple). Each layer uses different physics, colors, and timing.",
+      "key_concepts": [
+        "Particle Systems: Thousands of small sprites that simulate fire, smoke, sparks",
+        "GPU Particles: Particles simulated on the graphics card (millions possible)",
+        "CPU Particles: Particles simulated on the processor (thousands only, but more control)",
+        "Spawn Rate: How many particles are created per second",
+        "Lifetime: How long each particle lives before disappearing",
+        "Initial Velocity: Speed and direction when particle is born",
+        "Drag/Air Resistance: Slows particles down over time",
+        "Turbulence/Noise: Random movement for organic-looking effects",
+        "Color Over Life: Particle changes color as it ages (yellow -> orange -> black for fire)",
+        "Size Over Life: Particle grows or shrinks (explosion expands)",
+        "Texture Sheet Animation: Flipbook animation on particles (like a mini-movie per particle)",
+        "Additive Blending: Bright particles glow (fire, lightning, magic)",
+        "Alpha Blending: Semi-transparent particles (smoke, fog)",
+        "EmberGen: Real-time fire/smoke simulation tool (game changer for VFX)",
+        "Niagara (UE5): Unreal's next-gen VFX system",
+        "VFX Graph (Unity): Unity's GPU particle system",
+        "Fluid Simulation: Actual physics simulation of liquids and gases (expensive, for films)"
+      ],
+      "code_examples": [
+        {
+          "title": "Creating a Fireball in UE5 Niagara",
+          "code": "# ===== UNREAL NIAGARA FIREBALL VFX =====\n\"\"\"\nSYSTEM: Fireball_Projectile\nThis creates a fireball that flies through the air leaving a trail.\n\nEMITTER 1: Fireball Core (Single particle)\n  - Render: Sphere mesh\n  - Material: Emissive orange with noise distortion\n  - Emitter Update:\n    - Set Lifespan = lifetime of projectile\n    - Spawn Burst: 1 particle\n  - Particle Update:\n    - Location updates every frame via Blueprint\n    - Scale: Uniform 50 units\n    - Color: Orange (1,0.4,0) with pulsing intensity\n\nEMITTER 2: Smoke Trail (Continuous)\n  - Render: Sprite with smoke texture (additive)\n  - Emitter Update:\n    - Spawn Per Second: 50 particles\n  - Particle Spawn:\n    - Position: Offset from core (-10 in Z)\n    - Velocity: Random direction (100 units/s)\n    - Lifetime: 0.5-1.0 seconds\n    - Size: 10-30 units\n  - Particle Update:\n    - Scale Color Over Life: Orange -> Dark Gray -> Transparent\n    - Scale Size Over Life: 1.0 -> 3.0\n    - Drag: 0.5 (slows down over time)\n    - Add Velocity Noise: Random wobble\n\nEMITTER 3: Spark Trails\n  - Render: Sprite with star texture\n  - Emitter Update:\n    - Spawn Per Second: 20 particles\n  - Particle Spawn:\n    - Position: Random around core (radius 5)\n    - Velocity: Outward burst (50-200 units/s)\n    - Lifetime: 0.3 seconds\n    - Color: Bright yellow (1,0.8,0)\n  - Particle Update:\n    - Scale Color Over Life: Yellow -> Transparent\n    - Drag: 0.9 (stops quickly)\n\nEMITTER 4: Glow (for impact)\n  - Triggered by \"On Impact\" event\n  - Single burst of 200 particles expanding outward\n  - Bright white to orange fade\n\"\"\"\n\n// Niagara spawning from C++\nUNiagaraComponent* SpawnFireball(UWorld* World, UNiagaraSystem* FireballEffect, FVector Location, FRotator Rotation)\n{\n    UNiagaraComponent* NiagaraComp = UNiagaraFunctionLibrary::SpawnSystemAtLocation(\n        World,\n        FireballEffect,\n        Location,\n        Rotation\n    );\n\n    if (NiagaraComp)\n    {\n        // Bind to update location every frame\n        // Use a timeline or tick to update User.ProjectilePosition\n        NiagaraComp->SetNiagaraVariableVec3(FName(\"ProjectilePosition\"), Location);\n    }\n\n    return NiagaraComp;\n}"
+        },
+        {
+          "title": "Houdini: Procedural Destruction System",
+          "code": "# ===== HOUDINI WALL DESTRUCTION =====\n\"\"\"\nNODE NETWORK:\n\n1. WALL: Box with UVs\n   |\n2. VORONOI FRACTURE: Input wall geometry, scatter 50-100 points\n   |    Creates fracture pieces based on Voronoi cells\n   |\n3. EXPLODED VIEW: Separate pieces by random offset\n   |\n4. ATTRIBUTE WRANGLE:\n   |    - Set each piece's unique color (for visualization)\n   |    - Assign random strength values\n   |    - Calculate piece volume and mass\n   |\n5. ASSEMBLY: Glue pieces together with constraints (RBD Constraints)\n   |    - Glue constraints hold pieces together until broken\n   |    - Strength threshold determines how much force to break\n   |\n6. ACTIVE RIGID BODY: Convert to physics simulation\n   |    - Apply gravity\n   |    - Set collision shapes (convex hull per piece)\n   |\n7. ADD IMPACT: Sphere with velocity hits the wall\n   |    - Calculate force of impact\n   |    - Break glue constraints within impact radius\n   |\n8. SIMULATE: Run physics simulation (100 frames)\n   |\n9. EXPORT:\n   - Animated geometry (bake simulation to keyframes)\n   - Individual pieces for game engine import\n   - Destruction event data (timing, forces)\n\"\"\"\n\n// VEX code for piece properties\n// Runs on each primitive in the fractured mesh\n\n// Calculate piece mass based on volume\nfloat volume = primintrinsic(0, \"measuredvolume\", @primnum);\n@mass = volume * chf(\"density\");\n\n// Random strength for each glue constraint\n@strength = fit01(rand(@primnum + 123), 0.5, 1.5) * chf(\"base_strength\");\n\n// Set as active rigid body\n@active = 1;\n\n// Add some randomness to the fracture for realism\nvector centroid = primintrinsic(0, \"boundscenter\", @primnum);\n@P += (rand(@primnum) - 0.5) * 0.1;"
+        }
+      ],
+      "learning_path": "Particle system fundamentals -> Sprites and textures -> Color/size over life -> FIRE (the classic first VFX) -> Smoke -> Explosions (layered approach) -> Magic spells -> Houdini destruction basics -> Voronoi fracturing -> RBD constraints -> Large-scale destruction -> Fluid simulation"
+    },
+    {
+      "name": "Physics Simulation: Cloth, Hair, Fluids & Destruction",
+      "difficulty": "intermediate",
+      "explanation_simple": "Physics simulation makes things move automatically based on real-world physics rules. Cloth simulation makes capes flow and flags wave. Hair simulation makes characters' hair and fur move naturally. Fluid simulation makes water, lava, and goo flow and splash. Destruction simulation makes buildings crumble realistically. Each type of simulation uses different math: cloth uses spring networks, fluids use particle or grid-based solvers, and destruction uses rigid body physics with constraint breaking. In real-time games, these are simplified for performance. In films, they're full physics simulations that can take hours to compute per frame.",
+      "key_concepts": [
+        "Cloth Simulation: Mesh vertices connected by springs (stretch, shear, bend springs)",
+        "Pinning: Parts of cloth that stay in place (shoulders of a cape, collar of a shirt)",
+        "Wind Force: Natural airflow affecting cloth, hair, foliage",
+        "Self-Collision: Cloth doesn't pass through itself (important for skirts, loose clothing)",
+        "Hair/Fur: Each strand is a chain of particles with stiffness and gravity",
+        "Guide Hairs: Base hairs that determine the shape, then interpolate thousands of render hairs",
+        "Fluid Simulation (SPH): Smoothed Particle Hydrodynamics - water as particles",
+        "Fluid Simulation (Grid): Water as a 3D grid of pressure/velocity values (more accurate, slower)",
+        "Flip Fluids: Hybrid particle + grid method (industry standard for film-quality water)",
+        "Rigid Body Simulation: Solid objects with physics (mass, friction, bounciness)",
+        "Constraints: Connections that break under force (glue holding bricks together)",
+        "Active vs Passive: Active objects are physics-controlled, passive are static colliders",
+        "Destruction: Breaking objects into pieces that then simulate as rigid bodies",
+        "Caching: Saving simulation results to disk so you don't need to re-simulate"
+      ],
+      "code_examples": [
+        {
+          "title": "Blender Cloth & Hair Simulation Setup",
+          "code": "# ===== BLENDER CLOTH SIMULATION =====\nimport bpy\n\ndef setup_cape_simulation(cape_mesh_name=\"Cape\", character_mesh_name=\"Character\"):\n    \"\"\"Set up cloth simulation for a character's cape.\"\"\"\n\n    cape = bpy.data.objects.get(cape_mesh_name)\n    character = bpy.data.objects.get(character_mesh_name)\n\n    if not cape or not character:\n        print(\"Meshes not found\")\n        return\n\n    # Select the cape\n    bpy.context.view_layer.objects.active = cape\n    cape.select_set(True)\n\n    # Add cloth modifier\n    cloth_mod = cape.modifiers.new(name=\"Cloth\", type='CLOTH')\n\n    # Configure cloth settings\n    cloth_mod.settings.quality = 10  # Higher = better but slower\n    cloth_mod.settings.time_scale = 1.0\n    cloth_mod.settings.mass = 0.3  # Light fabric\n    cloth_mod.settings.tension_stiffness = 15.0  # How stretchy\n    cloth_mod.settings.compression_stiffness = 15.0\n    cloth_mod.settings.shear_stiffness = 10.0\n    cloth_mod.settings.bending_stiffness = 0.5  # How much it flops\n    cloth_mod.settings.air_damping = 1.0\n    cloth_mod.settings.internal_friction = 0.0\n    cloth_mod.settings.collision_quality = 5\n\n    # Pin the shoulders (vertices at the top of the cape)\n    # In edit mode, select vertices that should stay on the shoulders\n    # Then click \"Pin\" in the cloth settings\n\n    # Add wind force\n    bpy.ops.object.effector_add(type='WIND', location=(5, 0, 3))\n    wind = bpy.context.active_object\n    wind.field.strength = 10.0\n    wind.field.noise = 2.0  # Gusty wind\n\n    # Set character as collision object\n    character.select_set(True)\n    bpy.context.view_layer.objects.active = character\n    cloth_collision = character.modifiers.new(name=\"ClothCollision\", type='COLLISION')\n    cloth_collision.settings.damping_factor = 0.1\n    cloth_collision.settings.friction_factor = 0.5\n\n    print(f\"Cape simulation set up on {cape_mesh_name}\")\n    print(\"Press Alt+A to play the simulation\")\n\n# setup_cape_simulation(\"Cape\", \"Character_Mesh\")\n\n# ===== BLENDER HAIR SYSTEM =====\ndef setup_hair_system(head_mesh_name=\"Head\"):\n    \"\"\"Set up hair particles on a character head.\"\"\"\n\n    head = bpy.data.objects.get(head_mesh_name)\n    if not head:\n        print(f\"Mesh '{head_mesh_name}' not found\")\n        return\n\n    bpy.context.view_layer.objects.active = head\n    head.select_set(True)\n\n    # Add hair particle system\n    hair_mod = head.modifiers.new(name=\"Hair\", type='PARTICLE_SYSTEM')\n    psys = hair_mod.particle_system\n    psys.settings.type = 'HAIR'\n\n    # Configure hair\n    settings = psys.settings\n    settings.count = 10000  # Number of hair strands\n    settings.hair_length = 0.3  # 30cm hair\n    settings.hair_step = 5  # Segments per strand\n\n    # Children (interpolated hairs between guide hairs)\n    settings.child_type = 'INTERPOLATED'\n    settings.child_nbr = 50  # 50 children per guide hair\n    settings.rendered_child_count = 100\n\n    # Physics\n    settings.mass = 0.1\n    settings.mass_shape = 0.5  # Thickness\n    settings.bending_stiffness = 0.5  # How rigid\n    settings.bending_damping = 0.1\n    settings.tension_stiffness = 0.0\n    settings.random = 0.1  # Random variation\n\n    # Render as paths (for Cycles)\n    settings.render_type = 'PATH'\n\n    # Material\n    hair_mat = bpy.data.materials.new(name=\"Hair_Material\")\n    hair_mat.use_nodes = True\n    # Set up Principled Hair BSDF node\n    nodes = hair_mat.node_tree.nodes\n    nodes.clear()\n    principled = nodes.new('ShaderNodeBsdfHairPrincipled')\n    principled.inputs['Color'].default_value = (0.1, 0.05, 0.02, 1)  # Dark brown\n    principled.inputs['Melanin'].default_value = 0.8  # How dark\n\n    output = nodes.new('ShaderNodeOutputMaterial')\n    hair_mat.node_tree.links.new(principled.outputs['BSDF'], output.inputs['Surface'])\n\n    head.data.materials.append(hair_mat)\n\n    print(f\"Hair system set up with {settings.count} guide hairs\")\n\n# setup_hair_system(\"Character_Head\")"
+        }
+      ],
+      "learning_path": "Cloth simulation basics -> Pinning and collision -> Wind and forces -> Realistic fabric types -> Hair particles -> Guide hairs -> Physics-based hair -> Fluid simulation (SPH) -> Flip fluids (grid) -> Water rendering -> Rigid body destruction -> Constraints and breaking -> Large-scale physics caching"
+    },
+    {
+      "name": "Motion Capture & Retargeting",
+      "difficulty": "intermediate",
+      "explanation_simple": "Motion capture (mocap) records real human movement and applies it to 3D characters. Actors wear special suits with markers (or use markerless AI systems), and the mocap system tracks the position of each marker to create realistic animation. This is how games like The Last of Us, Red Dead Redemption 2, and God of War get such realistic character movement. Retargeting is the process of taking mocap data from one character skeleton and applying it to a different character skeleton (like making a 7-foot troll move like a 6-foot actor).",
+      "key_concepts": [
+        "Optical Mocap: Markers on suit tracked by multiple cameras (Vicon, OptiTrack)",
+        "Inertial Mocap: Sensors on body track movement via accelerometers (Xsens, Rokoko)",
+        "Markerless Mocap: Camera-only tracking using AI (Move.ai, DeepMotion)",
+        "Facial Mocap: Head-mounted camera tracks facial expressions (Faceware, LiveLink Face)",
+        "Finger Mocap: Gloves with sensors for hand/finger movement (Manus VR)",
+        "Mocap Cleanup: Fixing artifacts in raw mocap data (foot sliding, ground penetration, noise)",
+        "Retargeting: Mapping animation from one skeleton to another (different proportions, bone counts)",
+        "Root Motion: The character's root bone moves with animation (not just in-place animation)",
+        "Motion Builder: Industry standard for editing and cleaning mocap data (Autodesk)",
+        "IK Retargeting: Using IK to fix foot placement on uneven terrain",
+        "Motion Matching: System that selects the best animation clip based on character state (used in AAA)",
+        "Motion Warping: Adjusting animation timing to hit specific targets (syncing to gameplay events)"
+      ],
+      "code_examples": [
+        {
+          "title": "Mocap Retargeting in Unreal Engine",
+          "code": "# ===== IK RETARGETING IN UNREAL ENGINE =====\n\"\"\"\nUNREAL IK RETARGETING PIPELINE:\n\n1. PREPARE RIGS\n   - Source: The skeleton the mocap was recorded on\n   - Target: Your character's skeleton\n   - Both must have similar bone hierarchy for good results\n\n2. CREATE IK RETARGETER\n   - Asset: IK Retargeter (new in UE5)\n   - Select source skeleton and target skeleton\n   - Chain mapping: which source chain maps to which target chain\n     (LeftArm -> LeftArm, RightLeg -> RightLeg, etc.)\n\n3. ADJUST RETARGETING\n   - Pole Vector: Controls elbow/knee direction\n   - Twist Correction: Fixes forearm/upper leg twist\n   - Foot Lock: Prevents foot sliding\n   - Ground Adjustment: Handles height differences\n\n4. BAKE TO ANIM SEQUENCE\n   - Convert retargeted animation to a new animation asset\n   - Or use Retargeter at runtime (for dynamic characters)\n\"\"\"\n\n// C++ Runtime retargeting with IK\n#include \"IKRetargeter.h\"\n#include \"IKRetargetProcessor.h\"\n\nvoid AMyCharacter::ApplyMocapToCharacter(UAnimSequence* SourceAnimation)\n{\n    // Get the IK retarget asset\n    UIKRetargeter* Retargeter = LoadObject<UIKRetargeter>(nullptr, TEXT(\"/Game/Rigs/HumanToOrcRetargeter\"));\n\n    if (Retargeter)\n    {\n        // Create processor\n        UIKRetargetProcessor* Processor = Retargeter->CreateProcessor(\n            GetMesh()->GetSkeleton(),\n            SourceAnimation->GetSkeleton()\n        );\n\n        if (Processor)\n        {\n            // Configure settings\n            Processor->SetIKChainSpeedThreshold(10.0f);\n            Processor->SetGoalBone(EBasicIKSolverType::FullBodyIK, \"ik_foot_root\");\n\n            // Process the animation\n            Processor->RunRetargeting(SourceAnimation, GetMesh()->GetAnimInstance());\n        }\n    }\n}\n\n// ===== MOTION MATCHING BASICS =====\n/*\nMotion Matching is the technology behind games like The Last of Us Part 2\nand the Assassin's Creed series.\n\nHOW IT WORKS:\n1. Database of thousands of animation clips\n2. Each frame, calculate which clip best matches:\n   - Current character position/velocity\n   - Desired input direction/speed\n   - Previous animation (for smooth transitions)\n3. Blend to the best matching clip\n4. Result: Incredibly natural movement with no visible transitions\n\nUNREAL 5: Motion Matching is built in via PoseSearch database.\n*/\n\n// Unreal C++: Request animation from PoseSearch\nUPoseSearchDatabase* AnimDB = LoadObject<UPoseSearchDatabase>(nullptr, TEXT(\"/Game/PoseSearch/LocomotionDB\"));\n\nvoid AMyCharacter::UpdateMovementAnimation()\n{\n    if (AnimDB)\n    {\n        FSearchResult SearchResult;\n        FPoseSearchQuery Query;\n\n        // Set query parameters\n        Query.SetDesiredSpeed(GetVelocity().Length());\n        Query.SetDesiredDirection(GetLastMovementInputVector());\n        Query.SetCurrentAnimAsset(GetCurrentAnimSequence());\n        Query.SetCurrentAnimTime(GetAnimInstance()->GetCurrentTime());\n\n        // Search database for best match\n        if (AnimDB->Search(Query, SearchResult))\n        {\n            // Blend to matched animation\n            PlayAnim(SearchResult.AnimAsset, SearchResult.BlendTime);\n        }\n    }\n}"
+        }
+      ],
+      "learning_path": "Understanding mocap technology -> Optical vs inertial -> Recording session setup -> Raw data cleanup -> Retargeting fundamentals -> IK retargeting -> Root motion -> Motion Builder basics -> Facial mocap pipeline -> Finger mocap -> Motion matching concepts -> Full-body IK systems"
+    }
+  ]
+}

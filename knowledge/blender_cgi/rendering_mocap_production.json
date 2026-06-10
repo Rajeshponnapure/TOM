@@ -1,0 +1,147 @@
+{
+  "domain": "Rendering, Video Production, AI Creation, Pipelines & Film-Level Skills",
+  "category": "blender_cgi",
+  "subcategory": "rendering_video_ai_pipeline",
+  "description": "Complete knowledge of 3D rendering, video compositing/CGI, AI-powered 3D creation, industry asset pipelines, and Hollywood-level film production techniques",
+  "teaching_plan": {
+    "lesson_1": {
+      "title": "Making Your Renders Look Photorealistic",
+      "concepts": ["Path tracing vs real-time", "Lighting for realism", "Camera settings (f-stop, shutter, ISO)", "Post-processing"],
+      "projects": ["Set up a product render with 3-point lighting", "Create a photorealistic interior scene"]
+    },
+    "lesson_2": {
+      "title": "CGI and Compositing",
+      "concepts": ["Green screen keying", "Match moving", "Compositing passes", "Color grading"],
+      "projects": ["Composite a 3D object into a video", "Create a motion graphics sequence"]
+    },
+    "lesson_3": {
+      "title": "AI-Powered 3D Creation",
+      "concepts": ["AI texture generation", "AI motion synthesis", "AI upscaling", "Neural rendering"],
+      "projects": ["Generate textures with AI", "Use AI for motion capture cleanup"]
+    },
+    "lesson_4": {
+      "title": "Industry Asset Pipelines",
+      "concepts": ["USD workflow", "Asset naming conventions", "Version control for assets", "LOD pipelines"],
+      "projects": ["Set up a USD export pipeline", "Create an asset validation script"]
+    }
+  },
+  "sections": [
+    {
+      "name": "Cinematic Rendering & Lighting",
+      "difficulty": "intermediate",
+      "explanation_simple": "Rendering is turning your 3D scene into a final image or animation. The render engine calculates how light bounces around the scene - from light sources, off surfaces, into the camera. Cinematic rendering (for films) can take minutes to hours per frame but looks photorealistic. Real-time rendering (for games) runs at 60 frames per second but uses tricks to look good fast. The same principles of lighting apply to both: 3-point lighting (key, fill, rim), color temperature (warm/cool), and exposure control are universal whether you're rendering for a movie or a game.",
+      "key_concepts": [
+        "Path Tracing: Tracing light rays from camera, bouncing off surfaces until they hit a light source",
+        "Bounces: How many times a light ray can bounce (more = realistic but slower)",
+        "Direct Lighting: Light directly from a source to a surface",
+        "Indirect Lighting: Light that bounces off one surface to another (the bounce light under a chin)",
+        "Global Illumination: All light interactions in a scene (direct + indirect)",
+        "HDRI: High Dynamic Range Image used for environment lighting (real-world light captured as image)",
+        "3-Point Lighting: Key light (main), Fill light (softens shadows), Rim light (separates from background)",
+        "Color Temperature: Measured in Kelvin (warm 3200K = indoor, cool 5600K = daylight)",
+        "Exposure: How much light enters the virtual camera (controls brightness)",
+        "Depth of Field: Blurring objects outside the focal plane (f-stop controls amount)",
+        "Motion Blur: Blurring fast-moving objects (shutter speed controls amount)",
+        "Bloom: Light bleeding from bright areas (glow effect)",
+        "Lens Flares: Artifacts from bright lights hitting the lens",
+        "Vignette: Darkening of image corners",
+        "Render Passes: Separate layers (diffuse, specular, shadows, AO, normal) for compositing flexibility",
+        "ACES: Industry standard color pipeline (Academy Color Encoding System)"
+      ],
+      "code_examples": [
+        {
+          "title": "Blender Cycles: Cinematic Render Settings",
+          "code": "# ===== BLENDER CYCLES CINEMATIC RENDER SETUP =====\nimport bpy\n\ndef setup_cinematic_render(scene_name=\"Scene\", output_path=\"//renders/\"):\n    \"\"\"Configure Blender Cycles for cinematic quality output.\"\"\"\n\n    scene = bpy.data.scenes.get(scene_name)\n    if not scene:\n        scene = bpy.context.scene\n\n    # Set render engine to Cycles\n    scene.render.engine = 'CYCLES'\n\n    # Resolution: Cinema 4K (4096x2160)\n    scene.render.resolution_x = 4096\n    scene.render.resolution_y = 2160\n    scene.render.resolution_percentage = 100\n    scene.render.fps = 24  # Film standard\n\n    # Cycles settings\n    cycles = scene.cycles\n    cycles.samples = 1024  # High quality (lower = faster, grainier)\n    cycles.use_adaptive_sampling = True  # Adaptive: more samples in complex areas\n    cycles.adaptive_threshold = 0.01  # Quality threshold\n    cycles.adaptive_min_samples = 128  # Minimum before adaptive kicks in\n    cycles.max_bounces = 8  # Total light bounces\n    cycles.diffuse_bounces = 4\n    cycles.glossy_bounces = 4\n    cycles.transmission_bounces = 8  # Glass/transparent\n    cycles.volume_bounces = 2\n    cycles.transparent_max_bounces = 8\n\n    # Denoising\n    cycles.use_denoising = True\n    cycles.denoiser = 'OPENIMAGEDENOISE'\n    cycles.denoising_input_passes = 'RGB_ALBEDO_NORMAL'  # Best quality\n    cycles.denoising_prefilter = 'ACCURATE'\n\n    # Motion blur\n    scene.render.use_motion_blur = True\n    scene.render.motion_blur_shutter = 0.5  # 180-degree shutter rule\n    scene.render.motion_blur_samples = 16\n\n    # Color management (ACES)\n    scene.view_settings.view_transform = 'AgX'  # AgX is the new ACES-like transform\n    scene.view_settings.look = 'None'\n    scene.view_settings.exposure = 0.0\n    scene.view_settings.gamma = 1.0\n\n    # Output settings\n    scene.render.image_settings.file_format = 'OPEN_EXR_MULTILAYER'\n    scene.render.image_settings.color_mode = 'RGBA'\n    scene.render.image_settings.color_depth = '32'\n    scene.render.image_settings.exr_codec = 'ZIP'\n\n    # File path\n    scene.render.filepath = output_path + scene_name + \"_####\"  # Frame number padding\n\n    print(f\"Cinematic render configured: {scene.render.resolution_x}x{scene.render.resolution_y} @ {scene.render.fps}fps\")\n    print(f\"Samples: {cycles.samples}, Max bounces: {cycles.max_bounces}\")\n\n# setup_cinematic_render(\"MyScene\", \"//output/cinematic/\")\n\n# ===== BLENDER: 3-POINT LIGHTING SETUP =====\ndef setup_three_point_lighting(target_object_name=\"Subject\"):\n    \"\"\"Create a classic 3-point lighting setup.\"\"\"\n\n    target = bpy.data.objects.get(target_object_name)\n    if not target:\n        print(f\"Object '{target_object_name}' not found\")\n        return\n\n    # Remove existing lights\n    for obj in bpy.data.objects:\n        if obj.type == 'LIGHT':\n            bpy.data.objects.remove(obj, do_unlink=True)\n\n    # 1. KEY LIGHT (Main light - 45 degrees to the side, 45 degrees up)\n    bpy.ops.object.light_add(type='AREA', location=(2, -2, 3))\n    key = bpy.context.active_object\n    key.name = \"Key_Light\"\n    key.data.energy = 800\n    key.data.color = (1.0, 0.95, 0.9)  # Slightly warm\n    key.data.size = 1.0  # Soft shadows\n    # Aim at target\n    constraint = key.constraints.new(type='TRACK_TO')\n    constraint.target = target\n    constraint.track_axis = 'TRACK_NEGATIVE_Z'\n    constraint.up_axis = 'UP_Y'\n\n    # 2. FILL LIGHT (Opposite side, softer - 45 degrees, slightly lower)\n    bpy.ops.object.light_add(type='AREA', location=(-2, 1.5, 2))\n    fill = bpy.context.active_object\n    fill.name = \"Fill_Light\"\n    fill.data.energy = 300  # Weaker than key (1:2 or 1:3 ratio)\n    fill.data.color = (0.9, 0.92, 1.0)  # Slightly cool\n    fill.data.size = 2.0  # Softer shadows\n    constraint = fill.constraints.new(type='TRACK_TO')\n    constraint.target = target\n    constraint.track_axis = 'TRACK_NEGATIVE_Z'\n    constraint.up_axis = 'UP_Y'\n\n    # 3. RIM/BACK LIGHT (Behind subject, separates from background)\n    bpy.ops.object.light_add(type='AREA', location=(0, 3, 2.5))\n    rim = bpy.context.active_object\n    rim.name = \"Rim_Light\"\n    rim.data.energy = 400\n    rim.data.color = (1.0, 1.0, 1.0)  # Neutral white\n    rim.data.size = 0.5  # Harder edge for rim\n    constraint = rim.constraints.new(type='TRACK_TO')\n    constraint.target = target\n    constraint.track_axis = 'TRACK_NEGATIVE_Z'\n    constraint.up_axis = 'UP_Y'\n\n    print(\"3-point lighting created: Key (800W), Fill (300W), Rim (400W)\")"
+        }
+      ],
+      "learning_path": "Understanding light physics -> HDRI lighting -> 3-point lighting -> Color temperature -> Exposure control -> Depth of field -> Path tracing fundamentals -> Render passes -> Denoising -> ACES color pipeline -> Advanced rendering (subsurface scattering, dispersion) -> Render optimization"
+    },
+    {
+      "name": "Video Production, Compositing & CGI",
+      "difficulty": "intermediate",
+      "explanation_simple": "CGI (Computer Generated Imagery) is combining computer-generated 3D elements with live-action footage. This is how movies create monsters, environments, and effects that don't exist in real life. Compositing is the art of combining these elements into a seamless final image. You shoot actors on a green screen, render your 3D elements, and then composite them together - matching colors, lighting, and camera movement so the viewer can't tell what's real and what's CGI. Nuke is the industry standard compositing tool (used by every major VFX studio), but DaVinci Resolve is a powerful free alternative.",
+      "key_concepts": [
+        "Green Screen/Chroma Key: Shooting actors against a green background that gets removed digitally",
+        "Keying: Removing the green/blue screen to isolate the subject",
+        "Spill: Green light reflecting onto the subject (green glow on edges)",
+        "Match Moving: Tracking camera movement in live footage so 3D elements match",
+        "Camera Tracking: Solving for camera position and movement from 2D footage",
+        "Planar Tracking: Tracking flat surfaces (screens, signs, walls) for adding graphics",
+        "Rotoscoping: Manually tracing objects frame by frame (painful but sometimes necessary)",
+        "Render Passes: Rendering 3D elements as separate layers (diffuse, shadows, reflections) for compositing",
+        "CG Integration: Making CG look like it belongs in the live-action footage",
+        "Color Grading: Adjusting colors to create a consistent look across all shots",
+        "LUT: Look-Up Table - a preset color transformation (used for consistent color grading)",
+        "Virtual Cinematography: Placing and animating cameras in 3D to create film-like shots",
+        "Motion Graphics: Animated graphic design elements (titles, lower thirds, data visualization)"
+      ],
+      "code_examples": [
+        {
+          "title": "DaVinci Resolve: Fusion Compositing Workflow",
+          "code": "# ===== FUSION COMPOSITING WORKFLOW IN DAVINCI RESOLVE =====\n\"\"\"\nNODE TREE FOR CGI INTEGRATION:\n\nINPUTS:\n  MediaIn1 (Live action plate - actor on green screen)\n  MediaIn2 (CG render - 3D monster with alpha)\n\nCOMPOSITING FLOW:\n\n  MediaIn1                     MediaIn2\n     |                            |\n  DeltaKeyer (remove green)    AlphaMultiply (apply alpha)\n     |                            |\n  ColorCorrector (fix spill)   ColorCorrector (match lighting)\n     |                            |\n  EdgeExtend (fix edges)       Blur (match camera focus)\n     |                            |\n     +--------- Merge -----------+\n                    |\n               ColorCorrector (grade entire shot)\n                    |\n              Glow/ lens flare\n                    |\n               MediaOut\n\nKEY NODES:\n  - DeltaKeyer: Best keyer in Fusion, handles fine details (hair, smoke)\n  - ColorCorrector: Primary color correction (lift, gamma, gain)\n  - Merge: Combines two inputs with blending modes\n  - Blur: Match depth of field between CG and plate\n  - Tracker: Match move the CG element to the plate\n  - PlanarTracker: Track flat surfaces for screen replacements\n\"\"\"\n\n// Fusion script to set up a basic composite\n// This can be run in Fusion's Console\n\ncomp = fusion.CurrentComp\n\n-- Create nodes\nmediaIn1 = comp:AddTool(\"MediaIn\", -32768, -32768)\nmediaIn1.Name = \"Live_Action_Plate\"\n\nkeyer = comp:AddTool(\"DeltaKeyer\", -32768, -16384)\nkeyer.Name = \"Green_Screen_Key\"\nkeyer.Inputs.BackgroundColor = { 0, 1, 0 } -- Green\nkeyer.Inputs.Tolerance = 0.15\nkeyer.Inputs.Soften = 0.5\n\nmediaIn2 = comp:AddTool(\"MediaIn\", -16384, -32768)\nmediaIn2.Name = \"CG_Render\"\n\nmerge = comp:AddTool(\"Merge\", 0, -16384)\nmerge.Name = \"Composite\"\n\ncolorCorrect = comp:AddTool(\"ColorCorrector\", 16384, -16384)\ncolorCorrect.Name = \"Final_Grade\"\n\nmediaOut = comp:AddTool(\"MediaOut\", 32768, -16384)\nmediaOut.Name = \"Output\"\n\n-- Connect nodes\ncomp:Connect(mediaIn1.Output, keyer.Inputs.Input)\ncomp:Connect(mediaIn2.Output, merge.Inputs.Foreground)\ncomp:Connect(keyer.Output, merge.Inputs.Background)\ncomp:Connect(merge.Output, colorCorrect.Inputs.Input)\ncomp:Connect(colorCorrect.Output, mediaOut.Inputs.Input)\n\nprint(\"Basic composite setup created\")\n\n-- ===== BLENDER: CAMERA TRACKING =====\n\"\"\"\n1. Import your video footage as a movie clip\n2. Switch to Movie Clip Editor\n3. Set tracking settings (default is usually fine)\n4. Add track points on high-contrast features in the footage\n5. Track forward and backward through the clip\n6. Solve camera motion (set focal length correctly!)\n7. Set up ground plane and 3D scene scale\n8. Add your 3D objects - they now move with the footage\n9. Render and composite\n\"\"\""
+        }
+      ],
+      "learning_path": "Green screen filming -> Chroma keying -> Spill suppression -> Color matching CG to plate -> Match moving basics -> Camera tracking -> Planar tracking -> Render passes (multi-pass compositing) -> Nuke/DaVinci Fusion workflow -> Color grading theory -> LUT creation -> Virtual cinematography -> Full CGI integration pipeline"
+    },
+    {
+      "name": "AI-Powered 3D Creation & Neural Rendering",
+      "difficulty": "advanced",
+      "explanation_simple": "AI is revolutionizing 3D creation. You can now generate 3D models from text descriptions (text-to-3D), create realistic textures from a single image, animate characters with AI motion synthesis, upscale low-res textures to 4K, and even generate entire 3D scenes. Tools like Runway, Cascadeur, DeepMotion, and Wonder Dynamics use AI to automate the hardest parts of 3D creation - especially animation. AI isn't replacing artists yet, but it's making them 10x faster by handling the tedious parts. Think of AI as a super-powered assistant who does the boring work so you can focus on the creative decisions.",
+      "key_concepts": [
+        "AI Animation Generation: Tools that create character animation from video (DeepMotion, Cascadeur)",
+        "AI Physics: Automatically adding realistic physics to animations (Cascadeur's auto-physics)",
+        "AI Motion Synthesis: Generating new animations from existing motion data",
+        "AI Texture Generation: Creating textures from text prompts (Stable Diffusion for textures)",
+        "AI Upscaling: Increasing texture resolution 4x-16x while preserving detail (ESRGAN, Topaz Gigapixel)",
+        "AI Lip Sync: Automatically syncing mouth movements to audio (NVIDIA Audio2Face)",
+        "AI Rigging: Automatically creating skeletons from 3D meshes (AccuRig, Auto-Rig Pro)",
+        "AI Scene Generation: Creating 3D scenes from text descriptions (Luma AI, NeRFs)",
+        "Neural Radiance Fields (NeRF): Creating 3D scenes from 2D photos (AI-based photogrammetry)",
+        "Diffusion Models: AI that generates images from noise (Stable Diffusion, Midjourney for concept art)",
+        "Neural Rendering: Using AI to enhance rendered images (DLSS, denoising, super-resolution)",
+        "Denoising: AI removes noise from renders, allowing fewer samples (faster render times)",
+        "NVIDIA DLSS: Deep Learning Super Sampling - AI upscaling for games (renders at lower res, outputs higher)"
+      ],
+      "code_examples": [
+        {
+          "title": "AI Tools Workflow Integration",
+          "code": "# ===== AI TEXTURE GENERATION WORKFLOW =====\n\"\"\"\nUsing AI to generate PBR textures from text prompts:\n\n1. GENERATE BASE TEXTURE\n   Tool: Stable Diffusion + ControlNet\n   Prompt: \"red brick wall, weathered, mortar, photorealistic, 4k\"\n   Control: Canny edge of your UV layout or a rough sketch\n   Output: 2048x2048 image\n\n2. GENERATE PBR MAPS\n   Tool: Stable Diffusion with PBR adapter or Materialize (free tool)\n   Input: The generated base color image\n   Output: Normal map, Roughness map, Displacement map\n\n3. TILE THE TEXTURE\n   Tool: Any texture tiling tool (PixPlant, Substance Sampler)\n   Make sure edges match seamlessly\n\n4. APPLY IN BLENDER/UNREAL\n   Import as PBR material\n   Adjust tiling, roughness multiplier, etc.\n\"\"\"\n\n# Python: Using Stable Diffusion API for texture generation\nimport requests\nimport json\nimport base64\nfrom PIL import Image\nimport io\n\ndef generate_pbr_texture(prompt, output_path=\"texture.png\", width=1024, height=1024):\n    \"\"\"\n    Generate a PBR texture using Stable Diffusion API.\n    Requires a running Stable Diffusion WebUI with API enabled.\n    \"\"\"\n    url = \"http://localhost:7860/sdapi/v1/txt2img\"\n\n    payload = {\n        \"prompt\": prompt + \", photorealistic, highly detailed, pbr texture, tileable\",\n        \"negative_prompt\": \"cartoon, low quality, blurry, distorted\",\n        \"steps\": 30,\n        \"width\": width,\n        \"height\": height,\n        \"cfg_scale\": 7.5,\n        \"sampler_name\": \"Euler a\",\n        \"seed\": -1,\n        \"tiling\": True,  # Make texture tileable\n    }\n\n    response = requests.post(url, json=payload)\n\n    if response.status_code == 200:\n        # Decode base64 image\n        img_data = response.json()['images'][0]\n        img_bytes = base64.b64decode(img_data)\n        img = Image.open(io.BytesIO(img_bytes))\n        img.save(output_path)\n        print(f\"Texture saved to {output_path}\")\n        return True\n    else:\n        print(f\"Error: {response.status_code}\")\n        return False\n\n# Usage:\n# generate_pbr_texture(\"weathered medieval stone wall, moss, detailed mortar lines\")\n\n# ===== AI MOTION CAPTURE WITH DEEPMOTION =====\n\"\"\"\nDeepMotion (deepmotion.com) - AI motion capture from video\n\nWORKFLOW:\n1. Record a video of a person moving\n2. Upload to DeepMotion\n3. AI extracts 3D skeleton and motion\n4. Download as FBX with animation\n5. Import into Blender/Unreal\n6. Retarget to your character\n\nOR use Animate3D API:\n\"\"\"\n\nimport requests\n\ndef animate_with_ai(video_path, output_path=\"animation.fbx\"):\n    \"\"\"Send video to AI mocap service and download result.\"\"\"\n\n    api_key = \"YOUR_DEEPMOTION_API_KEY\"\n    url = \"https://api.deepmotion.com/v1/animation\"\n\n    # Upload video\n    with open(video_path, 'rb') as f:\n        files = {'video': f}\n        headers = {'Authorization': f'Bearer {api_key}'}\n        response = requests.post(url, files=files, headers=headers)\n\n    if response.status_code == 200:\n        job_id = response.json()['job_id']\n        print(f\"Animation job started: {job_id}\")\n\n        # Poll for completion\n        import time\n        while True:\n            status = requests.get(f\"{url}/{job_id}\", headers=headers)\n            data = status.json()\n            if data['status'] == 'completed':\n                # Download result\n                download_url = data['download_url']\n                result = requests.get(download_url)\n                with open(output_path, 'wb') as out:\n                    out.write(result.content)\n                print(f\"Animation saved to {output_path}\")\n                break\n            elif data['status'] == 'failed':\n                print(f\"Animation failed: {data.get('error', 'Unknown error')}\")\n                break\n            time.sleep(5)\n    else:\n        print(f\"Upload failed: {response.status_code}\")\n\n# ===== CASCADEUR AI PHYSICS =====\n\"\"\"\nCascadeur - AI-assisted character animation\n- Auto-physics: Automatically adds realistic physics to keyframes\n- Auto-pose: AI suggests natural poses\n- Ragdoll: Physical simulation for reactions\n- Great for combat animation, parkour, weight shifts\n\"\"\""
+        }
+      ],
+      "learning_path": "AI texture generation -> Stable Diffusion for 3D -> AI upscaling (ESRGAN, Gigapixel) -> AI motion capture (DeepMotion, Move.ai) -> Cascadeur auto-physics -> AI lip sync (Audio2Face) -> AI rigging (AccuRig) -> NeRF photogrammetry -> Neural rendering (DLSS) -> Full AI-assisted pipeline"
+    },
+    {
+      "name": "Industry Asset Pipelines, USD & Production Standards",
+      "difficulty": "intermediate",
+      "explanation_simple": "Asset pipelines are the systems and processes that move 3D assets from creation tools to the final game or film. A AAA game asset goes through: concept art -> 3D modeling -> sculpting -> retopology -> UV mapping -> baking -> texturing -> rigging -> animation -> LOD creation -> engine import -> materials setup -> testing. Each step has specific standards (polygon counts, texture sizes, naming conventions). USD (Universal Scene Description) from Pixar is the industry standard for exchanging data between different 3D applications. It's like a universal language that Maya, Houdini, Katana, and Unreal Engine all understand.",
+      "key_concepts": [
+        "USD (Universal Scene Description): Pixar's open-source framework for 3D scene interchange",
+        "USD Layers: Non-destructive overrides (base model + variant layers for different LODs)",
+        "USD Composition: Combining assets from different sources into one scene",
+        "Alembic (.abc): Open format for animated geometry and particle caches",
+        "FBX: Common format for transferring assets between applications (limited compared to USD)",
+        "glTF: 'JPEG of 3D' - standard for real-time 3D on web and mobile",
+        "Asset Naming Conventions: Standardized names (weapon_sword_iron_v01, human_male_base_mesh)",
+        "Asset Validation: Automated checks (poly count, scale, naming, missing textures)",
+        "LOD Pipeline: Automatic generation of LODs from high-poly source",
+        "Texture Budget: Total texture memory per asset (e.g., 2x 2K textures per character)",
+        "Texel Density: Consistent pixels-per-unit across all assets in a project",
+        "Scene Optimization: Removing unseen faces, merging materials, reducing draw calls",
+        "Version Control for Assets: Perforce, Git LFS, or Subversion for binary files",
+        "Shotgun/FTrack: Production tracking software for managing asset pipelines",
+        "Render Farm: Network of computers that process render frames in parallel"
+      ],
+      "code_examples": [
+        {
+          "title": "Asset Pipeline Automation Scripts",
+          "code": "# ===== BLENDER: AUTO-EXPORT TO GAME ENGINE =====\nimport bpy\nimport os\n\ndef export_game_asset(mesh_name, output_dir, export_format='FBX'):\n    \"\"\"Export a Blender mesh to game engine format with LODs.\"\"\"\n\n    obj = bpy.data.objects.get(mesh_name)\n    if not obj:\n        print(f\"Object '{mesh_name}' not found\")\n        return\n\n    # Select and make active\n    bpy.context.view_layer.objects.active = obj\n    obj.select_set(True)\n\n    # Ensure scale is applied\n    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)\n\n    # Generate LODs\n    lods = [100, 50, 25, 10]  # Percent of original faces\n    for i, percentage in enumerate(lods):\n        # Create LOD by decimation\n        modifier = obj.modifiers.new(name=f\"LOD_{i}_Decimate\", type='DECIMATE')\n        modifier.ratio = percentage / 100.0\n\n        # Export each LOD\n        if export_format == 'FBX':\n            output_path = os.path.join(output_dir, f\"{obj.name}_LOD{i}.fbx\")\n            bpy.ops.export_scene.fbx(\n                filepath=output_path,\n                use_selection=True,\n                apply_scale_option='FBX_SCALE_UNITS',\n                mesh_smooth_type='FACE',\n                use_mesh_modifiers=True,\n                bake_anim=False\n            )\n            print(f\"Exported: {output_path}\")\n\n        # Remove the modifier before next LOD\n        obj.modifiers.remove(modifier)\n\n    print(f\"All LODs exported for {mesh_name}\")\n\n\n# ===== ASSET VALIDATION SCRIPT =====\ndef validate_game_asset(obj):\n    \"\"\"Check if an asset meets game-ready standards.\"\"\"\n    issues = []\n\n    # Check polygon count\n    face_count = len(obj.data.polygons)\n    if face_count > 50000:\n        issues.append(f\"High poly count: {face_count} (max 50K for hero asset)\")\n    elif face_count > 100000:\n        issues.append(f\"Extreme poly count: {face_count} (max 100K for cinematic)\")\n\n    # Check UVs exist\n    if not obj.data.uv_layers:\n        issues.append(\"No UV layers!\")\n\n    # Check UV overlap\n    # (basic check - full overlap check is more complex)\n    uv_layer = obj.data.uv_layers.active.data\n    uv_set = set()\n    for uv in uv_layer:\n        coord = (round(uv.uv.x, 4), round(uv.uv.y, 4))\n        uv_set.add(coord)\n    if len(uv_set) < len(uv_layer) * 0.5:\n        issues.append(\"UVs may be overlapping (many duplicate coordinates)\")\n\n    # Check scale\n    if abs(obj.scale.x - 1.0) > 0.01 or abs(obj.scale.y - 1.0) > 0.01 or abs(obj.scale.z - 1.0) > 0.01:\n        issues.append(f\"Scale not applied: ({obj.scale.x:.2f}, {obj.scale.y:.2f}, {obj.scale.z:.2f})\")\n\n    # Check materials\n    if not obj.material_slots:\n        issues.append(\"No materials assigned\")\n\n    # Check for ngons (faces with >4 vertices)\n    ngons = [p for p in obj.data.polygons if len(p.vertices) > 4]\n    if ngons:\n        issues.append(f\"{len(ngons)} ngon faces found (should be tris or quads)\")\n\n    # Check vertex normals\n    obj.data.calc_normals_split()\n    # Basic check - if normals are there\n\n    if issues:\n        print(f\"=== ASSET VALIDATION: {obj.name} ===\")\n        for issue in issues:\n            print(f\"  [!] {issue}\")\n    else:\n        print(f\"[OK] {obj.name} passes validation\")\n\n    return len(issues) == 0"
+        },
+        {
+          "title": "USD Pipeline: Export from Blender to Unreal",
+          "code": "# ===== USD EXPORT FROM BLENDER =====\nimport bpy\n\ndef export_to_usd(obj_name=\"Model\", output_path=\"//exports/model.usdc\"):\n    \"\"\"Export a Blender object as USD for Unreal Engine.\"\"\"\n\n    obj = bpy.data.objects.get(obj_name)\n    if not obj:\n        print(f\"Object '{obj_name}' not found\")\n        return\n\n    # Select the object\n    bpy.context.view_layer.objects.active = obj\n    obj.select_set(True)\n\n    # Set up USD export\n    bpy.ops.wm.usd_export(\n        filepath=output_path,\n        selected_objects_only=True,\n        export_materials=True,\n        export_uvmaps=True,\n        export_normals=True,\n        export_animation=False,\n        use_instancing=True,\n        export_textures=True,  # Embeds textures or references them\n        convert_orientation=True,  # Z-up to Y-up for Unreal\n        scale=100.0  # cm to m (if needed)\n    )\n\n    print(f\"Exported {obj_name} to USD: {output_path}\")\n\n# ===== USD LAYERS (Non-destructive overrides) =====\n\"\"\"\nUSD's layer system is revolutionary for pipelines:\n\nMain.usd (composite of all layers)\n    |\n    +-- Base.usda (base model - from modeling department)\n    |       - Geometry, base UVs\n    |\n    +-- Material_overrides.usda (from lookdev department)\n    |       - Overrides materials (without touching geometry)\n    |       - Non-destructive! Can be updated independently\n    |\n    +-- Animation.usda (from animation department)\n    |       - Overrides transform and bone animation\n    |\n    +-- Variant_LOD.usda (from tech art)\n            - Variant set for LOD switching\n            - Each variant selects different LOD mesh\n\nEach department can update their layer WITHOUT affecting others.\nThis is the big advantage over FBX where everything is baked.\n\"\"\"\n\n# Python: Create a USD layer override\nfrom pxr import Usd, UsdGeom, Sdf\n\ndef create_usd_variants(usd_path, variants):\n    \"\"\"Create variant sets for LOD switching.\"\"\"\n\n    stage = Usd.Stage.Open(usd_path)\n    prim = stage.GetPrimAtPath(\"/Root\")\n\n    # Create variant set\n    variant_set = prim.GetVariantSets().AddVariantSet(\"LOD\")\n\n    for name, filepath in variants.items():\n        variant_set.AddVariant(name)\n        variant_set.SetVariantSelection(name)\n\n        with variant_set.GetVariantEditContext():\n            # Reference the LOD mesh\n            prim.GetReferences().AddReference(filepath)\n\n    stage.GetRootLayer().Save()\n    print(f\"Created LOD variants: {list(variants.keys())}\")\n\n# Usage:\n# create_usd_variants(\"char.usdc\", {\n#     \"LOD0\": \"char_lod0.usdc\",\n#     \"LOD1\": \"char_lod1.usdc\",\n#     \"LOD2\": \"char_lod2.usdc\"\n# })"
+        }
+      ],
+      "learning_path": "Asset pipeline fundamentals -> Naming conventions -> FBX export/import -> LOD pipelines -> Texture budget management -> Asset validation -> USD basics -> USD layers -> USD composition -> Alembic cache -> Shotgun/FTrack production tracking -> Render farm management -> Full AAA pipeline design"
+    }
+  ]
+}

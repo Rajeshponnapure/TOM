@@ -1,0 +1,72 @@
+{
+  "domain": "Audio Engineering for Games",
+  "category": "game_dev",
+  "subcategory": "audio_engineering",
+  "description": "Complete game audio knowledge - spatial audio, middleware integration, procedural audio, adaptive music, and sound design",
+  "sections": [
+    {
+      "name": "Spatial Audio & 3D Sound",
+      "difficulty": "intermediate",
+      "explanation_simple": "Spatial audio makes sounds feel like they come from a specific direction. When an enemy is to your left, you hear the gunshot in your left ear, and it gets louder as you turn toward them. This works through HRTF (Head Related Transfer Function) - the shape of your ears and head changes how sound reaches your eardrums depending on direction. Game audio engines simulate this. It's the difference between 'hearing a sound' and 'feeling where that sound came from' - critical for immersion and competitive gaming.",
+      "key_concepts": [
+        "HRTF: How ear shape changes sound based on direction",
+        "Attenuation: Sound gets quieter over distance",
+        "Doppler Effect: Sound pitch changes as source moves past you (race cars, bullets)",
+        "Occlusion: Sound muffled when behind walls",
+        "Reverb Zones: Different echo in different rooms (cave vs hall)",
+        "Audio Raycasting: Tracing sound paths like light for realistic acoustics",
+        "Ambisonics: Full-sphere surround sound for VR"
+      ],
+      "code_examples": [
+        {
+          "title": "FMOD 3D Audio Integration",
+          "code": "#include \"fmod.hpp\"\n#include <cmath>\n\nclass Audio3DSystem {\n    FMOD::System* system;\n    FMOD::ChannelGroup* masterGroup;\n    FMOD::Sound* gunshotSound;\n    \npublic:\n    bool init() {\n        FMOD::System_Create(&system);\n        system->init(512, FMOD_INIT_NORMAL, nullptr);\n        system->createSound(\"gunshot.wav\", FMOD_3D | FMOD_LOOP_OFF, nullptr, &gunshotSound);\n        system->createChannelGroup(\"master\", &masterGroup);\n        return true;\n    }\n    \n    void playGunshotAt(const Vector3& position, const Vector3& velocity) {\n        FMOD::Channel* channel;\n        system->playSound(gunshotSound, masterGroup, false, &channel);\n        \n        // Set 3D attributes\n        FMOD_VECTOR pos = {position.x, position.y, position.z};\n        FMOD_VECTOR vel = {velocity.x, velocity.y, velocity.z};\n        channel->set3DAttributes(&pos, &vel);\n        \n        // Set minimum/maximum distance for attenuation\n        channel->set3DMinMaxDistance(1.0f, 10000.0f);\n    }\n    \n    void update(const Vector3& listenerPos, const Vector3& listenerForward,\n                const Vector3& listenerUp, const Vector3& listenerVel) {\n        FMOD_VECTOR pos = {listenerPos.x, listenerPos.y, listenerPos.z};\n        FMOD_VECTOR fwd = {listenerForward.x, listenerForward.y, listenerForward.z};\n        FMOD_VECTOR up = {listenerUp.x, listenerUp.y, listenerUp.z};\n        FMOD_VECTOR vel = {listenerVel.x, listenerVel.y, listenerVel.z};\n        \n        system->set3DListenerAttributes(0, &pos, &vel, &fwd, &up);\n        system->update();\n    }\n    \n    void setOcclusion(FMOD::Channel* channel, float occlusionFactor) {\n        // Low-pass filter when sound is behind walls\n        float cutoff = 20000.0f * (1.0f - occlusionFactor);\n        channel->setLowPassGain(occlusionFactor);\n    }\n};"
+        }
+      ],
+      "learning_path": "Understanding 3D sound -> Attenuation curves -> HRTF basics -> FMOD/Wwise setup -> 3D positioning -> Occlusion/obstruction -> Reverb zones"
+    },
+    {
+      "name": "Adaptive Music Systems",
+      "difficulty": "intermediate",
+      "explanation_simple": "Adaptive music changes based on what's happening in the game. When you're fighting a boss, the music gets intense. When you enter a calm village, it becomes peaceful. When enemies are chasing you, drums kick in. This is done in two ways: 1) Horizontal resequencing - swapping between different music tracks (exploration, combat, boss), and 2) Vertical layering - adding/subtracting instrument layers (just strings, then add drums, then add brass). Games like Zelda: Breath of the Wild and DOOM use adaptive music brilliantly.",
+      "key_concepts": [
+        "Horizontal Resequencing: Switching between different composed segments",
+        "Vertical Layering: Adding/removing instrument tracks on the fly",
+        "Stingers: Short musical hits for events (level up, enemy death, discovery)",
+        "Transition: Music that plays when switching between states",
+        "Beat Matching: Keeping musical timing when switching layers",
+        "MIDI vs Audio: MIDI is synthesized (more flexible), audio is pre-recorded (higher quality)",
+        "FMOD Event System: Game triggers events, audio middleware handles transitions"
+      ],
+      "code_examples": [
+        {
+          "title": "Wwise Adaptive Music Setup",
+          "code": "// Wwise uses States and RTPCs to control music\n// Here's the Unity C# integration:\n\nusing UnityEngine;\nusing System.Collections;\n\npublic class AdaptiveMusicManager : MonoBehaviour\n{\n    [Header(\"Music Parameters\")]\n    public float combatIntensity = 0f;  // 0 = calm, 1 = intense\n    public bool isInExploration = true;\n    public bool isInCombat = false;\n    public bool isInBossFight = false;\n    \n    [Header(\"Wwise Events\")]\n    public AK.Wwise.Event musicPlayEvent;\n    public AK.Wwise.Event musicStopEvent;\n    \n    // Wwise State Groups\n    public AK.Wwise.State explorationState;\n    public AK.Wwise.State combatState;\n    public AK.Wwise.State bossState;\n    \n    void Start()\n    {\n        musicPlayEvent.Post(gameObject);\n        \n        // Start in exploration\n        explorationState.SetValue();\n        \n        // Set initial intensity\n        AkSoundEngine.SetRTPCValue(\"MusicIntensity\", 0f);\n    }\n    \n    void Update()\n    {\n        // Check game state and switch music\n        if (isInBossFight)\n        {\n            bossState.SetValue();\n            AkSoundEngine.SetRTPCValue(\"MusicIntensity\", 1f);\n        }\n        else if (isInCombat)\n        {\n            combatState.SetValue();\n            AkSoundEngine.SetRTPCValue(\"MusicIntensity\", combatIntensity);\n        }\n        else\n        {\n            explorationState.SetValue();\n            // Gradual fade down intensity\n            combatIntensity = Mathf.Lerp(combatIntensity, 0f, Time.deltaTime * 2f);\n            AkSoundEngine.SetRTPCValue(\"MusicIntensity\", combatIntensity);\n        }\n    }\n    \n    // Called by enemy detection\n    public void OnCombatStarted(float intensity)\n    {\n        isInCombat = true;\n        combatIntensity = intensity;\n        \n        // Trigger combat sting\n        AkSoundEngine.PostEvent(\"Combat_Stinger\", gameObject);\n    }\n    \n    public void OnCombatEnded()\n    {\n        isInCombat = false;\n        \n        // Play resolution sting\n        AkSoundEngine.PostEvent(\"Combat_Resolved\", gameObject);\n    }\n    \n    void OnDestroy()\n    {\n        musicStopEvent.Post(gameObject);\n    }\n}"
+        }
+      ],
+      "learning_path": "Understanding music theory basics -> Horizontal resequencing -> Vertical layering -> Middleware integration (FMOD/Wwise) -> Stingers and transitions -> Real-time mixing"
+    },
+    {
+      "name": "Sound Design for Games",
+      "difficulty": "intermediate",
+      "explanation_simple": "Sound design is creating all the audio in a game - not just music, but every footstep, gunshot, UI click, and ambient bird chirp. Good sound design is invisible (you don't notice it), but bad sound design makes the game feel 'off'. Every action in a game needs a matching sound. The trick is layering - a single gunshot might be 3-5 sounds mixed together: the initial crack, the mechanical slide, the shell casing hitting the ground, and the reverb from the room. Sound designers record real sounds (foley) or synthesize them.",
+      "key_concepts": [
+        "Foley: Recording real-world sounds for game use",
+        "Layering: Combining multiple sounds to create one rich sound",
+        "Sound Synthesis: Creating sounds with oscillators, filters, envelopes",
+        "Granular Synthesis: Slicing sound into tiny grains, rearranging them",
+        "Compression: Making sounds sit well together in the mix",
+        "EQ: Shaping frequencies (bass, mids, treble)",
+        "Reverb: Adding space/room feel to sounds",
+        "Dynamic Range: Difference between quietest and loudest sounds"
+      ],
+      "code_examples": [
+        {
+          "title": "Procedural Sound Synthesis in C++",
+          "code": "#include <vector>\n#include <cmath>\n#include <fstream>\n#include <iostream>\n\nstruct WavHeader {\n    char riff[4] = {'R', 'I', 'F', 'F'};\n    int fileSize;\n    char wave[4] = {'W', 'A', 'V', 'E'};\n    char fmt[4] = {'f', 'm', 't', ' '};\n    int fmtSize = 16;\n    short audioFormat = 1;\n    short numChannels = 1;\n    int sampleRate = 44100;\n    int byteRate;\n    short blockAlign;\n    short bitsPerSample = 16;\n    char data[4] = {'d', 'a', 't', 'a'};\n    int dataSize;\n};\n\n// Synthesize a gunshot sound procedurally\nstd::vector<short> synthesizeGunshot(float duration = 0.5f) {\n    int sampleRate = 44100;\n    int numSamples = (int)(duration * sampleRate);\n    std::vector<short> samples(numSamples);\n    \n    for (int i = 0; i < numSamples; ++i) {\n        float t = (float)i / sampleRate;\n        float envelope;\n        \n        // Attack: very fast pop\n        if (t < 0.01f) {\n            envelope = t / 0.01f;\n        }\n        // Decay: quick fade\n        else {\n            envelope = exp(-t * 20.0f);\n        }\n        \n        // Noise burst (white noise through envelope)\n        float noise = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;\n        \n        // Low-pass filter to make it sound like a gun (not static)\n        static float lastSample = 0;\n        float filtered = lastSample + 0.3f * (noise - lastSample);\n        lastSample = filtered;\n        \n        // Add some low-frequency thump\n        float thump = sin(80.0f * 3.14159f * 2.0f * t) * exp(-t * 15.0f);\n        \n        float sample = (filtered * 0.7f + thump * 0.3f) * envelope * 0.8f;\n        samples[i] = (short)(sample * 32767);\n    }\n    \n    return samples;\n}\n\nvoid saveWav(const std::string& filename, const std::vector<short>& samples, int sampleRate) {\n    WavHeader header;\n    header.dataSize = samples.size() * sizeof(short);\n    header.fileSize = sizeof(WavHeader) - 8 + header.dataSize;\n    header.byteRate = sampleRate * sizeof(short);\n    header.blockAlign = sizeof(short);\n    \n    std::ofstream file(filename, std::ios::binary);\n    file.write((char*)&header, sizeof(header));\n    file.write((char*)samples.data(), header.dataSize);\n}\n\nint main() {\n    auto gunshot = synthesizeGunshot(0.5f);\n    saveWav(\"gunshot.wav\", gunshot, 44100);\n    std::cout << \"Generated gunshot.wav from pure code!\\n\";\n    return 0;\n}"
+        }
+      ],
+      "learning_path": "Sound theory basics (frequency, amplitude) -> Recording and editing -> Foley techniques -> Synthesis -> Layering -> Mixing/EQ/Compression -> Implementing in game engine"
+    }
+  ]
+}

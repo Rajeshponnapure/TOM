@@ -1,0 +1,42 @@
+# ── Secrets — NEVER commit ─────────────────────────────
+.env
+*credentials*.json
+*token*.json
+*.pem
+*.key
+
+# ── Python ─────────────────────────────────────────────
+__pycache__/
+*.pyc
+venv/
+.pytest_cache/
+
+# ── Build output ───────────────────────────────────────
+build/
+dist/
+dist_updated/
+*.exe
+*.spec.bak
+*.py.bak
+
+# ── Runtime state / logs ───────────────────────────────
+tom_logs/
+*.pid
+.cache/
+tom_brain/chroma_db/
+
+# ── Archives / backups ─────────────────────────────────
+*.zip
+
+# ── Vendored third-party repo (has its own .git; not tracked here) ──
+awesome-claude-skills/
+
+# ── Runtime state / personal data ──────────────────────
+tom_brain/
+output/
+.claude/
+.sixth/
+
+# ── OS noise ───────────────────────────────────────────
+Thumbs.db
+.DS_Store

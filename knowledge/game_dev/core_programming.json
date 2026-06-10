@@ -1,0 +1,204 @@
+﻿{
+  "domain": "Core Programming for Games",
+  "category": "game_dev",
+  "subcategory": "core_programming",
+  "description": "Complete programming knowledge for game development - from zero to AAA",
+  "teaching_plan": {
+    "lesson_1": {
+      "title": "Your First Game Program",
+      "concepts": ["What is a variable", "What is a function", "The game loop", "Printing to screen"],
+      "projects": ["Print 'Hello Game Dev!' to console", "Make a number guessing game"]
+    },
+    "lesson_2": {
+      "title": "Making Things Move",
+      "concepts": ["Coordinates (x,y,z)", "Vectors", "Delta time", "Velocity"],
+      "projects": ["Move a dot on screen with WASD", "Make a ball bounce off walls"]
+    },
+    "lesson_3": {
+      "title": "Objects in Games",
+      "concepts": ["Classes and structs", "Components", "Inheritance", "Polymorphism"],
+      "projects": ["Create Player, Enemy, Bullet classes", "Build a simple ECS system"]
+    },
+    "lesson_4": {
+      "title": "Memory & Performance",
+      "concepts": ["Stack vs heap", "Pointers", "References", "RAII", "Smart pointers"],
+      "projects": ["Write a memory pool allocator", "Fix memory leaks in a demo project"]
+    },
+    "lesson_5": {
+      "title": "Game Math",
+      "concepts": ["Vectors", "Matrices", "Quaternions", "Lerp", "Dot/cross products"],
+      "projects": ["Build a 3D math library", "Implement a camera class"]
+    },
+    "lesson_6": {
+      "title": "Multiplayer Programming",
+      "concepts": ["TCP vs UDP", "Serialization", "Client prediction", "Server reconciliation"],
+      "projects": ["Build a simple chat server", "Implement rollback netcode"]
+    }
+  },
+  "sections": [
+    {
+      "name": "C++ for Games",
+      "difficulty": "beginner",
+      "explanation_simple": "C++ is like the engine of a race car - it's powerful, fast, and gives you total control. Most AAA games like Fortnite, Call of Duty, and Unreal Engine are written in C++. Think of it as the 'professional sports car' of programming languages - harder to drive than an automatic (like Python), but way faster when you know what you're doing.",
+      "key_concepts": [
+        "Variables store data (int health = 100;)",
+        "Functions are reusable blocks of code",
+        "Classes are blueprints for objects",
+        "Pointers store memory addresses (& and *)",
+        "The game loop runs 60 times per second",
+        "Smart pointers prevent memory leaks",
+        "STL provides ready-made data structures",
+        "Move semantics transfer resources efficiently"
+      ],
+      "code_examples": [
+        {
+          "title": "The Game Loop - Heart of Every Game",
+          "code": "#include <iostream>\n#include <chrono>\n#include <thread>\n\nclass Game {\npublic:\n    bool running = true;\n    \n    void processInput() {\n        std::cout << \"Checking for keyboard/mouse input...\\n\";\n    }\n    \n    void update(float deltaTime) {\n        std::cout << \"Updating game world (\" << deltaTime << \"s passed)\\n\";\n    }\n    \n    void render() {\n        std::cout << \"Drawing frame to screen\\n\";\n    }\n    \n    void run() {\n        auto previousTime = std::chrono::high_resolution_clock::now();\n        \n        while (running) {\n            auto currentTime = std::chrono::high_resolution_clock::now();\n            float deltaTime = std::chrono::duration<float>(currentTime - previousTime).count();\n            previousTime = currentTime;\n            \n            processInput();\n            update(deltaTime);\n            render();\n            \n            std::this_thread::sleep_for(std::chrono::milliseconds(16));\n        }\n    }\n};\n\nint main() {\n    Game game;\n    game.run();\n    return 0;\n}"
+        },
+        {
+          "title": "Vector Math for Game Movement",
+          "code": "#include <cmath>\n\nstruct Vector3 {\n    float x, y, z;\n    \n    Vector3(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}\n    \n    Vector3 operator+(const Vector3& other) const {\n        return Vector3(x + other.x, y + other.y, z + other.z);\n    }\n    \n    Vector3 operator*(float scalar) const {\n        return Vector3(x * scalar, y * scalar, z * scalar);\n    }\n    \n    float dot(const Vector3& other) const {\n        return x * other.x + y * other.y + z * other.z;\n    }\n    \n    Vector3 cross(const Vector3& other) const {\n        return Vector3(\n            y * other.z - z * other.y,\n            z * other.x - x * other.z,\n            x * other.y - y * other.x\n        );\n    }\n    \n    float length() const {\n        return std::sqrt(x * x + y * y + z * z);\n    }\n    \n    Vector3 normalize() const {\n        float len = length();\n        if (len > 0) return *this * (1.0f / len);\n        return *this;\n    }\n};\n\nstruct Transform {\n    Vector3 position;\n    Vector3 rotation;\n    Vector3 scale;\n    \n    void moveForward(float speed, float deltaTime) {\n        position.z -= speed * deltaTime;\n    }\n    \n    void moveRight(float speed, float deltaTime) {\n        position.x += speed * deltaTime;\n    }\n};"
+        },
+        {
+          "title": "Entity Component System (ECS)",
+          "code": "#include <vector>\n#include <unordered_map>\n#include <memory>\n#include <iostream>\n\n// ECS Core Types\nusing EntityID = uint32_t;\nusing ComponentType = uint32_t;\n\n// Base Component\nstruct Component {\n    virtual ~Component() = default;\n};\n\n// Concrete Components\nstruct Position : Component {\n    float x = 0, y = 0;\n    Position(float x = 0, float y = 0) : x(x), y(y) {}\n};\n\nstruct Velocity : Component {\n    float vx = 0, vy = 0;\n    Velocity(float vx = 0, float vy = 0) : vx(vx), vy(vy) {}\n};\n\nstruct Health : Component {\n    int hp = 100;\n    int maxHp = 100;\n    Health(int hp = 100) : hp(hp), maxHp(hp) {}\n};\n\nstruct Renderable : Component {\n    char symbol = '?';\n    Renderable(char s = '?') : symbol(s) {}\n};\n\n// The Entity Manager\nclass EntityManager {\n    EntityID nextId = 0;\n    std::unordered_map<EntityID, std::unordered_map<ComponentType, std::unique_ptr<Component>>> entities;\n    \npublic:\n    EntityID createEntity() {\n        EntityID id = nextId++;\n        entities[id] = {};\n        return id;\n    }\n    \n    template<typename T, typename... Args>\n    void addComponent(EntityID entity, Args&&... args) {\n        entities[entity][getComponentType<T>()] = std::make_unique<T>(std::forward<Args>(args)...);\n    }\n    \n    template<typename T>\n    T* getComponent(EntityID entity) {\n        auto& components = entities[entity];\n        auto it = components.find(getComponentType<T>());\n        if (it != components.end()) {\n            return static_cast<T*>(it->second.get());\n        }\n        return nullptr;\n    }\n    \n    template<typename T>\n    std::vector<EntityID> getAllWith() {\n        std::vector<EntityID> result;\n        for (auto& [id, components] : entities) {\n            if (components.count(getComponentType<T>())) {\n                result.push_back(id);\n            }\n        }\n        return result;\n    }\n    \nprivate:\n    template<typename T>\n    static ComponentType getComponentType() {\n        static ComponentType type = nextComponentType++;\n        return type;\n    }\n    static ComponentType nextComponentType;\n};\nComponentType EntityManager::nextComponentType = 0;\n\n// Systems\nvoid movementSystem(EntityManager& em, float dt) {\n    for (auto id : em.getAllWith<Velocity>()) {\n        auto* pos = em.getComponent<Position>(id);\n        auto* vel = em.getComponent<Velocity>(id);\n        if (pos && vel) {\n            pos->x += vel->vx * dt;\n            pos->y += vel->vy * dt;\n        }\n    }\n}\n\nvoid renderSystem(EntityManager& em) {\n    for (auto id : em.getAllWith<Renderable>()) {\n        auto* pos = em.getComponent<Position>(id);\n        auto* ren = em.getComponent<Renderable>(id);\n        if (pos && ren) {\n            std::cout << ren->symbol << \" at (\" << pos->x << \", \" << pos->y << \")\\n\";\n        }\n    }\n}\n\nint main() {\n    EntityManager em;\n    \n    auto player = em.createEntity();\n    em.addComponent<Position>(player, 0, 0);\n    em.addComponent<Velocity>(player, 5, 3);\n    em.addComponent<Renderable>(player, '@');\n    em.addComponent<Health>(player);\n    \n    auto enemy = em.createEntity();\n    em.addComponent<Position>(enemy, 100, 100);\n    em.addComponent<Velocity>(enemy, -2, -1);\n    em.addComponent<Renderable>(enemy, 'E');\n    \n    for (int frame = 0; frame < 5; ++frame) {\n        std::cout << \"Frame \" << frame << \":\\n\";\n        movementSystem(em, 0.016f);\n        renderSystem(em);\n        std::cout << \"\\n\";\n    }\n    return 0;\n}"
+        }
+      ],
+      "learning_path": "Learn C basics first (variables, loops, functions) -> C++ classes and objects -> Pointers and memory -> STL containers -> Game loop implementation -> Build small games (Pong, Snake) -> Study ECS patterns -> Study game engine source code"
+    },
+    {
+      "name": "C# for Unity",
+      "difficulty": "beginner",
+      "explanation_simple": "C# is like C++'s younger cousin that's safer and easier to use. Unity uses C# for all game logic. If C++ is a manual sports car, C# is an automatic - you still get great performance but you don't have to worry about memory leaks as much. Unity handles all the hard graphics stuff, you just tell it what to do with C# scripts.",
+      "key_concepts": [
+        "MonoBehaviour is the base class for all game scripts",
+        "Awake() runs once when object is created",
+        "Start() runs once before first Update",
+        "Update() runs every frame (60 times/second)",
+        "FixedUpdate() runs at fixed intervals (good for physics)",
+        "GameObject is everything in the scene",
+        "GetComponent<T>() gets components attached to an object",
+        "Instantiate() creates copies of objects",
+        "Coroutines let you spread code over time",
+        "Serialization shows variables in the Unity Inspector"
+      ],
+      "code_examples": [
+        {
+          "title": "Unity FPS Character Controller",
+          "code": "using UnityEngine;\n\npublic class PlayerController : MonoBehaviour\n{\n    [Header(\"Movement Settings\")]\n    public float walkSpeed = 5f;\n    public float sprintSpeed = 10f;\n    public float jumpForce = 5f;\n    public float mouseSensitivity = 2f;\n    \n    [Header(\"References\")]\n    public Camera playerCamera;\n    public Transform groundCheck;\n    public float groundDistance = 0.4f;\n    public LayerMask groundMask;\n    \n    private Rigidbody rb;\n    private float xRotation = 0f;\n    private bool isGrounded;\n    private Vector3 velocity;\n    private float currentSpeed;\n    \n    void Awake()\n    {\n        rb = GetComponent<Rigidbody>();\n        Cursor.lockState = CursorLockMode.Locked;\n    }\n    \n    void Update()\n    {\n        // Mouse look\n        float mouseX = Input.GetAxis(\"Mouse X\") * mouseSensitivity;\n        float mouseY = Input.GetAxis(\"Mouse Y\") * mouseSensitivity;\n        \n        xRotation -= mouseY;\n        xRotation = Mathf.Clamp(xRotation, -90f, 90f);\n        \n        playerCamera.transform.localRotation = Quaternion.Euler(xRotation, 0f, 0f);\n        transform.Rotate(Vector3.up * mouseX);\n        \n        // Jump\n        isGrounded = Physics.CheckSphere(groundCheck.position, groundDistance, groundMask);\n        \n        if (Input.GetButtonDown(\"Jump\") && isGrounded)\n        {\n            velocity.y = Mathf.Sqrt(jumpForce * -2f * Physics.gravity.y);\n        }\n    }\n    \n    void FixedUpdate()\n    {\n        // Movement (in FixedUpdate for physics consistency)\n        float x = Input.GetAxis(\"Horizontal\");\n        float z = Input.GetAxis(\"Vertical\");\n        \n        Vector3 move = transform.right * x + transform.forward * z;\n        currentSpeed = Input.GetKey(KeyCode.LeftShift) ? sprintSpeed : walkSpeed;\n        \n        Vector3 targetVelocity = move * currentSpeed;\n        targetVelocity.y = rb.velocity.y;\n        rb.velocity = targetVelocity;\n    }\n    \n    public void TakeDamage(int damage)\n    {\n        // Called by enemy bullets, traps, etc.\n        Debug.Log($\"Player took {damage} damage!\");\n    }\n}"
+        },
+        {
+          "title": "Unity Weapon System",
+          "code": "using UnityEngine;\n\npublic class Weapon : MonoBehaviour\n{\n    [Header(\"Weapon Stats\")]\n    public string weaponName = \"Pistol\";\n    public float fireRate = 0.5f;\n    public int maxAmmo = 12;\n    public float reloadTime = 1.5f;\n    public float damage = 25f;\n    public float range = 100f;\n    \n    [Header(\"References\")]\n    public Transform firePoint;\n    public GameObject bulletPrefab;\n    public ParticleSystem muzzleFlash;\n    public AudioClip shootSound;\n    \n    private int currentAmmo;\n    private float nextFireTime = 0f;\n    private bool isReloading = false;\n    private AudioSource audioSource;\n    \n    void Awake()\n    {\n        currentAmmo = maxAmmo;\n        audioSource = GetComponent<AudioSource>();\n    }\n    \n    void Update()\n    {\n        if (isReloading) return;\n        \n        if (currentAmmo <= 0 && Input.GetButtonDown(\"Fire1\"))\n        {\n            StartCoroutine(Reload());\n            return;\n        }\n        \n        if (Input.GetButtonDown(\"Fire1\") && Time.time >= nextFireTime)\n        {\n            nextFireTime = Time.time + fireRate;\n            Shoot();\n        }\n        \n        if (Input.GetKeyDown(KeyCode.R))\n        {\n            StartCoroutine(Reload());\n        }\n    }\n    \n    void Shoot()\n    {\n        currentAmmo--;\n        \n        // Visual effects\n        if (muzzleFlash) muzzleFlash.Play();\n        if (shootSound && audioSource) audioSource.PlayOneShot(shootSound);\n        \n        // Create bullet\n        GameObject bullet = Instantiate(bulletPrefab, firePoint.position, firePoint.rotation);\n        \n        // Raycast for hit detection\n        RaycastHit hit;\n        if (Physics.Raycast(firePoint.position, firePoint.forward, out hit, range))\n        {\n            var target = hit.transform.GetComponent<IDamageable>();\n            if (target != null)\n            {\n                target.TakeDamage(damage);\n            }\n            \n            // Spawn impact effect\n            Debug.Log($\"Hit {hit.transform.name} at {hit.point}\");\n        }\n    }\n    \n    System.Collections.IEnumerator Reload()\n    {\n        isReloading = true;\n        Debug.Log($\"Reloading {weaponName}...\");\n        yield return new WaitForSeconds(reloadTime);\n        currentAmmo = maxAmmo;\n        isReloading = false;\n    }\n}\n\n// Interface for anything that can take damage\npublic interface IDamageable\n{\n    void TakeDamage(float amount);\n}"
+        },
+        {
+          "title": "Unity Game Manager (Singleton Pattern)",
+          "code": "using UnityEngine;\nusing UnityEngine.SceneManagement;\n\npublic class GameManager : MonoBehaviour\n{\n    public static GameManager Instance { get; private set; }\n    \n    [Header(\"Game State\")]\n    public int currentLevel = 1;\n    public int playerScore = 0;\n    public int playerLives = 3;\n    public float gameTime = 0f;\n    \n    [Header(\"Settings\")]\n    public bool isPaused = false;\n    \n    private void Awake()\n    {\n        // Singleton pattern - only one GameManager exists\n        if (Instance != null && Instance != this)\n        {\n            Destroy(gameObject);\n            return;\n        }\n        Instance = this;\n        DontDestroyOnLoad(gameObject); // Persist across scenes\n    }\n    \n    private void Update()\n    {\n        if (!isPaused)\n            gameTime += Time.deltaTime;\n        \n        if (Input.GetKeyDown(KeyCode.Escape))\n            TogglePause();\n    }\n    \n    public void AddScore(int points)\n    {\n        playerScore += points;\n        UIManager.Instance.UpdateScoreDisplay(playerScore);\n    }\n    \n    public void PlayerDied()\n    {\n        playerLives--;\n        if (playerLives <= 0)\n            GameOver();\n        else\n            RespawnPlayer();\n    }\n    \n    void GameOver()\n    {\n        Debug.Log(\"Game Over! Final Score: \" + playerScore);\n        SceneManager.LoadScene(\"GameOver\");\n    }\n    \n    void RespawnPlayer()\n    {\n        SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);\n    }\n    \n    public void TogglePause()\n    {\n        isPaused = !isPaused;\n        Time.timeScale = isPaused ? 0f : 1f;\n    }\n}"
+        }
+      ],
+      "learning_path": "Unity Learn tutorials -> C# basics (variables, if/else, loops) -> MonoBehaviour methods -> Simple 2D game -> 3D movement -> Physics -> UI -> Audio -> Build a complete game"
+    },
+    {
+      "name": "HLSL & Shader Programming",
+      "difficulty": "intermediate",
+      "explanation_simple": "Shaders are tiny programs that run on your GPU (graphics card) to draw every single pixel on screen. While regular code runs on the CPU, shaders run THOUSANDS of times in parallel. Think of it like this: if normal programming is giving instructions to one chef, shader programming is giving instructions to 1000 chefs all cooking at once. That's why games can render millions of pixels 60 times per second.",
+      "key_concepts": [
+        "Vertex shader transforms 3D positions to screen positions",
+        "Pixel/Fragment shader colors each pixel",
+        "HLSL is the shader language for DirectX (Xbox, PC)",
+        "GLSL is for OpenGL (cross-platform)",
+        "Metal Shading Language is for Apple devices",
+        "Compute shaders do general-purpose GPU work",
+        "Semantics like SV_POSITION connect shader stages",
+        "GPU runs thousands of threads in parallel (SIMT)"
+      ],
+      "code_examples": [
+        {
+          "title": "Basic HLSL Vertex & Pixel Shader",
+          "code": "// Vertex shader input\nstruct VertexInput {\n    float3 position : POSITION;\n    float3 normal : NORMAL;\n    float2 uv : TEXCOORD0;\n};\n\n// Vertex shader output / Pixel shader input\nstruct VertexOutput {\n    float4 position : SV_POSITION;\n    float3 worldNormal : TEXCOORD0;\n    float2 uv : TEXCOORD1;\n    float3 worldPos : TEXCOORD2;\n};\n\n// Constant buffer (like a uniform in GLSL)\ncbuffer PerFrame : register(b0) {\n    float4x4 worldMatrix;\n    float4x4 viewProjectionMatrix;\n    float4 lightDirection;\n    float4 lightColor;\n    float4 ambientColor;\n};\n\nVertexOutput vs_main(VertexInput input) {\n    VertexOutput output;\n    \n    // Transform position to world space\n    float4 worldPos = mul(float4(input.position, 1.0), worldMatrix);\n    output.position = mul(worldPos, viewProjectionMatrix);\n    output.worldPos = worldPos.xyz;\n    \n    // Transform normal to world space\n    output.worldNormal = normalize(mul(input.normal, (float3x3)worldMatrix));\n    output.uv = input.uv;\n    \n    return output;\n}\n\nfloat4 ps_main(VertexOutput input) : SV_TARGET {\n    // Simple diffuse lighting\n    float3 normal = normalize(input.worldNormal);\n    float3 lightDir = normalize(-lightDirection.xyz);\n    \n    float NdotL = max(0.0, dot(normal, lightDir));\n    \n    float3 diffuse = lightColor.rgb * NdotL;\n    float3 finalColor = ambientColor.rgb + diffuse;\n    \n    return float4(finalColor, 1.0);\n}"
+        },
+        {
+          "title": "Unity Shader Graph Equivalent (HLSL)",
+          "code": "// Unity's shader file format (.shader)\nShader \"Custom/PBRStandard\"\n{\n    Properties\n    {\n        _MainTex (\"Albedo (RGB)\", 2D) = \"white\" {}\n        _Metallic (\"Metallic\", Range(0,1)) = 0.0\n        _Smoothness (\"Smoothness\", Range(0,1)) = 0.5\n    }\n    \n    SubShader\n    {\n        Tags { \"RenderType\"=\"Opaque\" }\n        \n        CGPROGRAM\n        #pragma surface surf Standard fullforwardshadows\n        #pragma target 3.0\n        \n        sampler2D _MainTex;\n        half _Metallic;\n        half _Smoothness;\n        \n        struct Input\n        {\n            float2 uv_MainTex;\n        };\n        \n        void surf(Input IN, inout SurfaceOutputStandard o)\n        {\n            fixed4 c = tex2D(_MainTex, IN.uv_MainTex);\n            o.Albedo = c.rgb;\n            o.Metallic = _Metallic;\n            o.Smoothness = _Smoothness;\n            o.Alpha = c.a;\n        }\n        ENDCG\n    }\n    FallBack \"Diffuse\"\n}"
+        },
+        {
+          "title": "Compute Shader - GPU Particle System",
+          "code": "#version 450 core\n\n// GLSL Compute Shader for particle simulation\n// This runs on the GPU in parallel for thousands of particles\n\nlayout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;\n\nstruct Particle {\n    vec3 position;\n    vec3 velocity;\n    vec4 color;\n    float lifetime;\n    float maxLifetime;\n    float size;\n};\n\nlayout(std430, binding = 0) buffer ParticleBuffer {\n    Particle particles[];\n};\n\nlayout(std140, binding = 1) uniform SimParams {\n    vec3 gravity;\n    float deltaTime;\n    vec3 emitterPosition;\n    float spawnRate;\n    uint particleCount;\n    float time;\n};\n\nvoid main() {\n    uint index = gl_GlobalInvocationID.x;\n    if (index >= particleCount) return;\n    \n    Particle p = particles[index];\n    \n    // Update lifetime\n    p.lifetime -= deltaTime;\n    \n    if (p.lifetime <= 0.0) {\n        // Respawn particle at emitter\n        p.position = emitterPosition;\n        p.velocity = vec3(\n            (float(gl_GlobalInvocationID.x & 0xFF) / 255.0 - 0.5) * 10.0,\n            5.0 + (float((gl_GlobalInvocationID.x >> 8) & 0xFF) / 255.0) * 5.0,\n            (float((gl_GlobalInvocationID.x >> 16) & 0xFF) / 255.0 - 0.5) * 10.0\n        );\n        p.lifetime = p.maxLifetime;\n        p.color = vec4(1.0, 0.5, 0.0, 1.0);\n    } else {\n        // Apply physics\n        p.velocity += gravity * deltaTime;\n        p.position += p.velocity * deltaTime;\n        \n        // Fade out as particle ages\n        float age = 1.0 - (p.lifetime / p.maxLifetime);\n        p.color.a = 1.0 - age;\n        p.size = 1.0 + age * 2.0;\n    }\n    \n    particles[index] = p;\n}"
+        }
+      ],
+      "learning_path": "Learn how GPUs work -> Basic vertex/pixel shaders -> Lighting models (Phong, PBR) -> Post-processing effects -> Compute shaders -> Advanced techniques (tessellation, geometry shaders)"
+    },
+    {
+      "name": "Rust for Games",
+      "difficulty": "intermediate",
+      "explanation_simple": "Rust is the new hotness in game development. It's like C++ but with a safety guarantee - the compiler prevents you from making memory mistakes (which cause 70% of serious game bugs). Think of Rust as C++'s strict but helpful older sibling who won't let you crash the car. Companies like Embark Studios are building AAA games in Rust right now.",
+      "key_concepts": [
+        "Ownership - every value has exactly one owner",
+        "Borrowing - references without taking ownership (& and &mut)",
+        "Lifetimes - compiler tracks how long references are valid",
+        "No null pointers - Option<T> instead",
+        "No dangling pointers - ownership system prevents them",
+        "Traits are like interfaces in C++/Java",
+        "Pattern matching with match statements",
+        "Cargo is the build system and package manager",
+        "WASM compilation - run Rust games in browser",
+        "unsafe code for low-level control when needed"
+      ],
+      "code_examples": [
+        {
+          "title": "Rust Game Loop with bevy ECS",
+          "code": "use bevy::prelude::*;\n\n// Components (data)\n#[derive(Component)]\nstruct Player {\n    speed: f32,\n    health: i32,\n}\n\n#[derive(Component)]\nstruct Position {\n    x: f32,\n    y: f32,\n}\n\n#[derive(Component)]\nstruct Velocity {\n    x: f32,\n    y: f32,\n}\n\n// Systems (logic)\nfn player_movement(\n    keyboard: Res<Input<KeyCode>>,\n    mut query: Query<(&Player, &mut Position)>,\n    time: Res<Time>,\n) {\n    for (player, mut position) in query.iter_mut() {\n        let mut dx = 0.0;\n        let mut dy = 0.0;\n        \n        if keyboard.pressed(KeyCode::W) { dy += 1.0; }\n        if keyboard.pressed(KeyCode::S) { dy -= 1.0; }\n        if keyboard.pressed(KeyCode::A) { dx -= 1.0; }\n        if keyboard.pressed(KeyCode::D) { dx += 1.0; }\n        \n        // Normalize diagonal movement\n        if dx != 0.0 && dy != 0.0 {\n            let inv = std::f32::consts::FRAC_1_SQRT_2;\n            dx *= inv;\n            dy *= inv;\n        }\n        \n        position.x += dx * player.speed * time.delta_seconds();\n        position.y += dy * player.speed * time.delta_seconds();\n    }\n}\n\nfn main() {\n    App::new()\n        .add_plugins(DefaultPlugins)\n        .add_system(player_movement)\n        .add_startup_system(setup)\n        .run();\n}\n\nfn setup(mut commands: Commands) {\n    commands.spawn(Camera2dBundle::default());\n    \n    commands.spawn((\n        Player { speed: 300.0, health: 100 },\n        Position { x: 0.0, y: 0.0 },\n        Velocity { x: 0.0, y: 0.0 },\n    ));\n}"
+        }
+      ],
+      "learning_path": "Learn Rust basics (variables, functions) -> Ownership and borrowing -> Structs and enums -> Traits and generics -> Error handling -> Bevy game engine -> WASM deployment"
+    },
+    {
+      "name": "Game Mathematics",
+      "difficulty": "intermediate",
+      "explanation_simple": "Game math is the invisible language that makes everything work. When you press 'W' and your character walks forward, that's vector math. When you spin the camera around, that's matrix multiplication. When a grenade explodes and pushes enemies back, that's physics math. You don't need to be a math genius - you just need to understand a few key concepts and how to use them in code.",
+      "key_concepts": [
+        "Vectors represent position, direction, velocity (3 floats: x, y, z)",
+        "Dot product tells you how aligned two directions are",
+        "Cross product gives a perpendicular direction",
+        "Matrices transform coordinates (translate, rotate, scale)",
+        "Quaternions rotate things without gimbal lock issues",
+        "Lerp (linear interpolation) smoothly transitions between values",
+        "Delta time makes movement framerate-independent",
+        "Easing curves make animations feel natural"
+      ],
+      "code_examples": [
+        {
+          "title": "Complete 3D Math Library",
+          "code": "#include <cmath>\n#include <array>\n\nstruct Vector3 {\n    float x, y, z;\n    \n    Vector3() : x(0), y(0), z(0) {}\n    Vector3(float x, float y, float z) : x(x), y(y), z(z) {}\n    \n    // Basic operations\n    Vector3 operator+(const Vector3& v) const { return {x+v.x, y+v.y, z+v.z}; }\n    Vector3 operator-(const Vector3& v) const { return {x-v.x, y-v.y, z-v.z}; }\n    Vector3 operator*(float s) const { return {x*s, y*s, z*s}; }\n    Vector3 operator/(float s) const { return {x/s, y/s, z/s}; }\n    \n    // Dot product: tells how much two vectors point in the same direction\n    // Returns 1 if same direction, 0 if perpendicular, -1 if opposite\n    float dot(const Vector3& v) const {\n        return x*v.x + y*v.y + z*v.z;\n    }\n    \n    // Cross product: gives a vector perpendicular to both inputs\n    // Used for finding \"up\" from \"forward\" and \"right\"\n    Vector3 cross(const Vector3& v) const {\n        return {\n            y*v.z - z*v.y,\n            z*v.x - x*v.z,\n            x*v.y - y*v.x\n        };\n    }\n    \n    float length() const { return std::sqrt(x*x + y*y + z*z); }\n    float lengthSquared() const { return x*x + y*y + z*z; }\n    \n    Vector3 normalize() const {\n        float len = length();\n        if (len < 0.0001f) return {0,0,0};\n        return *this / len;\n    }\n    \n    // Linear interpolation: smoothly move from A to B by t (0..1)\n    static Vector3 lerp(const Vector3& a, const Vector3& b, float t) {\n        return a + (b - a) * t;\n    }\n};\n\n// 4x4 Matrix for 3D transformations\nstruct Matrix4x4 {\n    std::array<float, 16> m; // Column-major\n    \n    Matrix4x4() {\n        m.fill(0);\n        m[0] = m[5] = m[10] = m[15] = 1; // Identity\n    }\n    \n    static Matrix4x4 translation(float x, float y, float z) {\n        Matrix4x4 mat;\n        mat.m[12] = x;\n        mat.m[13] = y;\n        mat.m[14] = z;\n        return mat;\n    }\n    \n    static Matrix4x4 rotationX(float angle) {\n        Matrix4x4 mat;\n        float c = std::cos(angle), s = std::sin(angle);\n        mat.m[5] = c;   mat.m[6] = s;\n        mat.m[9] = -s;  mat.m[10] = c;\n        return mat;\n    }\n    \n    static Matrix4x4 rotationY(float angle) {\n        Matrix4x4 mat;\n        float c = std::cos(angle), s = std::sin(angle);\n        mat.m[0] = c;   mat.m[2] = -s;\n        mat.m[8] = s;   mat.m[10] = c;\n        return mat;\n    }\n    \n    static Matrix4x4 scale(float sx, float sy, float sz) {\n        Matrix4x4 mat;\n        mat.m[0] = sx;\n        mat.m[5] = sy;\n        mat.m[10] = sz;\n        return mat;\n    }\n    \n    Matrix4x4 operator*(const Matrix4x4& other) const {\n        Matrix4x4 result;\n        for (int row = 0; row < 4; ++row) {\n            for (int col = 0; col < 4; ++col) {\n                result.m[col*4+row] = 0;\n                for (int k = 0; k < 4; ++k) {\n                    result.m[col*4+row] += m[k*4+row] * other.m[col*4+k];\n                }\n            }\n        }\n        return result;\n    }\n    \n    Vector3 transform(const Vector3& v) const {\n        return {\n            m[0]*v.x + m[4]*v.y + m[8]*v.z + m[12],\n            m[1]*v.x + m[5]*v.y + m[9]*v.z + m[13],\n            m[2]*v.x + m[6]*v.y + m[10]*v.z + m[14]\n        };\n    }\n};\n\n// Quaternion: represents rotation without gimbal lock\n// Think of it as a rotation around an axis (x,y,z) by angle w\nstruct Quaternion {\n    float x, y, z, w;\n    \n    Quaternion() : x(0), y(0), z(0), w(1) {}\n    Quaternion(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}\n    \n    // Create quaternion from axis-angle\n    static Quaternion fromAxisAngle(const Vector3& axis, float angle) {\n        float halfAngle = angle * 0.5f;\n        float s = std::sin(halfAngle);\n        Vector3 n = axis.normalize();\n        return {n.x*s, n.y*s, n.z*s, std::cos(halfAngle)};\n    }\n    \n    Quaternion operator*(const Quaternion& q) const {\n        return {\n            w*q.x + x*q.w + y*q.z - z*q.y,\n            w*q.y - x*q.z + y*q.w + z*q.x,\n            w*q.z + x*q.y - y*q.x + z*q.w,\n            w*q.w - x*q.x - y*q.y - z*q.z\n        };\n    }\n    \n    Vector3 rotate(const Vector3& v) const {\n        Quaternion p(v.x, v.y, v.z, 0);\n        Quaternion qConj(-x, -y, -z, w);\n        Quaternion result = *this * p * qConj;\n        return {result.x, result.y, result.z};\n    }\n    \n    // Spherical linear interpolation: smooth rotation between two orientations\n    static Quaternion slerp(const Quaternion& a, const Quaternion& b, float t) {\n        float cosAngle = a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w;\n        Quaternion b2 = b;\n        if (cosAngle < 0) { cosAngle = -cosAngle; b2 = {-b.x, -b.y, -b.z, -b.w}; }\n        \n        float angle = std::acos(cosAngle);\n        float s1 = std::sin((1-t)*angle) / std::sin(angle);\n        float s2 = std::sin(t*angle) / std::sin(angle);\n        \n        return {a.x*s1+b2.x*s2, a.y*s1+b2.y*s2, a.z*s1+b2.z*s2, a.w*s1+b2.w*s2};\n    }\n};\n\n// Usage example\nint main() {\n    // Create a player transform\n    Matrix4x4 world = Matrix4x4::translation(10, 0, 5) * Matrix4x4::rotationY(3.14159f/4);\n    \n    // Convert local to world direction\n    Vector3 localForward(0, 0, -1);\n    Vector3 worldForward = world.transform(localForward);\n    \n    // Smooth rotation with quaternion lerp\n    Quaternion current = Quaternion::fromAxisAngle({0,1,0}, 0);\n    Quaternion target = Quaternion::fromAxisAngle({0,1,0}, 3.14159f/2);\n    Quaternion smoothed = Quaternion::slerp(current, target, 0.5f);\n    \n    return 0;\n}"
+        }
+      ],
+      "learning_path": "2D coordinates (x,y) -> Vector addition/subtraction -> Dot product -> Cross product -> 3D coordinates -> Matrices (rotate/scale/translate) -> Quaternions -> Matrix transforms for camera -> Physics integration"
+    },
+    {
+      "name": "Design Patterns for Games",
+      "difficulty": "intermediate",
+      "explanation_simple": "Design patterns are like recipes for common problems in game programming. Instead of inventing solutions from scratch, you use patterns that generations of game programmers have figured out. They're not strict rules - just proven approaches to make your code cleaner, faster, and easier to change.",
+      "key_concepts": [
+        "Singleton: One global instance (GameManager, AudioManager)",
+        "Observer: One object tells many others when something happens (event system)",
+        "State Machine: Objects can only be in one state at a time (Idle, Walking, Jumping, Attacking)",
+        "Command: Turn actions into objects (undo/redo, input binding)",
+        "Object Pool: Reuse objects instead of creating/destroying (bullets, particles)",
+        "Flyweight: Share data between many objects (tree instances sharing one mesh)",
+        "Factory: Create objects without specifying exact class",
+        "Component: Compose behavior by attaching components (Unity/Unreal way)"
+      ],
+      "code_examples": [
+        {
+          "title": "State Machine Pattern (Player States)",
+          "code": "#include <memory>\n#include <iostream>\n\n// Forward declare\nclass Player;\n\n// Base State class\nclass PlayerState {\npublic:\n    virtual ~PlayerState() = default;\n    virtual void enter(Player& player) = 0;\n    virtual void update(Player& player, float deltaTime) = 0;\n    virtual void exit(Player& player) = 0;\n    virtual std::string getName() const = 0;\n};\n\n// The Player (Context)\nclass Player {\n    std::unique_ptr<PlayerState> currentState;\n    \npublic:\n    float health = 100;\n    float stamina = 100;\n    float verticalVelocity = 0;\n    bool isGrounded = true;\n    int attackCombo = 0;\n    float comboTime = 0;\n    \n    void setState(std::unique_ptr<PlayerState> newState) {\n        if (currentState) currentState->exit(*this);\n        currentState = std::move(newState);\n        currentState->enter(*this);\n    }\n    \n    void update(float dt) {\n        currentState->update(*this, dt);\n    }\n    \n    std::string getStateName() const {\n        return currentState ? currentState->getName() : \"None\";\n    }\n};\n\n// Concrete States\nclass IdleState : public PlayerState {\npublic:\n    void enter(Player& p) override {\n        std::cout << \"Entering Idle state\\n\";\n    }\n    void update(Player& p, float dt) override {\n        // Check transitions\n        // Would check input here\n        p.stamina += 5 * dt; // Regen stamina\n        \n        // Transition to Walk if moving\n        // transitionTo<WalkState>(p);\n    }\n    void exit(Player& p) override {\n        std::cout << \"Exiting Idle state\\n\";\n    }\n    std::string getName() const override { return \"Idle\"; }\n};\n\nclass WalkState : public PlayerState {\npublic:\n    void enter(Player& p) override {\n        std::cout << \"Entering Walk state\\n\";\n    }\n    void update(Player& p, float dt) override {\n        // Move player\n        p.stamina += 2 * dt;\n    }\n    void exit(Player& p) override {}\n    std::string getName() const override { return \"Walk\"; }\n};\n\nclass JumpState : public PlayerState {\npublic:\n    void enter(Player& p) override {\n        std::cout << \"Entering Jump state\\n\";\n        p.verticalVelocity = 10; // Jump impulse\n        p.isGrounded = false;\n    }\n    void update(Player& p, float dt) override {\n        p.verticalVelocity -= 9.81f * dt; // Gravity\n        \n        if (p.verticalVelocity < 0 && p.isGrounded) {\n            p.setState(std::make_unique<IdleState>());\n        }\n    }\n    void exit(Player& p) override {\n        p.verticalVelocity = 0;\n    }\n    std::string getName() const override { return \"Jump\"; }\n};\n\nclass AttackState : public PlayerState {\npublic:\n    void enter(Player& p) override {\n        std::cout << \"Entering Attack state (combo: \" << p.attackCombo << \")\\n\";\n        p.comboTime = 0.5f;\n    }\n    void update(Player& p, float dt) override {\n        p.comboTime -= dt;\n        \n        // Check for next combo input\n        // if (attackPressed && comboTime > 0) -> next combo\n        \n        if (p.comboTime <= 0) {\n            p.attackCombo = 0;\n            p.setState(std::make_unique<IdleState>());\n        }\n    }\n    void exit(Player& p) override {}\n    std::string getName() const override { return \"Attack\"; }\n};\n\nint main() {\n    Player player;\n    player.setState(std::make_unique<IdleState>());\n    \n    for (int frame = 0; frame < 10; ++frame) {\n        std::cout << \"Frame \" << frame << \": \" << player.getStateName() << \"\\n\";\n        player.update(0.016f);\n    }\n    return 0;\n}"
+        },
+        {
+          "title": "Observer Pattern (Event System)",
+          "code": "#include <vector>\n#include <functional>\n#include <unordered_map>\n#include <any>\n#include <iostream>\n\n// Event types\nenum class EventType {\n    ENEMY_DIED,\n    PLAYER_DIED,\n    SCORE_CHANGED,\n    ITEM_COLLECTED,\n    LEVEL_COMPLETE\n};\n\nstruct Event {\n    EventType type;\n    std::unordered_map<std::string, std::any> data;\n    \n    Event(EventType type) : type(type) {}\n    \n    template<typename T>\n    T get(const std::string& key, const T& defaultValue = T()) const {\n        auto it = data.find(key);\n        if (it != data.end() && it->second.has_value()) {\n            try { return std::any_cast<T>(it->second); }\n            catch(...) {}\n        }\n        return defaultValue;\n    }\n};\n\n// The Event System (Observer Pattern)\nclass EventBus {\n    using Callback = std::function<void(const Event&)>;\n    std::unordered_map<EventType, std::vector<Callback>> listeners;\n    \npublic:\n    void subscribe(EventType type, Callback callback) {\n        listeners[type].push_back(callback);\n    }\n    \n    void publish(const Event& event) {\n        auto it = listeners.find(event.type);\n        if (it != listeners.end()) {\n            for (auto& callback : it->second) {\n                callback(event);\n            }\n        }\n    }\n};\n\n// Usage example\nint main() {\n    EventBus eventBus;\n    \n    // Subscribe to events\n    eventBus.subscribe(EventType::ENEMY_DIED, [](const Event& e) {\n        int score = e.get<int>(\"score\", 0);\n        std::string enemyType = e.get<std::string>(\"type\", \"unknown\");\n        std::cout << \"Enemy died! +\" << score << \" points (\" << enemyType << \")\\n\";\n    });\n    \n    eventBus.subscribe(EventType::PLAYER_DIED, [](const Event& e) {\n        std::cout << \"Player died! Game Over.\\n\";\n    });\n    \n    eventBus.subscribe(EventType::SCORE_CHANGED, [](const Event& e) {\n        int newScore = e.get<int>(\"score\", 0);\n        std::cout << \"Score updated: \" << newScore << \"\\n\";\n    });\n    \n    // Fire events\n    Event enemyEvent(EventType::ENEMY_DIED);\n    enemyEvent.data[\"score\"] = 100;\n    enemyEvent.data[\"type\"] = std::string(\"Goblin\");\n    eventBus.publish(enemyEvent);\n    \n    Event scoreEvent(EventType::SCORE_CHANGED);\n    scoreEvent.data[\"score\"] = 150;\n    eventBus.publish(scoreEvent);\n    \n    return 0;\n}"
+        }
+      ],
+      "learning_path": "Singleton first (simplest) -> State Machine (most useful) -> Observer/Event Bus -> Object Pool -> Command Pattern -> Component Pattern -> Factory Pattern"
+    }
+  ]
+}

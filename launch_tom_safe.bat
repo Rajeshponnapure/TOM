@@ -1,0 +1,20 @@
+@echo off
+cd /d "%~dp0"
+echo === TOM Safe-Mode Launch (voice disabled, console visible) ===
+echo If the .exe crashes, run this instead — it runs the script
+echo directly via Python and forces voice off so PyAudio cannot
+echo crash the process.
+echo.
+
+set VOICE_INPUT_ENABLED=false
+set VOICE_OUTPUT_ENABLED=false
+
+if exist "venv\Scripts\python.exe" (
+  "venv\Scripts\python.exe" tom_desktop_app.py
+) else (
+  python tom_desktop_app.py
+)
+
+echo.
+echo === TOM exited. Press any key to close ===
+pause >nul
