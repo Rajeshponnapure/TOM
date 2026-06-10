@@ -201,7 +201,16 @@ class EngineRouter:
                     "message": f"[{key.upper()} engine] failed: {exc}"}
 
     @staticmethod
-    def _unavailable(name: str, hint: str) -> Dict[str, Any]:
+    def _unavailable(name: str, hint: str, engine_key: str = "") -> Dict[str, Any]:
+        # Enrich with preflight: tell the user EXACTLY what to install.
+        try:
+            if engine_key:
+                from tools.preflight import fix_hint
+                precise = fix_hint(engine_key)
+                if precise:
+                    hint = precise
+        except Exception:
+            pass
         return {"status": "error", "response_type": "engine_unavailable",
                 "message": f"The {name} engine could not be loaded on this machine. {hint}"}
 
@@ -215,7 +224,7 @@ class EngineRouter:
     def _run_ml(self, command: str) -> Dict[str, Any]:
         eng = self._get("ml")
         if not eng:
-            return self._unavailable("ML", "Check that numpy is installed.")
+            return self._unavailable("ML", "Check that numpy is installed.", "ml")
         c = command.lower()
         X = _extract_kv_list(command, "x") or _extract_kv_list(command, "X")
         y = _extract_kv_list(command, "y")
@@ -311,7 +320,7 @@ class EngineRouter:
     def _run_hardware(self, command: str) -> Dict[str, Any]:
         eng = self._get("hardware")
         if not eng or not getattr(eng, "is_available", lambda: True)():
-            return self._unavailable("Hardware control", "pyautogui must be installed.")
+            return self._unavailable("Hardware control", "pyautogui must be installed.", "hardware")
         c = command.lower()
         m = re.search(r"move (?:the )?mouse (?:to )?(\d+)[ ,]+(\d+)", c)
         if m:
@@ -373,7 +382,7 @@ class EngineRouter:
     def _run_blender(self, command: str) -> Dict[str, Any]:
         eng = self._get("blender")
         if not eng:
-            return self._unavailable("Blender", "")
+            return self._unavailable("Blender", "", "blender")
         if not eng.is_available():
             return self._ok("engine_blender",
                             "Blender is not installed (or not found). Install Blender and retry.")
@@ -385,7 +394,7 @@ class EngineRouter:
     def _run_news(self, command: str) -> Dict[str, Any]:
         eng = self._get("news")
         if not eng:
-            return self._unavailable("News", "")
+            return self._unavailable("News", "", "news")
         c = command.lower()
         if "tech" in c:
             res = eng.technology_roundup()
@@ -444,7 +453,7 @@ class EngineRouter:
     def _run_voiceplus(self, command: str) -> Dict[str, Any]:
         eng = self._get("voiceplus")
         if not eng:
-            return self._unavailable("Voice+", "")
+            return self._unavailable("Voice+", "", "voiceplus")
         m = re.search(r"(?:text\s*:\s*)(.+)$", command, flags=re.I | re.S)
         text = m.group(1).strip() if m else command
         r = eng.analyze_emotional_state(text)
@@ -474,7 +483,7 @@ class EngineRouter:
     async def _run_webauto(self, command: str) -> Dict[str, Any]:
         wa = getattr(self._agent, "web_automation", None)
         if not wa:
-            return self._unavailable("Web automation", "Playwright must be installed.")
+            return self._unavailable("Web automation", "Playwright must be installed.", "webauto")
         m = re.search(r"(https?://\S+|localhost:?\d*|\b\d{2,5}\b)", command, re.I)
         if not m:
             return self._ok("engine_webauto",

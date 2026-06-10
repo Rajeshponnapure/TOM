@@ -4800,7 +4800,18 @@ class TomDesktopApp:
 
 
 def main():
+    # A3: crash isolation — unhandled errors are logged, the app survives.
+    try:
+        from tools.crash_guard import install as _cg_install, install_tk as _cg_tk
+        _cg_install("desktop")
+    except Exception:
+        _cg_tk = None
     root = tk.Tk()
+    if _cg_tk:
+        try:
+            _cg_tk(root)
+        except Exception:
+            pass
     TomDesktopApp(root)
     # Center the window on the primary screen for a cleaner first launch.
     try:

@@ -655,9 +655,22 @@ class TomAgent:
                 elif any(x in command_lower for x in ("fix code", "debug", "fix my code", "repair code")):
                     result = await self.execute_code_help(command)
 
-                # General chat
+                # General chat OR universal task attempt (A1):
+                # clearly task-like commands with no concrete handler get
+                # ATTEMPTED via the autonomous plan→execute→verify loop
+                # instead of deflected to a chat reply.
+                # Kill-switch: TOM_UNIVERSAL_FALLBACK=0
                 else:
-                    result = await self.generate_chat_response(command)
+                    try:
+                        from tools.task_heuristics import should_attempt_universal
+                        _go_universal = (self.engine_router is not None and
+                                         should_attempt_universal(intent, command))
+                    except Exception:
+                        _go_universal = False
+                    if _go_universal:
+                        result = await self._universal_task_attempt(command, parsed)
+                    else:
+                        result = await self.generate_chat_response(command)
 
             # Log success
             self.safety.log_action("COMPLETED", target=command, status="SUCCESS",
@@ -2150,6 +2163,51 @@ class TomAgent:
         except Exception as e:
             return {"status": "error", "message": f"Could not read logs: {e}"}
 
+    async def _universal_task_attempt(self, command: str, parsed: Dict) -> Dict[str, Any]:
+        """A1: attempt unmatched task-like commands via the autonomous loop.
+        A4: on failure, fall back to chat plus ONE targeted clarifying question."""
+        safe_print("[UNIVERSAL] No concrete handler matched — attempting autonomous execution...")
+        try:
+            res = await asyncio.wait_for(
+                self.engine_router._run_autonomous(command),
+                timeout=max(60, self.task_timeout_seconds - 20),
+            )
+            if res.get("status") == "success" and (res.get("message") or "").strip():
+                res["response_type"] = "universal_task"
+                res["message"] = "[Attempted as autonomous task]\n" + res["message"]
+                return res
+        except asyncio.TimeoutError:
+            self.safety.log_action("WARN", target="universal", status="FAILURE",
+                                   message="universal attempt timed out")
+        except Exception as _ue:
+            self.safety.log_action("WARN", target="universal", status="FAILURE",
+                                   message=f"universal attempt failed: {_ue}")
+        chat = await self.generate_chat_response(command)
+        question = await self._clarify_question(command)
+        if question:
+            chat["message"] = (str(chat.get("message", "")).rstrip()
+                               + f"\n\nTo actually execute this, one detail would help: {question}")
+        chat["response_type"] = "universal_fallback_chat"
+        return chat
+
+    async def _clarify_question(self, command: str) -> str:
+        """A4: generate exactly one short unblock question. '' on any failure."""
+        try:
+            prompt = self._safe_prompt([
+                ("system",
+                 "You are TOM. The user gave a task you could not fully execute. "
+                 "Ask exactly ONE short, specific question whose answer would let you "
+                 "do it (a file path, app name, account, or target). Reply with only "
+                 "the question."),
+                ("human", "{command}"),
+            ])
+            resp = await self._invoke_llm(
+                prompt, self._escape_braces({"command": command}), "clarify", self.fast_llm)
+            q = (resp.content if hasattr(resp, "content") else str(resp)).strip()
+            return q[:200] if q and "?" in q else ""
+        except Exception:
+            return ""
+
     def _capabilities_response(self) -> Dict[str, Any]:
         """Registry-backed capability listing (single source of truth)."""
         try:
@@ -2191,8 +2249,15 @@ class TomAgent:
         _line("Plugins", True, f"{len(self.available_plugins or [])} discovered")
         offline = sum(1 for c in checks if "OFFLINE" in c)
         head = "All subsystems online." if offline == 0 else f"{offline} subsystem(s) OFFLINE — features degrade gracefully."
+        # Dependency preflight: exact missing deps + the command that fixes each.
+        try:
+            from tools.preflight import report_text
+            preflight = report_text()
+        except Exception as _pf:
+            preflight = f"(preflight unavailable: {_pf})"
         return {"status": "success", "response_type": "health",
-                "message": f"TOM system health:\n{head}\n\n" + "\n".join(checks)}
+                "message": (f"TOM system health:\n{head}\n\n" + "\n".join(checks)
+                            + "\n\n" + preflight)}
 
     def get_skills_summary(self) -> Dict[str, Any]:
         try:

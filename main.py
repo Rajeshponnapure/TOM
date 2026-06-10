@@ -198,6 +198,11 @@ TOM PROFESSIONAL COMMANDS:
 
 
 if __name__ == "__main__":
+    try:
+        from tools.crash_guard import install as _cg_install
+        _cg_install("cli")
+    except Exception:
+        pass
     log_dir = PROJECT_ROOT / "tom_logs"
     if not log_dir.exists():
         log_dir.mkdir(parents=True)

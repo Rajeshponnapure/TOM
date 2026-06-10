@@ -39,7 +39,7 @@ assistant. This plan builds exactly that.
 
 ---
 
-## 2. Phase A — Reliability & "never silently fails" (Week 1)  → 80→88
+## 2. Phase A — Reliability & "never silently fails" — ✅ SHIPPED 2026-06-10  → 80→88
 
 The #1 thing separating "demo" from "does any task" is **failure handling**.
 
@@ -76,7 +76,14 @@ Exit check: kill each dependency in turn; TOM stays up and tells the user what t
 
 ---
 
-## 6. Immediate next session (what I do FIRST, in order)
+## 6. Phase A delivery record (shipped 2026-06-10)
+- A2 ✅ tools/preflight.py — 22 capability checks, exact fix commands, wired into `system status` and engine failure messages (verified live: surfaced 4 real gaps in the audit sandbox)
+- A1 ✅ universal fallback — task-like unmatched commands run the autonomous plan→execute loop (kill switch: TOM_UNIVERSAL_FALLBACK=0); gating verified 13/13 cases
+- A4 ✅ clarify-on-failure — one targeted LLM-generated question appended when an attempt fails
+- A3 ✅ tools/crash_guard.py — process + thread + Tk-callback hooks, crash_*.txt reports (verified live: thread crash captured); wired into both entry points
+- Tests: 17/17 passing
+
+## 6b. Next session (Phase B starts here)
 
 1. **A2 dependency preflight** — biggest reliability win, low risk. Every
    capability gains a `requires` + `check()` so failures become actionable.
