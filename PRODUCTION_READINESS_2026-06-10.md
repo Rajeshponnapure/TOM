@@ -1,5 +1,14 @@
 # Production Readiness — Post-Hardening Assessment (2026-06-10)
 
+## UPDATE 2 (final iteration): runtime-verified — 80/100 source-side
+Third iteration completed and **runtime-verified end-to-end** (agent constructed
+and exercised in a clean environment without Ollama — graceful degradation
+proven live, not assumed). Knowledge base coverage doubled (73 sections / 873
+concepts — half the KB files were silently skipped before), 47/47 skills
+routable, GUI gained Capability Center + Health views, logs rotate and the
+in-app log viewer masks PII. 14/14 tests green. Remaining 20 points are
+time/owner-gated — see PATH_TO_100.md for the dated plan to 100.
+
 ## UPDATE (evening session): 100% capability utilization achieved
 The audit's §16 target — every capability mapped to a real executor, zero
 orphans, everything reachable from chat/CLI/GUI — is now **met and CI-enforced**:
