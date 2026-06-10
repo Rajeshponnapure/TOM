@@ -17,6 +17,10 @@ ROUTE = {
     "execute autonomous task: tidy downloads": "autonomous",
     "deploy multi-agent task: write a report": "orchestrator",
     "analyze emotion text: I feel great": "voiceplus",
+    "check website safety: example.com": "websafety",
+    "verify web app on localhost: 3000": "webauto",
+    "run code myscript.py": "coderun",
+    "execute analysis.py": "coderun",
 }
 NO_ROUTE = [
     "send an email to bob", "create a word document about cars",

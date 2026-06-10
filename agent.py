@@ -421,6 +421,16 @@ class TomAgent:
                                        message=f"RAG store(user) failed: {_bg}")
 
         try:
+            # ── Meta commands (instant, deterministic — no LLM round-trip) ──
+            _meta = command.lower().strip().rstrip("?!. ")
+            if _meta in ("what can you do", "capabilities", "list capabilities",
+                         "show capabilities", "what are your capabilities",
+                         "what all can you do"):
+                return self._capabilities_response()
+            if _meta in ("system status", "health", "health check", "status",
+                         "subsystem status", "system health"):
+                return self._health_response()
+
             safe_print("[STEP 1] Understanding your request...")
             parsed = await self.understand_command(command)
             command_lower = command.lower().strip()
@@ -1384,8 +1394,17 @@ class TomAgent:
             result = await self.file_tools.create_website(project_name, payload.get("index_html"), payload.get("style_css"))
             if result.get("status") == "success":
                 safe_print(f"Website generated at: {result['path']}/")
+                preview_note = "Open index.html in your browser to view it."
+                try:
+                    import webbrowser
+                    index_path = os.path.join(result["path"], "index.html")
+                    if os.path.isfile(index_path):
+                        webbrowser.open("file:///" + index_path.replace(os.sep, "/"))
+                        preview_note = "Preview opened in your browser."
+                except Exception:
+                    pass
                 return {"status": "success",
-                        "message": f"Website '{project_name}' created successfully!\nFiles: index.html + style.css in ./{project_name}/\nOpen index.html in your browser to view it.",
+                        "message": f"Website '{project_name}' created successfully!\nFiles: index.html + style.css in ./{project_name}/\n{preview_note}",
                         "path": result["path"]}
             # Friendly error instead of raw internal dict
             err_detail = result.get("message") or result.get("error") or str(result)
@@ -2108,6 +2127,50 @@ class TomAgent:
         except Exception:
             pass
         return {"status": "success", "message": revised, "response_type": "revised"}
+
+    def _capabilities_response(self) -> Dict[str, Any]:
+        """Registry-backed capability listing (single source of truth)."""
+        try:
+            from tools.capability_registry import summary_text, validate
+            v = validate()
+            header = (f"All {v['total']} capabilities verified against real executors.\n\n"
+                      if v["ok"] else
+                      f"WARNING: {len(v['missing'])} capability mappings broken!\n\n")
+            return {"status": "success", "response_type": "capabilities",
+                    "message": header + summary_text()}
+        except Exception as e:
+            return {"status": "error", "message": f"Capability registry unavailable: {e}"}
+
+    def _health_response(self) -> Dict[str, Any]:
+        """Live subsystem health — ends silent degradation."""
+        checks = []
+        def _line(name, ok, detail=""):
+            checks.append(f"  [{'ONLINE ' if ok else 'OFFLINE'}] {name}" + (f" — {detail}" if detail else ""))
+        _line("LLM config", True, f"{self.model_name} / code: {self.code_model_name}")
+        _line("RAG semantic memory", bool(self.rag and getattr(self.rag, 'available', False)))
+        _line("Self-evolution", bool(self.evolution))
+        _line("MCP connectors", bool(self.mcp))
+        _line("Multi-agent orchestrator", bool(self.orchestrator))
+        _line("Web automation", bool(self.web_automation))
+        _line("Engine router", bool(getattr(self, 'engine_router', None)),
+              "ML/IoT/VLSI/HW/Blender/GameDev/News/Env/Code-run")
+        kn = getattr(self, "knowledge", None)
+        try:
+            ks = kn.get_stats() if kn else {}
+            _line("Curated knowledge", bool(kn),
+                  f"{ks.get('domains', 0)} domains, {ks.get('total_sections', 0)} sections")
+        except Exception:
+            _line("Curated knowledge", False)
+        try:
+            _line("Skills", True, f"{self.skill_manager.count_skills()} loaded "
+                  f"(external {'ON' if self.skill_manager.include_external else 'off — set TOM_INCLUDE_EXTERNAL_SKILLS=1'})")
+        except Exception:
+            _line("Skills", False)
+        _line("Plugins", True, f"{len(self.available_plugins or [])} discovered")
+        offline = sum(1 for c in checks if "OFFLINE" in c)
+        head = "All subsystems online." if offline == 0 else f"{offline} subsystem(s) OFFLINE — features degrade gracefully."
+        return {"status": "success", "response_type": "health",
+                "message": f"TOM system health:\n{head}\n\n" + "\n".join(checks)}
 
     def get_skills_summary(self) -> Dict[str, Any]:
         try:

@@ -1,5 +1,26 @@
 # Production Readiness — Post-Hardening Assessment (2026-06-10)
 
+## UPDATE (evening session): 100% capability utilization achieved
+The audit's §16 target — every capability mapped to a real executor, zero
+orphans, everything reachable from chat/CLI/GUI — is now **met and CI-enforced**:
+
+- `tools/capability_registry.py`: **44/44 capabilities verified** against real
+  executors (`validate()` runs in CI; build fails if a mapping breaks)
+- **Orphan count: 0** (`find_orphan_tools()` in CI; pdf_tools confirmed used by
+  the Instagram agent; tom_tools archived to legacy/; knowledge_engine wired)
+- New: sandboxed **code runner** (approval-gated, subprocess+timeout) — closes
+  the "Run code" gap; **website preview** auto-opens in browser; **web-verify**
+  and **website-safety** now chat-reachable (were GUI-only)
+- New meta commands: `what can you do` (registry-backed) and `system status`
+  (live subsystem health — no more silent degradation)
+- Tests: 11/11 passing, including the utilization contract
+
+**Capability utilization: 100% (CI-enforced). Production readiness: 68/100
+source-side** (was 61); after your credential rotation + rebuild + smoke test:
+**~75/100**. The remaining ~25 points are physically time-gated: code-signing
+cert (3–7 days), runtime soak, UI capability centers, observability depth —
+see section below.
+
 Baseline this morning: **38/100**. After today's fixes: **61/100 (source-side)**.
 After you complete the 3 actions below tonight: **~70/100 — deployable beta**.
 

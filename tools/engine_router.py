@@ -102,6 +102,9 @@ class EngineRouter:
             elif key == "voiceplus":
                 from tools.voice_enhanced import VoiceEnhanced
                 engine = VoiceEnhanced()
+            elif key == "coderun":
+                from tools.code_runner import CodeRunner
+                engine = CodeRunner()
             elif key == "autonomous":
                 from tools.autonomous_agent import AutonomousAgent
                 engine = AutonomousAgent(
@@ -166,6 +169,14 @@ class EngineRouter:
             return "autoupdate"
         if re.search(r"\b(analy[sz]e|detect)\b.*\bemotion\w*\b", c) or "emotional state" in c:
             return "voiceplus"
+        if re.search(r"\bwebsite safety\b|\bis (this|that) (web)?site safe\b", c):
+            return "websafety"
+        if re.search(r"\b(verify|check)\b.*\b(localhost|web ?app|webapp)\b", c) or \
+           c.startswith("verify website"):
+            return "webauto"
+        if re.search(r"\b(run|execute)\b[^.]*\.py\b", c) or \
+           re.search(r"^run (the )?(code|script)\b", c) or c.startswith("run code"):
+            return "coderun"
         return None
 
     # ── Dispatch ─────────────────────────────────────────────────────────
@@ -179,6 +190,10 @@ class EngineRouter:
                 return await self._run_orchestrator(c)
             if key == "autonomous":
                 return await self._run_autonomous(c)
+            if key == "webauto":
+                return await self._run_webauto(c)
+            if key == "coderun":
+                return await self._run_coderun(c)
             handler = getattr(self, f"_run_{key}")
             return handler(c)
         except Exception as exc:
@@ -454,3 +469,59 @@ class EngineRouter:
         res = await orch.execute_task(task or command)
         msg = res.get("message") or res.get("result") or str(res)
         return self._ok("engine_orchestrator", str(msg)[:2000], raw=res)
+
+    # ── Web automation: verify a URL / localhost app ─────────────────────
+    async def _run_webauto(self, command: str) -> Dict[str, Any]:
+        wa = getattr(self._agent, "web_automation", None)
+        if not wa:
+            return self._unavailable("Web automation", "Playwright must be installed.")
+        m = re.search(r"(https?://\S+|localhost:?\d*|\b\d{2,5}\b)", command, re.I)
+        if not m:
+            return self._ok("engine_webauto",
+                            "Give me a URL or localhost port, e.g. 'verify web app on localhost:3000'.")
+        target = m.group(1).rstrip(".,:;")
+        if target.isdigit():
+            target = f"http://localhost:{target}"
+        elif not target.startswith("http"):
+            target = "http://" + target
+        res = await wa.wait_and_verify(target)
+        return self._ok("engine_webauto", f"Web verification ({target}): {str(res)[:1200]}", raw=res)
+
+    # ── Website safety analysis (SafetyGuards) ───────────────────────────
+    def _run_websafety(self, command: str) -> Dict[str, Any]:
+        safety = getattr(self._agent, "safety", None)
+        if not safety or not hasattr(safety, "analyze_website"):
+            return self._unavailable("Website safety analyzer", "")
+        m = re.search(r"(https?://\S+|www\.\S+|[a-z0-9-]+(?:\.[a-z0-9-]+)+\S*)", command, re.I)
+        if not m:
+            return self._ok("engine_websafety",
+                            "Give me a URL to check, e.g. 'check website safety: example.com'.")
+        res = safety.analyze_website(m.group(1).rstrip(".,:;"))
+        return self._ok("engine_websafety", f"Website safety: {str(res)[:1200]}", raw=res)
+
+    # ── Code runner (subprocess + timeout, ALWAYS behind approval) ───────
+    async def _run_coderun(self, command: str) -> Dict[str, Any]:
+        eng = self._get("coderun")
+        if not eng:
+            return self._unavailable("Code runner", "")
+        m = re.search(r"([\w\-./\\:]+\.py)\b", command)
+        if not m:
+            return self._ok("engine_coderun",
+                            "Tell me which .py file to run, e.g. 'run code myscript.py'.")
+        path = m.group(1)
+        agent = self._agent
+        if agent is None or not getattr(agent, "approval_manager", None):
+            return {"status": "error", "response_type": "engine_coderun",
+                    "message": "Code execution requires the approval system (agent context)."}
+        import asyncio as _aio
+        from tools.approval import ApprovalRequest
+        approved = await _aio.to_thread(
+            agent.approval_manager.request_approval,
+            ApprovalRequest(action="run_code", summary=f"Run Python file: {path}",
+                            details={"path": path}, risk_level="high"))
+        if not approved:
+            return {"status": "cancelled", "response_type": "engine_coderun",
+                    "message": "Code run cancelled by user."}
+        res = eng.run_python_file(path)
+        return self._ok("engine_coderun",
+                        f"Code run ({path}):\n{res.get('message', '')[:1500]}", raw=res)

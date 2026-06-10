@@ -17,7 +17,10 @@
 4. **Smoke test the new exe (5 min)** — launch `dist\tom_desktop_app.exe`, send one
    chat message, one quick action. Watch `tom_logs/startup.log` if anything fails.
 5. **Run the test suite (optional, 3 min)** — `python -m pytest tests/ -v`
-   (7 pure-logic tests) and `python test_tom_comprehensive.py`.
+   (11 tests incl. the 100%-utilization contract) and `python test_tom_comprehensive.py`.
+6. **Try the new meta commands** — in chat or CLI type `what can you do`
+   (registry-backed capability list) and `system status` (live subsystem health).
+7. **Deep diagnostic (optional)** — `python tools/verify_tom_system.py`.
 
 ## B. What changed today (deploy notes)
 
