@@ -198,6 +198,12 @@ class SkillManager:
             return
 
         name = fpath.stem if source == "local" else fpath.parent.name
+        # Prefer the YAML frontmatter `name:` when present (e.g. SKILL.md
+        # declares `name: ui-design-skill` — far more routable than "skill").
+        if content.startswith("---"):
+            m = re.search(r"^name:\s*([A-Za-z0-9_\- ]+)\s*$", content[:600], re.M)
+            if m:
+                name = m.group(1).strip()
         canonical = self._canonical_name(name)
         aliases = self._aliases_for(name, content)
         mode, tools, limitations = self._classify(canonical, content, source)

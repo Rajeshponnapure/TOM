@@ -21,3 +21,27 @@ def test_knowledge_legacy_content_loaded():
     legacy = eng.cache.get("legacy", {}).get("topics", [])
     assert legacy, "legacy knowledge should load"
     assert any(t.get("content") for t in legacy), "legacy docs must carry real content"
+
+
+def test_knowledge_autodiscovers_all_domain_jsons():
+    """Every *.json in a registered domain dir must load (no silent skips)."""
+    import os
+    from tools.knowledge_engine import KnowledgeEngine, DOMAIN_REGISTRY, KNOWLEDGE_DIR
+    eng = KnowledgeEngine()
+    stats = eng.get_stats()
+    # cybersecurity has 7 json files on disk; registry hardcoded only 1.
+    assert stats["domain_stats"]["cybersecurity"]["sections"] >= 20
+    assert stats["total_sections"] >= 70
+
+def test_all_local_skills_routable():
+    from tools.skill_manager import SkillManager
+    sm = SkillManager()
+    unroutable = [r.name for r in sm.records()
+                  if not sm.route_task("help me with " + r.name.replace("-", " ")).matched]
+    assert unroutable == [], f"unroutable skills: {unroutable}"
+
+def test_frontmatter_skill_naming():
+    from tools.skill_manager import SkillManager
+    sm = SkillManager()
+    names = [r.name for r in sm.records()]
+    assert "skill" not in names, "SKILL.md must register under its frontmatter name"

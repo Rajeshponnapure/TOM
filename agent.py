@@ -430,6 +430,9 @@ class TomAgent:
             if _meta in ("system status", "health", "health check", "status",
                          "subsystem status", "system health"):
                 return self._health_response()
+            if _meta in ("show logs", "logs", "show recent logs", "view logs",
+                         "recent activity log"):
+                return self._logs_response()
 
             safe_print("[STEP 1] Understanding your request...")
             parsed = await self.understand_command(command)
@@ -2127,6 +2130,25 @@ class TomAgent:
         except Exception:
             pass
         return {"status": "success", "message": revised, "response_type": "revised"}
+
+    def _logs_response(self, lines: int = 40) -> Dict[str, Any]:
+        """Tail the safety/action log so users can see recent activity in-app."""
+        try:
+            log_path = self.safety.log_file
+            if not os.path.isfile(log_path):
+                return {"status": "success", "response_type": "logs",
+                        "message": "No activity logged yet this session."}
+            with open(log_path, encoding="utf-8", errors="ignore") as f:
+                tail = f.readlines()[-lines:]
+            text = "".join(tail)[-3500:]
+            # PRIVACY: mask emails / long digit runs (phones, card-like) in the
+            # surfaced tail — the raw file on disk is unchanged.
+            text = re.sub(r"[\w.+-]+@[\w-]+\.[\w.]+", "<email>", text)
+            text = re.sub(r"(?<!\d)\d{8,}(?!\d)", "<number>", text)
+            return {"status": "success", "response_type": "logs",
+                    "message": f"Last {len(tail)} log entries (PII masked):\n" + text}
+        except Exception as e:
+            return {"status": "error", "message": f"Could not read logs: {e}"}
 
     def _capabilities_response(self) -> Dict[str, Any]:
         """Registry-backed capability listing (single source of truth)."""

@@ -94,6 +94,16 @@ class SafetyGuards:
         record = f"[{timestamp}] {action}: [{status.upper()}] | Target: {target} | Note: {message}\n"
 
         try:
+            # Size-capped rotation: keep safety_log.txt under ~2 MB,
+            # roll the previous generation to safety_log.1.txt.
+            try:
+                if os.path.isfile(self.log_file) and os.path.getsize(self.log_file) > 2_000_000:
+                    rolled = self.log_file.replace(".txt", ".1.txt")
+                    if os.path.isfile(rolled):
+                        os.remove(rolled)
+                    os.replace(self.log_file, rolled)
+            except OSError:
+                pass
             with open(self.log_file, "a", encoding="utf-8") as f:
                 f.write(record)
         except Exception as e:

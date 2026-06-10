@@ -60,7 +60,14 @@ class KnowledgeEngine:
             if not os.path.isdir(domain_dir):
                 continue
             domain_data = {"domain": info["name"], "sections": [], "topics": []}
-            for fname in info["files"]:
+            # COVERAGE FIX: auto-discover every *.json in the domain dir so new
+            # knowledge files load without registry edits (registry list kept
+            # for ordering/backward-compat, then union with what's on disk).
+            discovered = sorted(
+                f for f in os.listdir(domain_dir) if f.endswith(".json")
+            )
+            all_files = list(dict.fromkeys(list(info["files"]) + discovered))
+            for fname in all_files:
                 fpath = os.path.join(domain_dir, fname)
                 if os.path.isfile(fpath):
                     try:

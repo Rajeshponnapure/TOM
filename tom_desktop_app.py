@@ -1511,6 +1511,8 @@ class TomDesktopApp:
             ("system", "System", "\u25ce"),
             ("charts", "Charts", "\u25a7"),
             ("files", "Files", "\u25a5"),
+            ("capabilities", "Capabilities", "\u25c8"),
+            ("health", "Health", "\u2695"),
         ]
         for view_key, label, icon in nav_items:
             btn = self._make_nav_button(nav_wrap, icon + "  " + label, lambda k=view_key: self._show_view(k))
@@ -1736,8 +1738,11 @@ class TomDesktopApp:
         self.chat_frame = tk.Frame(self.content_frame, bg=C["bg"])
         self.system_frame = tk.Frame(self.content_frame, bg=C["bg"])
         self.files_frame = tk.Frame(self.content_frame, bg=C["bg"])
+        self.capabilities_frame = tk.Frame(self.content_frame, bg=C["bg"])
+        self.health_frame = tk.Frame(self.content_frame, bg=C["bg"])
 
-        for frm in (self.dashboard_frame, self.chat_frame, self.system_frame, self.charts_frame, self.files_frame):
+        for frm in (self.dashboard_frame, self.chat_frame, self.system_frame, self.charts_frame,
+                    self.files_frame, self.capabilities_frame, self.health_frame):
             frm.grid(row=0, column=0, sticky="nswe")
 
         self._build_dashboard_view(self.dashboard_frame)
@@ -1745,6 +1750,8 @@ class TomDesktopApp:
         self._build_system_view(self.system_frame)
         self._build_charts_view(self.charts_frame)
         self._build_files_view(self.files_frame)
+        self._build_capabilities_view(self.capabilities_frame)
+        self._build_health_view(self.health_frame)
 
     def _build_dashboard_view(self, parent):
         """Futuristic animated holographic dashboard — full canvas, 30fps."""
@@ -2244,6 +2251,99 @@ class TomDesktopApp:
 
         self._refresh_files_view()
 
+    def _build_capabilities_view(self, parent):
+        """Capability Center — registry-backed list of everything TOM can do."""
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+        hdr = tk.Frame(parent, bg=C["bg"], padx=24, pady=16)
+        hdr.grid(row=0, column=0, sticky="ew")
+        tk.Label(hdr, text="Capability Center", bg=C["bg"], fg=C["text"],
+                 font=("Segoe UI", 17, "bold")).pack(anchor="w")
+        tk.Label(hdr, text="Every registered capability, verified against its real executor. "
+                           "Type any example in Chat to use it.",
+                 bg=C["bg"], fg=C["text2"], font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 0))
+        body = tk.Frame(parent, bg=C["bg"], padx=24, pady=8)
+        body.grid(row=1, column=0, sticky="nswe")
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=1)
+        self.capabilities_text = tk.Text(body, bg=C["surface2"], fg=C["text2"], relief="flat",
+                                         highlightthickness=0, font=("Consolas", 9), bd=0,
+                                         wrap="word", state="disabled")
+        self.capabilities_text.grid(row=0, column=0, sticky="nswe")
+        cap_sb = tk.Scrollbar(body, orient="vertical", command=self.capabilities_text.yview,
+                              bg=C["surface"], troughcolor=C["surface2"])
+        cap_sb.grid(row=0, column=1, sticky="ns")
+        self.capabilities_text.configure(yscrollcommand=cap_sb.set)
+        tk.Button(parent, text="\u21ba  Refresh", command=self._refresh_capabilities_view,
+                  bg=C["surface2"], fg=C["text2"], activebackground=C["border2"],
+                  activeforeground=C["text"], relief="flat", bd=0, padx=12, pady=8,
+                  font=("Segoe UI", 9), cursor="hand2").grid(
+                      row=2, column=0, sticky="ew", padx=24, pady=(8, 16))
+        self._refresh_capabilities_view()
+
+    def _refresh_capabilities_view(self):
+        try:
+            from tools.capability_registry import summary_text, validate
+            v = validate()
+            head = (f"All {v['total']} capabilities verified against real executors.\n\n"
+                    if v["ok"] else f"WARNING: broken mappings: {v['missing']}\n\n")
+            content = head + summary_text()
+        except Exception as exc:
+            content = f"Capability registry unavailable: {exc}"
+        try:
+            self.capabilities_text.configure(state="normal")
+            self.capabilities_text.delete("1.0", tk.END)
+            self.capabilities_text.insert("1.0", content)
+            self.capabilities_text.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _build_health_view(self, parent):
+        """Health Center — live subsystem status (no more silent degradation)."""
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+        hdr = tk.Frame(parent, bg=C["bg"], padx=24, pady=16)
+        hdr.grid(row=0, column=0, sticky="ew")
+        tk.Label(hdr, text="System Health", bg=C["bg"], fg=C["text"],
+                 font=("Segoe UI", 17, "bold")).pack(anchor="w")
+        tk.Label(hdr, text="Live status of every subsystem. OFFLINE items degrade gracefully "
+                           "— the rest of TOM keeps working.",
+                 bg=C["bg"], fg=C["text2"], font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 0))
+        body = tk.Frame(parent, bg=C["bg"], padx=24, pady=8)
+        body.grid(row=1, column=0, sticky="nswe")
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=1)
+        self.health_text = tk.Text(body, bg=C["surface2"], fg=C["text2"], relief="flat",
+                                   highlightthickness=0, font=("Consolas", 9), bd=0,
+                                   wrap="word", state="disabled")
+        self.health_text.grid(row=0, column=0, sticky="nswe")
+        h_sb = tk.Scrollbar(body, orient="vertical", command=self.health_text.yview,
+                            bg=C["surface"], troughcolor=C["surface2"])
+        h_sb.grid(row=0, column=1, sticky="ns")
+        self.health_text.configure(yscrollcommand=h_sb.set)
+        tk.Button(parent, text="\u21ba  Refresh", command=self._refresh_health_view,
+                  bg=C["surface2"], fg=C["text2"], activebackground=C["border2"],
+                  activeforeground=C["text"], relief="flat", bd=0, padx=12, pady=8,
+                  font=("Segoe UI", 9), cursor="hand2").grid(
+                      row=2, column=0, sticky="ew", padx=24, pady=(8, 16))
+        self._refresh_health_view()
+
+    def _refresh_health_view(self):
+        if getattr(self, "agent", None) and getattr(self, "agent_ready", False):
+            try:
+                content = self.agent._health_response().get("message", "Health unavailable.")
+            except Exception as exc:
+                content = f"Health check failed: {exc}"
+        else:
+            content = "TOM is still initializing — open this view again in a few seconds."
+        try:
+            self.health_text.configure(state="normal")
+            self.health_text.delete("1.0", tk.END)
+            self.health_text.insert("1.0", content)
+            self.health_text.configure(state="disabled")
+        except Exception:
+            pass
+
     def _build_system_view(self, parent):
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
@@ -2515,6 +2615,8 @@ class TomDesktopApp:
             "system": self.system_frame,
             "charts": self.charts_frame,
             "files": self.files_frame,
+            "capabilities": self.capabilities_frame,
+            "health": self.health_frame,
         }.get(view_name, self.dashboard_frame)
         frame.tkraise()
         self._sync_nav_styles()
@@ -2523,6 +2625,10 @@ class TomDesktopApp:
             self.root.after(100, self._render_chart_canvas)
         elif view_name == "system":
             self.root.after(100, self._refresh_system_view)
+        elif view_name == "health":
+            self.root.after(100, self._refresh_health_view)
+        elif view_name == "capabilities":
+            self.root.after(100, self._refresh_capabilities_view)
 
     def _switch_view(self, view_name: str):
         self._show_view(view_name)
