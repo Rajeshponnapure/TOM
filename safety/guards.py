@@ -124,22 +124,29 @@ class SafetyGuards:
 
         action_lower = action_name.lower()
 
-        hard_blocked = {
-            "modify_system32": ["system32"],
-            "access_cryptocurrency": ["crypto", "bitcoin", "wallet", "send money"],
-        }
+        # Hard blocks. Crypto terms alone are NOT blocked — asking "what is
+        # bitcoin" is a chat question. Block only transactional crypto intent.
+        _crypto_terms = ("crypto", "bitcoin", "wallet")
+        _txn_verbs = ("send", "transfer", "buy", "sell", "pay", "withdraw", "move")
+        hard_blocked_hit = ""
+        if "system32" in action_lower:
+            hard_blocked_hit = "system32"
+        elif "send money" in action_lower:
+            hard_blocked_hit = "send money"
+        elif (any(t in action_lower for t in _crypto_terms)
+              and any(v in action_lower for v in _txn_verbs)):
+            hard_blocked_hit = "cryptocurrency transaction"
+
         approval_required = {
             "delete_files": ["delete ", "erase ", "unlink "],
             "send_emails_without_approval": ["send email", "send mail", "email now"],
             "install_software": ["install software", "install package", "pip install"],
         }
 
-        for block_key, keywords in hard_blocked.items():
-            if any(kw in action_lower for kw in keywords):
-                result["safe"] = False
-                result["requires_approval"] = False
-                result["message"] = f"Action blocked: '{action_name}' matches '{keywords[0]}' which is permanently restricted."
-                break
+        if hard_blocked_hit:
+            result["safe"] = False
+            result["requires_approval"] = False
+            result["message"] = f"Action blocked: '{action_name}' matches '{hard_blocked_hit}' which is permanently restricted."
 
         if result["safe"]:
             for block_key, keywords in approval_required.items():
@@ -148,10 +155,18 @@ class SafetyGuards:
                     result["message"] = f"Action '{action_name}' requires approval before proceeding."
                     break
 
+        # Honest audit status: BLOCKED / PENDING_APPROVAL / ALLOWED.
+        # (Was: "APPROVED" logged before the user ever saw a prompt.)
+        if not result["safe"]:
+            _log_status = "BLOCKED"
+        elif result["requires_approval"]:
+            _log_status = "PENDING_APPROVAL"
+        else:
+            _log_status = "ALLOWED"
         self.log_action(
             action=action_name,
             target=target or "unknown",
-            status="REQUESTED" if not result["safe"] else "APPROVED"
+            status=_log_status,
         )
 
         return result
@@ -450,16 +465,29 @@ class SafetyGuards:
         return bool(re.match(pattern, email))
 
     def check_file_path_safe(self, path: str) -> bool:
-        """Prevents accessing dangerous system folders."""
-        unsafe_paths = [
-            "c:\\windows\\",
-            "c:\\program files\\",
-            "c:\\programdata\\",
-            "/sys/",
-            "/proc/"
-        ]
-        path_lower = path.lower()
-        for unsafe in unsafe_paths:
-            if unsafe in path_lower:
+        """Prevents accessing dangerous system folders.
+
+        Normalizes the path first so forward slashes ("C:/Windows/..."),
+        relative traversal ("..\\..\\Windows"), and mixed separators cannot
+        bypass the check.
+        """
+        if not path:
+            return False
+        try:
+            normalized = os.path.normpath(os.path.abspath(path)).lower()
+        except (OSError, ValueError):
+            return False
+        normalized_bs = normalized.replace("/", "\\")
+        unsafe_prefixes = (
+            "c:\\windows",
+            "c:\\program files",
+            "c:\\program files (x86)",
+            "c:\\programdata",
+        )
+        for unsafe in unsafe_prefixes:
+            if normalized_bs == unsafe or normalized_bs.startswith(unsafe + "\\"):
                 return False
+        posix_view = path.lower().replace("\\", "/")
+        if "/sys/" in posix_view or "/proc/" in posix_view:
+            return False
         return True
