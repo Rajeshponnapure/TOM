@@ -167,7 +167,9 @@ def build_agent() -> TomAgent:
     agent.llm = object()
     agent.fast_llm = object()
     agent.code_llm = object()
+    agent.engine_router = None
     agent.model_timeout_seconds = 5
+    agent.task_timeout_seconds = 30
     agent._last_command = ""
     agent._last_response = ""
     agent._last_result = None

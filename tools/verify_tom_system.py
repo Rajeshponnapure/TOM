@@ -184,7 +184,7 @@ def check_routing() -> Dict[str, object]:
     parser = CommandParser()
     cases = {
         "open chrome": ("browser", "open_app", "execute_open_command"),
-        "open vs code": ("browser", "open_app", "execute_open_command"),
+        "open vs code": ("desktop", "open_app", "execute_open_command"),
         "review my email inbox": ("communication", "email_inbox", "execute_email_inbox_workflow"),
         "send email to john@example.com saying hello": ("sensitive", "send_email", "execute_email_send"),
         "open whatsapp and send hello to Madhu": ("communication", "whatsapp_message", "execute_whatsapp_task"),
