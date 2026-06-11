@@ -54,6 +54,21 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 from dotenv import load_dotenv
 load_dotenv()
+# Frozen EXE: load_dotenv() resolves relative to the script inside the
+# PyInstaller temp dir, so the project .env is never found and every
+# VOICE_* flag silently falls back to its disabled default. Look next to
+# the exe (dist\) and one level up (the project root) for the real .env.
+if getattr(sys, "frozen", False):
+    for _env_path in (Path(sys.executable).parent / ".env",
+                      Path(sys.executable).parent.parent / ".env"):
+        if _env_path.is_file():
+            load_dotenv(_env_path)
+            break
+# This GUI is voice-first: default voice ON unless .env/environment says
+# otherwise (setdefault never overrides values loaded above; tests and
+# headless scripts set their own explicit values).
+os.environ.setdefault("VOICE_INPUT_ENABLED", "true")
+os.environ.setdefault("VOICE_OUTPUT_ENABLED", "true")
 
 # ── New v3 tool imports ───────────────────────────────────────────────
 try:
@@ -1021,6 +1036,22 @@ class VoiceUIWindow:
         def _voice_loop():
             try:
                 voice = self.app.voice
+                # Self-heal like start_conversation_mode(): this window calls
+                # listen_neural()/speak() directly, which are gated on env
+                # flags that are unset in the frozen exe. Without this, the
+                # loop spins forever on "skipped" results while the UI says
+                # "Listening..." and never hears or says anything.
+                voice.input_enabled = True
+                voice.output_enabled = True
+                if not voice._recognizer:
+                    voice._setup_input()
+                if not (voice._edge_tts_ok or voice._tts_engine):
+                    voice._setup_output()
+                if not voice.input_enabled or not voice._recognizer:
+                    err = voice._input_error or "microphone unavailable"
+                    self._enqueue(lambda e=err: self._append_transcript(
+                        "System", f"Voice input could not start: {e}"))
+                    return
                 voice.on_audio_level = self._on_audio_level
                 voice.on_state_change = self._on_voice_state
 
@@ -1050,6 +1081,14 @@ class VoiceUIWindow:
                         continue
 
                     if result.get("status") != "success" or not result.get("text"):
+                        # Surface each distinct failure once instead of
+                        # silently looping (looks like TOM is deaf).
+                        msg = result.get("message", "")
+                        if msg and msg != getattr(self, "_last_listen_err", ""):
+                            self._last_listen_err = msg
+                            self._enqueue(lambda m=msg: self._append_transcript("System", m))
+                        if result.get("status") == "skipped" and "disabled" in msg.lower():
+                            break  # input got disabled mid-session; stop the dead loop
                         continue
 
                     consecutive_timeouts = 0
@@ -1484,7 +1523,8 @@ class TomDesktopApp:
 
         sb.bind("<Configure>", _sb_configure)
         _sb_cv.bind("<Configure>", _sb_cv_resize)
-        _sb_cv.bind("<MouseWheel>", lambda e: _sb_cv.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        _sb_cv.bind("<MouseWheel>", lambda e: _sb_cv.yview_scroll(
+            int(-1 * (e.delta / 120)) or (-1 if e.delta > 0 else 1), "units"))
         self._sidebar_canvas = _sb_cv  # for the global wheel dispatcher
 
         # \u2500\u2500 Logo \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -2108,7 +2148,8 @@ class TomDesktopApp:
         self.chat_canvas.itemconfig(self.chat_window, width=event.width)
 
     def _on_chat_scroll(self, event):
-        self.chat_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        steps = int(-1 * (event.delta / 120)) or (-1 if event.delta > 0 else 1)
+        self.chat_canvas.yview_scroll(steps, "units")
 
     def _send_from_dashboard(self):
         text = self.dash_input_var.get().strip()
@@ -3002,8 +3043,13 @@ class TomDesktopApp:
         self.voice_mode_enabled = False
         if self.voice:
             self.voice.stop_conversation_mode()
-            self.voice.input_enabled = False
-            self.voice.output_enabled = False
+            # Restore the flags from startup (env/.env controlled) instead of
+            # hard-disabling: forcing output off here also silenced spoken
+            # chat replies for the rest of the session after one toggle.
+            self.voice.input_enabled = os.environ.get(
+                "VOICE_INPUT_ENABLED", "true").lower() == "true"
+            self.voice.output_enabled = os.environ.get(
+                "VOICE_OUTPUT_ENABLED", "true").lower() == "true"
         self.voice_btn.configure(text="  \u266a  Voice Mode", bg=C["surface2"], fg=C["text"])
         self._set_status("Ready")
 
