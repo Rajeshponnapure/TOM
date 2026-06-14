@@ -40,6 +40,22 @@ def test_all_local_skills_routable():
                   if not sm.route_task("help me with " + r.name.replace("-", " ")).matched]
     assert unroutable == [], f"unroutable skills: {unroutable}"
 
+
+def test_predictive_analysis_is_tool_backed():
+    from tools.skill_manager import SkillManager
+    sm = SkillManager()
+    route = sm.route_task("predictive analysis forecast for sales data")
+    assert route.matched
+    assert route.skill_name == "40-predictive-analysis-skills"
+    assert route.execution_mode == "tool_backed"
+    assert "ml_engine" in route.required_tools
+
+
+def test_engine_router_detects_predictive_analysis():
+    from tools.engine_router import EngineRouter
+    router = EngineRouter()
+    assert router.detect("predictive analysis forecast for sales data") == "ml"
+
 def test_frontmatter_skill_naming():
     from tools.skill_manager import SkillManager
     sm = SkillManager()

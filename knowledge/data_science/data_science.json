@@ -1,0 +1,75 @@
+{
+  "domain": "Data Science & AI",
+  "category": "data_science",
+  "subcategory": "predictive_analysis",
+  "description": "Practical data science knowledge for predictive analysis, forecasting, model evaluation, and production ML workflows.",
+  "sections": [
+    {
+      "name": "Predictive Analysis Workflow",
+      "difficulty": "intermediate",
+      "explanation_simple": "Predictive analysis turns historical data into estimates about future or unknown outcomes. The reliable workflow is: define the target, inspect data quality, build baseline models, validate with held-out data, compare metrics, and explain the limits before deployment.",
+      "key_concepts": [
+        "Target variable: the value the model should predict",
+        "Features: input columns used to make the prediction",
+        "Train/test split: separates learning data from verification data",
+        "Baseline model: simple reference model that advanced models must beat",
+        "Data leakage: accidental use of future or target-derived information",
+        "Prediction interval: uncertainty range around a prediction",
+        "Model monitoring: checks whether accuracy degrades after deployment"
+      ],
+      "code_examples": [
+        {
+          "title": "Scikit-learn Regression Baseline",
+          "code": "from sklearn.model_selection import train_test_split\nfrom sklearn.metrics import mean_absolute_error, r2_score\nfrom sklearn.ensemble import RandomForestRegressor\n\nX_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)\nmodel = RandomForestRegressor(n_estimators=200, random_state=42)\nmodel.fit(X_train, y_train)\npred = model.predict(X_test)\nprint({'mae': mean_absolute_error(y_test, pred), 'r2': r2_score(y_test, pred)})"
+        }
+      ],
+      "learning_path": "Problem framing -> data cleaning -> baseline model -> feature engineering -> validation -> deployment monitoring"
+    },
+    {
+      "name": "Time Series Forecasting",
+      "difficulty": "intermediate",
+      "explanation_simple": "Time series forecasting predicts values ordered by time, such as sales, traffic, inventory, or sensor readings. The key difference from normal regression is that time order must be preserved; random train/test splits can leak future information.",
+      "key_concepts": [
+        "Trend: long-term upward or downward movement",
+        "Seasonality: repeating pattern by hour, day, week, month, or year",
+        "Lag feature: previous values used as predictors",
+        "Rolling window: moving average or statistic over recent time",
+        "Backtesting: repeated historical validation that preserves time order",
+        "Forecast horizon: how far ahead the prediction is made"
+      ],
+      "code_examples": [
+        {
+          "title": "Lag Features for Forecasting",
+          "code": "import pandas as pd\n\ndf = df.sort_values('date')\ndf['lag_1'] = df['value'].shift(1)\ndf['lag_7'] = df['value'].shift(7)\ndf['rolling_7'] = df['value'].shift(1).rolling(7).mean()\ndf = df.dropna()"
+        }
+      ],
+      "learning_path": "Time indexing -> trend/seasonality -> lag features -> walk-forward validation -> forecast reporting"
+    },
+    {
+      "name": "Classification and Risk Scoring",
+      "difficulty": "intermediate",
+      "explanation_simple": "Classification predicts categories such as churn/no churn, fraud/not fraud, pass/fail, or lead quality. Risk scoring ranks probability, so threshold choice matters as much as model accuracy.",
+      "key_concepts": [
+        "Class probability: model confidence for each class",
+        "Threshold: probability cutoff that turns a score into an action",
+        "Precision: how many predicted positives were correct",
+        "Recall: how many actual positives were found",
+        "ROC AUC: ranking quality across thresholds",
+        "Class imbalance: when one class is much rarer than another"
+      ],
+      "code_examples": [
+        {
+          "title": "Classification Metrics",
+          "code": "from sklearn.metrics import classification_report, roc_auc_score\n\nproba = model.predict_proba(X_test)[:, 1]\npred = (proba >= 0.4).astype(int)\nprint(classification_report(y_test, pred))\nprint('auc', roc_auc_score(y_test, proba))"
+        }
+      ],
+      "learning_path": "Binary target -> probability model -> threshold tuning -> precision/recall tradeoff -> monitored deployment"
+    }
+  ],
+  "topics": [
+    {
+      "name": "Predictive analysis checklist",
+      "content": "Confirm the target, remove leakage, build a baseline, validate out of sample, select metrics that match the business cost, explain uncertainty, and monitor drift."
+    }
+  ]
+}

@@ -1,222 +1,361 @@
-# SETUP — Move TOM to a new Windows machine
+# SETUP — Install & run TOM
 
-This file describes the steps to prepare a fresh Windows system to run TOM (development or packaged exe). Follow the sections in order.
+This guide takes a fresh Windows machine to a working TOM install (development run or
+packaged `.exe`). Follow the sections in order. For the design/architecture context, see
+[ARCHITECTURE.md](ARCHITECTURE.md); for the feature overview, see [README.md](README.md).
 
-For the full production target, also review [ARCHITECTURE.md](ARCHITECTURE.md).
+Setup values fall into three buckets:
+- **Required** — needed for TOM to start and use local reasoning.
+- **Optional** — only for a specific feature (email, custom Chrome profile, OCR, voice).
+- **Not needed** — browser automation that reuses your signed-in Chrome session needs
+  no extra API keys.
 
-This guide now distinguishes between three kinds of setup values:
-- Required: needed for TOM to start and use local reasoning.
-- Optional: only needed for a feature such as email, custom Chrome profiles, or OCR.
-- Not needed: browser automation that uses your already signed-in Chrome session does not require extra API keys.
+---
 
-1) System prerequisites
-- Windows 10 / 11 (x64)
-- Python 3.10+ (3.11 recommended)
-- 8+ GB RAM for small models; more if you plan to run large local models
-- Ollama installed and available on the PATH (if you plan to run models locally)
-
-2) Prepare Python environment (developer mode)
-
-Open PowerShell and run:
+## 0) TL;DR (the fast path)
 
 ```powershell
-cd \path\to\tom_autonomous_agent
-python -m venv venv
-.\venv\Scripts\Activate.ps1
+# From the repo root:
+setup_python311_env.bat        # creates .venv311 and installs requirements.txt
+
+# In another terminal:
+ollama serve
+ollama pull gemma4:latest
+ollama pull qwen2.5-coder:7b-instruct
+ollama pull nomic-embed-text:latest
+
+# Optional config:
+copy .env.example .env         # then edit values you actually need
+
+# Run:
+launch_tom_ui.bat
+```
+
+If anything fails, read the matching section below.
+
+---
+
+## 1) System prerequisites
+
+- **Windows 10 / 11 (x64).**
+- **Python 3.11.x — required.** TOM does **not** support 3.10 or 3.12. The launchers and
+  `requirements.txt` enforce this. Install official Python 3.11 from python.org and tick
+  *"Add Python to PATH"*.
+- **8+ GB RAM** for small local models; more for larger models.
+- **[Ollama](https://ollama.com)** installed and on PATH (runs the local LLM).
+- **Google Chrome** installed (for browser-automation features).
+- *(Optional)* **Tesseract OCR** for screen reading.
+- *(Optional)* **Node.js** if you want TOM to run/verify `.js` projects.
+
+Verify Python:
+
+```powershell
+py -3.11 --version
+# or
+python --version      # must print 3.11.x
+```
+
+---
+
+## 2) Create the Python 3.11 environment
+
+**Recommended — use the provided script.** It creates `.venv311` with the correct
+interpreter and installs everything:
+
+```powershell
+cd C:\path\to\tom_autonomous_agent
+setup_python311_env.bat
+```
+
+**Manual alternative:**
+
+```powershell
+py -3.11 -m venv .venv311
+.\.venv311\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Notes:
-- If you cannot install `pyaudio` via pip on Windows, download a matching PyAudio wheel from https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio and install it with `pip install path\to\PyAudio‑<ver>.whl`.
+> The launchers look for the interpreter in this order: `.venv311\` → `venv\` →
+> `py -3.11` → a system Python 3.11 install → `python` (only if it is 3.11). Keeping the
+> env in `.venv311` is the smoothest path.
 
-3) Configure environment variables
+**PyAudio note (voice input):** if `pip install -r requirements.txt` can't build
+`pyaudio` on Windows, install a prebuilt wheel:
 
-Copy or create a `.env` file in the repo root (an example is in the project). Important items:
+```powershell
+pip install pipwin
+pipwin install pyaudio
+# or download a matching cp311 wheel and: pip install path\to\PyAudio-<ver>-cp311-...whl
+```
 
-For the full, consolidated list of environment variables, see [ENVIRONMENT_SETUP_GUIDE.md](ENVIRONMENT_SETUP_GUIDE.md).
+Voice still works without PyAudio for output (TTS); PyAudio is only needed for
+microphone input.
 
-Required for the core app:
+---
 
-- `OLLAMA_BASE_URL` — usually `http://localhost:11434`
-- `OLLAMA_MODEL` — defaults to `llama3.2:latest`
+## 3) Install and start Ollama + pull models
 
-Recommended for stability:
-
-- `OLLAMA_TIMEOUT_SECONDS` — timeout for LLM calls
-- `TASK_TIMEOUT_SECONDS` — timeout for a single user task
-- `VOICE_INPUT_ENABLED=true` and `VOICE_OUTPUT_ENABLED=true` to enable voice
-- `VOICE_SPEAK_TIMEOUT_SECONDS` — protects the TTS thread from blocking
-- `FEEDBACK_MAX_LOOPS=5` — limits the response feedback loop
-
-Only if you want Gmail analysis or email sending:
-
-- `EMAIL_ADDRESS` — the Gmail address you will sign in with
-- `GMAIL_CREDENTIALS_FILE` — path to the Google OAuth client JSON file
-- `GMAIL_TOKEN_FILE` — path to the cached OAuth token file
-- `SMTP_SERVER` and `SMTP_PORT` — only if you use direct SMTP
-- `IMAP_HOST` and `IMAP_PORT` — only if you want IMAP mail reading
-
-Only if you want custom Chrome startup or profile selection:
-
-- `CHROME_PROFILE_PATH` — optional override for a custom Chrome profile directory
-- `CHROME_EXECUTABLE` — optional override if Chrome is installed in a non-standard location
-
-Only for future OCR / screen understanding features:
-
-- `TESSERACT_CMD` — path to the Tesseract executable if it is not on PATH
-
-Recommended additional variables for the production architecture:
-
-- `VOICE_RATE=`
-- `VOICE_VOLUME=`
-
-What you do not need to add for the current browser-based workflows:
-
-- No Chrome API key is needed.
-- No Instagram API key is needed if you are using browser automation with your logged-in session.
-- No messaging API key or messaging developer account is needed because the project now uses email-only report delivery.
-- No YouTube API key is needed for opening, browsing, or reading content in the browser.
-- No Microsoft Office API key is needed for local Office automation on your machine.
-
-Email delivery setup:
-
-- Use your Gmail account or another SMTP/IMAP-compatible email account.
-- Create a Google Cloud OAuth client if you want Gmail reading/sending with OAuth.
-- Set `EMAIL_ADDRESS`, `GMAIL_CREDENTIALS_FILE`, and `GMAIL_TOKEN_FILE` in `.env`.
-- If you use non-Gmail mail, set `SMTP_SERVER`, `SMTP_PORT`, `IMAP_HOST`, and `IMAP_PORT` instead.
-
-Where to find the Chrome profile path:
-
-- Open File Explorer and paste `%LOCALAPPDATA%\Google\Chrome\User Data` into the address bar.
-- The profile folder is usually `Default` or `Profile 1`, `Profile 2`, etc.
-- If TOM needs a fixed override, set `CHROME_PROFILE_PATH` to that user data folder.
-
-If you want TOM to read what is currently on the screen:
-
-- Install Tesseract OCR on Windows.
-- Add the Tesseract binary to PATH or set `TESSERACT_CMD` in `.env`.
-- Install the extra packages listed below if they are not already installed.
-
-4) Install and start Ollama (local LLM)
-
-Install Ollama following official docs. Then start it:
+Install Ollama, then start the server and pull the default models:
 
 ```powershell
 ollama serve
-# verify
+# in another terminal:
+ollama pull gemma4:latest                 # primary reasoning model
+ollama pull qwen2.5-coder:7b-instruct     # fast + code model
+ollama pull nomic-embed-text:latest       # embeddings for RAG memory
+
+# verify the server is up:
 curl http://localhost:11434/api/tags
 ```
 
-5) Resources and icon
+You can substitute any Ollama model by setting `OLLAMA_MODEL`, `OLLAMA_FAST_MODEL`,
+`OLLAMA_CODE_MODEL`, or `OLLAMA_EMBED_MODEL` in `.env`. If Ollama is offline, TOM's UI
+still launches but LLM reasoning, planning, and RAG memory are limited.
 
-Create a `resources/` folder at the repo root and put your TOM artwork there. Recommended filenames:
+---
 
-- `tom_icon.png` — square PNG used in UI and for icon generation
-- `tom_icon.ico` — Windows icon file used for the exe and shortcuts
+## 4) Configure `.env`
 
-To create `tom_icon.ico` from a PNG (requires Pillow):
+Copy the annotated template and edit only what you need:
 
 ```powershell
-pip install pillow
-python tools\make_icon.py resources\tom_icon.png
-# result: resources\tom_icon.ico
+copy .env.example .env
 ```
 
-6) Build a single-file executable (optional)
+Every value has a working default, so an empty `.env` is fine to start. The full
+annotated reference is in [.env.example](.env.example) and
+[ENVIRONMENT_SETUP_GUIDE.md](ENVIRONMENT_SETUP_GUIDE.md).
 
-Install PyInstaller and build:
+### Required for the core app
+- `OLLAMA_BASE_URL` — usually `http://localhost:11434`
+- `OLLAMA_MODEL` — default `gemma4:latest`
+
+### Recommended for stability
+- `OLLAMA_TIMEOUT_SECONDS` — LLM call timeout (default 120)
+- `TASK_TIMEOUT_SECONDS` — per-task timeout (default 180)
+- `OLLAMA_FAST_MODEL`, `OLLAMA_CODE_MODEL`, `OLLAMA_EMBED_MODEL` — model slots
+
+### Only for Gmail / email features
+- `EMAIL_ADDRESS` — the Gmail address you sign in with
+- `EMAIL_PASSWORD` — a Gmail **App Password** (if using SMTP/IMAP directly)
+- `GMAIL_CREDENTIALS_FILE` — path to the Google OAuth client JSON
+- `GMAIL_TOKEN_FILE` — path to the cached OAuth token
+- `IMAP_HOST` / `IMAP_PORT` / `SMTP_SERVER` / `SMTP_PORT` — only if you override defaults
+
+See [GMAIL_OAUTH_SETUP.md](GMAIL_OAUTH_SETUP.md) for the OAuth walkthrough.
+
+### Only for the Instagram agent
+- `INSTAGRAM_CHROME_PROFILE`, `INSTAGRAM_POSTS_PER_RUN`,
+  `INSTAGRAM_CHECK_INTERVAL_SECONDS`, `INSTAGRAM_AUTO_SEND_REPORT_EMAIL`, and the other
+  `INSTAGRAM_*` tuning values in `.env.example`.
+
+### Only for custom Chrome startup
+- `CHROME_PROFILE_PATH` — custom Chrome user-data directory
+- `CHROME_EXECUTABLE` — override if Chrome is installed somewhere unusual
+
+### Only for OCR / screen reading
+- `TESSERACT_CMD` — path to `tesseract.exe` if it is not on PATH
+
+### Only for voice
+- `VOICE_INPUT_ENABLED` / `VOICE_OUTPUT_ENABLED` — turn voice on/off
+- `TOM_VOICE`, `TOM_VOICE_RATE`, `VOICE_RECOGNITION_ENGINE`, and threshold tuning values
+
+> **No API key needed** for Chrome automation, Instagram/YouTube browsing in the
+> browser, WhatsApp-via-browser, or local Microsoft Office automation. Those use your
+> signed-in browser session and local apps.
+
+---
+
+## 5) Where to find your Chrome profile path
+
+- Paste `%LOCALAPPDATA%\Google\Chrome\User Data` into File Explorer's address bar.
+- The profile folder is usually `Default`, or `Profile 1`, `Profile 2`, …
+- TOM can auto-discover profiles; only set `CHROME_PROFILE_PATH` if you want to force a
+  specific user-data directory.
+
+---
+
+## 6) Optional: Tesseract OCR (screen reading)
+
+- Install the Tesseract Windows binary.
+- Add it to PATH, **or** set `TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe`
+  in `.env`.
+- `pytesseract` and `opencv-python` are already in `requirements.txt`.
+
+---
+
+## 7) Run TOM (development)
 
 ```powershell
-pip install pyinstaller
-pyinstaller --noconsole --onefile --add-data "resources;resources" --icon=resources\tom_icon.ico tom_desktop_app.py
+launch_tom_ui.bat
+```
 
-# Output: dist\tom_desktop_app.exe
+The launcher finds Python 3.11, checks that core dependencies import, then starts
+`tom_desktop_app.py`.
+
+**Other launchers:**
+- `launch_tom_safe.bat` — voice disabled + console visible. Use this first if the app
+  crashes or behaves oddly.
+- `launch_tom_debug.bat` — console visible for full tracebacks.
+- `launch_tom_ui.vbs` — runs via `pythonw` with no console window (development).
+
+**CLI mode:** `python main.py` runs the agent without the GUI.
+
+---
+
+## 8) Verify the install
+
+```powershell
+# Diagnostic self-check — imports, capabilities, optional libraries
+.venv311\Scripts\python.exe tools\verify_tom_system.py
+
+# Full test suite (pytest.ini already pins --basetemp to .pytest_tmp)
+.venv311\Scripts\python.exe -m pytest
+```
+
+> **Windows temp note:** the default pytest temp dir under `pytest-of-<user>` can have
+> broken ACLs on some machines. `pytest.ini` already redirects `--basetemp` to
+> `.pytest_tmp` to avoid this — don't override it.
+
+---
+
+## 9) Build the desktop `.exe` (optional)
+
+The build uses the committed spec `tom_desktop_app.spec`:
+
+```powershell
+build.bat
+# Output: dist\tom_desktop_app.exe  +  dist\SHA256SUMS.txt
+```
+
+Or do environment-setup → build → Desktop shortcut in one shot:
+
+```powershell
+SETUP_TOM.bat
 ```
 
 Notes:
-- `--add-data "resources;resources"` bundles the `resources/` folder into the exe and ensures the app can find assets at runtime.
-- Keep `tom_icon.ico` available to set the shortcut icon.
+- The binary is **unsigned**, so Windows SmartScreen may warn on first run.
+- **Rebuild after every code change** — the frozen EXE does not auto-pick-up edits.
+- The frozen EXE **does not read `.env`**. Env-gated features fall back to their
+  bootstrap defaults inside the EXE (voice defaults to ON in the bundle). If you depend
+  on `.env` values, run from source instead, or bake them into the build environment.
 
-7) Create a Windows installer (recommended for distribution)
-
-We provide an Inno Setup script at `installer/tom_installer.iss`.
-Install Inno Setup, then run:
+### Manual PyInstaller (if you prefer)
 
 ```powershell
+pip install pyinstaller
+pyinstaller --noconsole --onefile --add-data "resources;resources" `
+  --icon=resources\tom_icon.ico tom_desktop_app.py
+```
+
+---
+
+## 10) Build a Windows installer (optional, for distribution)
+
+An Inno Setup script lives at `installer\tom_installer.iss`:
+
+```powershell
+# Install Inno Setup first, then:
 iscc installer\tom_installer.iss
 # Output: TOM-Installer.exe
 ```
 
-8) Launching without a console
+---
 
-- The built single-file exe is built with `--noconsole` so it will not show a console.
-- A `launch_tom_ui.vbs` helper is included to run the script via `pythonw` without a console during development.
+## 11) Icon assets
 
-9) Voice troubleshooting
+Put artwork in `resources\`:
+- `tom_icon.png` — square PNG used in the UI
+- `tom_icon.ico` — Windows icon for the EXE and shortcuts
 
-- If you see: "Missing package: install 'SpeechRecognition' and 'pyaudio'", run:
-
-```powershell
-pip install SpeechRecognition
-# if pip install pyaudio fails, use a wheel from the Gohlke site and install it
-```
-
-- If microphone is not detected, ensure drivers are installed and no other application is holding the mic.
-- Use `VOICE_INPUT_ENABLED=false` in `.env` to disable voice if issues persist.
-
-10) After moving to a new machine — quick checklist
-
-- Install Python and create venv
-- Install requirements
-- Put `resources/tom_icon.png` and `tom_icon.ico` into `resources/`
-- Start Ollama or point `OLLAMA_BASE_URL` to a reachable model endpoint
-- (Optional) Build exe with PyInstaller and use the installer script
-
-11) Support and next steps
-
-If you want, I can:
-- Produce the compiled installer artifact on a machine with Inno Setup installed.
-- Expand smoke tests into a CI script.
-- Start Phase 3 features (guarded engineer capabilities) after you confirm deployment is successful on the target machine.
-
-12) Recommended production extras
-
-If you plan to extend TOM into the full assistant described in `ARCHITECTURE.md`, install the optional libraries below as needed:
+Generate the `.ico` from a PNG (needs Pillow, already in requirements):
 
 ```powershell
-pip install fastapi uvicorn pydantic pyautogui pywinauto opencv-python pytesseract python-pptx reportlab pywin32 apscheduler
+python tools\make_icon.py resources\tom_icon.png
+# -> resources\tom_icon.ico
 ```
 
-For OCR, also install the Tesseract Windows binary and add it to PATH.
+---
 
-13) Suggested `.env` template
+## 12) Background agents (optional)
 
-Use this as a starting point, then only fill in the feature-specific values you actually need:
+TOM ships two long-running agents you can start as daemons:
+
+```powershell
+start_email_agent_daemon.bat        # inbox monitoring / triage
+start_instagram_agent_daemon.bat    # Instagram AI-news extraction + report
+```
+
+You can also control them by chatting with TOM: `start email agent`,
+`stop instagram agent`, `email agent status`. Both honor the approval gate before
+sending anything.
+
+---
+
+## 13) Moving to a new machine — checklist
+
+- [ ] Install official **Python 3.11** (Add to PATH).
+- [ ] Run `setup_python311_env.bat` (creates `.venv311`, installs requirements).
+- [ ] Install Ollama; `ollama serve`; pull the three default models.
+- [ ] Install Chrome; sign in to the sites you'll automate.
+- [ ] *(Optional)* install Tesseract; set `TESSERACT_CMD`.
+- [ ] *(Optional)* `copy .env.example .env` and fill feature-specific values.
+- [ ] *(Optional)* drop `tom_icon.png` / `tom_icon.ico` into `resources\`.
+- [ ] Run `.venv311\Scripts\python.exe tools\verify_tom_system.py`.
+- [ ] Launch with `launch_tom_ui.bat` (or `launch_tom_safe.bat` if it crashes).
+- [ ] *(Optional)* `build.bat` for the EXE + Desktop shortcut.
+
+---
+
+## 14) Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| "TOM requires Python 3.11.x" | Install official Python 3.11, then `setup_python311_env.bat`. |
+| "TOM dependencies are missing" | Re-run `setup_python311_env.bat`. |
+| `pip install pyaudio` fails | Use `pipwin install pyaudio` or a `cp311` PyAudio wheel. |
+| LLM replies empty/limited | `ollama serve` running? Models pulled? Check `curl http://localhost:11434/api/tags`. |
+| App crashes on launch | Run `launch_tom_safe.bat` (voice off, console visible) to see the error. |
+| Mic not detected | Check drivers; ensure no other app holds the mic; or `VOICE_INPUT_ENABLED=false`. |
+| Chrome profile launch fails | Confirm Chrome installed and the profile exists; optionally set `CHROME_PROFILE_PATH`. |
+| `read my screen` does nothing | Install Tesseract; set `TESSERACT_CMD`; keep the target window visible. |
+| EXE ignores `.env` / code changes | Run from source for `.env`; rebuild with `build.bat` after edits. |
+| pytest permission errors in temp | Don't override `--basetemp`; it's pinned to `.pytest_tmp` in `pytest.ini`. |
+
+---
+
+## 15) `.env` starter template
 
 ```env
+# Core (LLM)
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2:latest
-OLLAMA_TIMEOUT_SECONDS=45
-TASK_TIMEOUT_SECONDS=75
-VOICE_INPUT_ENABLED=true
-VOICE_OUTPUT_ENABLED=true
-VOICE_SPEAK_TIMEOUT_SECONDS=8
-FEEDBACK_MAX_LOOPS=5
+OLLAMA_MODEL=gemma4:latest
+OLLAMA_FAST_MODEL=qwen2.5-coder:7b-instruct
+OLLAMA_CODE_MODEL=qwen2.5-coder:7b-instruct
+OLLAMA_EMBED_MODEL=nomic-embed-text:latest
+OLLAMA_TIMEOUT_SECONDS=120
+TASK_TIMEOUT_SECONDS=180
 
-# Only for Gmail / email features
+# Voice (optional)
+VOICE_INPUT_ENABLED=false
+VOICE_OUTPUT_ENABLED=false
+
+# Email (optional — Gmail/inbox features)
 # EMAIL_ADDRESS=you@gmail.com
-# GMAIL_CREDENTIALS_FILE=C:\path\to\client_secret.json
-# GMAIL_TOKEN_FILE=C:\path\to\gmail_token.json
-# SMTP_SERVER=smtp.gmail.com
-# SMTP_PORT=587
+# EMAIL_PASSWORD=your_app_password
+# GMAIL_CREDENTIALS_FILE=google-credentials.json
+# GMAIL_TOKEN_FILE=google-credentials_token.json
 # IMAP_HOST=imap.gmail.com
 # IMAP_PORT=993
+# SMTP_SERVER=smtp.gmail.com
+# SMTP_PORT=587
 
-# Only for custom Chrome startup
-# CHROME_PROFILE_PATH=C:\Users\you\AppData\Local\Google\Chrome\User Data
-# CHROME_EXECUTABLE=C:\Program Files\Google\Chrome\Application\chrome.exe
+# Browser (optional — custom Chrome startup)
+# CHROME_EXECUTABLE=C:/Program Files/Google/Chrome/Application/chrome.exe
+# CHROME_PROFILE_PATH=%LOCALAPPDATA%/Google/Chrome/User Data
 
-# Only for OCR / screen reading
+# OCR (optional — screen reading)
 # TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
 ```
-

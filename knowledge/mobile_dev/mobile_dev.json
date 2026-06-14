@@ -1,0 +1,69 @@
+{
+  "domain": "Mobile Development",
+  "category": "mobile_dev",
+  "subcategory": "cross_platform_mobile",
+  "description": "Mobile development knowledge for React Native, Expo, Flutter, native Android/iOS, mobile UI, app performance, and release workflows.",
+  "sections": [
+    {
+      "name": "React Native and Expo",
+      "difficulty": "intermediate",
+      "explanation_simple": "React Native builds mobile apps using React components backed by native iOS and Android views. Expo adds a managed toolchain for faster setup, previewing, builds, notifications, camera, sensors, and app store packaging.",
+      "key_concepts": [
+        "React Native: React components rendered as native mobile views",
+        "Expo: managed React Native toolchain and cloud build service",
+        "Metro bundler: JavaScript bundler used by React Native",
+        "Native module: bridge to platform-specific APIs",
+        "EAS Build: Expo app build pipeline for Android and iOS",
+        "Navigation: stack, tab, drawer, and deep-link routing"
+      ],
+      "code_examples": [
+        {
+          "title": "Expo App Startup",
+          "code": "npx create-expo-app my-mobile-app\ncd my-mobile-app\nnpx expo start"
+        }
+      ],
+      "learning_path": "React basics -> Expo app -> navigation -> device APIs -> EAS build -> store release"
+    },
+    {
+      "name": "Mobile UI and Performance",
+      "difficulty": "intermediate",
+      "explanation_simple": "Mobile UI must be fast, touch-friendly, and stable across screen sizes. Performance depends on reducing rerenders, using virtualized lists, compressing images, avoiding heavy work on the main thread, and testing on real devices.",
+      "key_concepts": [
+        "Touch target: interactive area large enough for fingers",
+        "Safe area: screen region outside notches and system bars",
+        "Virtualized list: renders only visible rows for large lists",
+        "Memoization: prevents unnecessary component rerenders",
+        "Offline state: usable behavior when network drops",
+        "Device testing: verification on real Android and iOS hardware"
+      ],
+      "code_examples": [
+        {
+          "title": "FlatList for Large Lists",
+          "code": "import { FlatList, Text } from 'react-native';\n\nexport default function Screen({ items }) {\n  return <FlatList data={items} keyExtractor={(item) => item.id} renderItem={({ item }) => <Text>{item.title}</Text>} />;\n}"
+        }
+      ],
+      "learning_path": "Responsive layout -> safe areas -> list performance -> image optimization -> offline handling -> release QA"
+    },
+    {
+      "name": "Native Android and iOS Release Flow",
+      "difficulty": "advanced",
+      "explanation_simple": "Production mobile release requires signing keys, bundle identifiers, permissions, privacy declarations, crash reporting, store screenshots, staged rollout, and rollback planning.",
+      "key_concepts": [
+        "Android package name: unique app identifier",
+        "iOS bundle ID: unique Apple app identifier",
+        "Signing key: proves app ownership",
+        "Permissions: declared access to camera, location, contacts, or storage",
+        "Crash reporting: captures production failures",
+        "Staged rollout: releases to a small percentage before full launch"
+      ],
+      "code_examples": [],
+      "learning_path": "App identifiers -> signing -> permissions -> store assets -> beta test -> staged rollout"
+    }
+  ],
+  "topics": [
+    {
+      "name": "React Native capability note",
+      "content": "Tom can currently provide React Native and Expo implementation guidance. Full execution requires external Node/Expo CLI availability and platform build credentials."
+    }
+  ]
+}

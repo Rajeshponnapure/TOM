@@ -1,0 +1,47 @@
+{
+  "domain": "Medical Reference",
+  "category": "medical_reference",
+  "subcategory": "safe_health_information",
+  "description": "Safe medical reference knowledge for general education, triage boundaries, documentation, and health-information workflows. This is not diagnosis or treatment.",
+  "sections": [
+    {
+      "name": "Medical Safety Boundaries",
+      "difficulty": "beginner",
+      "explanation_simple": "Medical information can support understanding, organization, and preparation for a clinician conversation. It must not replace diagnosis, prescriptions, emergency judgment, or personalized treatment.",
+      "key_concepts": [
+        "General information: educational explanation, not a diagnosis",
+        "Emergency symptoms: chest pain, severe breathing trouble, stroke signs, severe bleeding, or loss of consciousness require urgent care",
+        "Medication safety: dosing and interactions require licensed professional verification",
+        "Clinical context: age, history, exam findings, and labs change interpretation",
+        "Escalation: uncertain or high-risk symptoms should be referred to a clinician"
+      ],
+      "code_examples": [],
+      "learning_path": "General explanation -> red flag screening -> organize questions -> clinician referral"
+    },
+    {
+      "name": "Health Data Organization",
+      "difficulty": "intermediate",
+      "explanation_simple": "Health workflows are safer when symptoms, timing, medications, allergies, reports, and questions are organized clearly before a medical appointment.",
+      "key_concepts": [
+        "Symptom timeline: when symptoms started and how they changed",
+        "Medication list: name, dose, frequency, and start date",
+        "Allergies: drug, food, and material reactions",
+        "Vitals and labs: measured data with dates and units",
+        "Questions for clinician: concise list of concerns and decisions needed"
+      ],
+      "code_examples": [
+        {
+          "title": "Appointment Prep Template",
+          "code": "Symptoms:\\n- Started:\\n- Pattern:\\n- Severity:\\n\\nMedications:\\n- Name / dose / frequency:\\n\\nAllergies:\\n- Reaction:\\n\\nQuestions for clinician:\\n1.\\n2.\\n3."
+        }
+      ],
+      "learning_path": "Collect facts -> format timeline -> list medications/allergies -> prepare questions -> share with clinician"
+    }
+  ],
+  "topics": [
+    {
+      "name": "Medical capability note",
+      "content": "Tom can summarize general medical information and organize health data. It must not diagnose, prescribe, or replace urgent medical care."
+    }
+  ]
+}

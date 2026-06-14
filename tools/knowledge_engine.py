@@ -43,6 +43,11 @@ DOMAIN_REGISTRY = {
         "icon": "\U0001f4f1",
         "files": ["mobile_dev.json"],
     },
+    "medical_reference": {
+        "name": "Medical Reference",
+        "icon": "\U0001fa7a",
+        "files": ["medical_reference.json"],
+    },
 }
 
 

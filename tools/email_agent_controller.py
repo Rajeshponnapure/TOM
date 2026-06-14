@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -28,6 +29,35 @@ class EmailAgentController:
         return {}
 
     def _pid_running(self, pid: int) -> bool:
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            try:
+                result = subprocess.run(
+                    [
+                        "powershell",
+                        "-NoProfile",
+                        "-Command",
+                        f"if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}",
+                    ],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=creationflags,
+                )
+                if result.returncode == 0:
+                    return True
+            except Exception:
+                pass
+            try:
+                result = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                return str(pid) in result.stdout
+            except Exception:
+                return False
         try:
             os.kill(pid, 0)
             return True
@@ -119,9 +149,9 @@ class EmailAgentController:
         current = self.status()
         if not current["running"]:
             return {
+                **current,
                 "status": "not_running",
                 "message": "Email agent is not running.",
-                **current,
             }
 
         pid = current.get("pid")
@@ -133,7 +163,21 @@ class EmailAgentController:
 
         try:
             if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True, text=True)
+                result = subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                time.sleep(0.5)
+                if self._pid_running(pid):
+                    detail = (result.stderr or result.stdout or "process still running").strip()
+                    return {
+                        "status": "error",
+                        "message": f"Failed to stop email agent PID {pid}: {detail}",
+                        "pid": pid,
+                        "running": True,
+                    }
             else:
                 os.kill(pid, signal.SIGTERM)
         except Exception as exc:

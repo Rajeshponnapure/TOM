@@ -92,6 +92,11 @@ class TomAgent:
         self.chat_memory = ChatMemory()
         self.command_router = CommandRouter()
         self.skill_manager = SkillManager()
+        try:
+            from tools.skill_telemetry import SkillTelemetry
+            self.skill_telemetry = SkillTelemetry()
+        except Exception:
+            self.skill_telemetry = None
         self.capability_resolver = CapabilityResolver()
         self.approval_manager = ApprovalManager()
         self.whatsapp_tools = WhatsAppTools(self.browser_tools)
@@ -393,6 +398,8 @@ class TomAgent:
     async def execute_task(self, command: str) -> Dict[str, Any]:
         safe_print(f"\nTOM RECEIVED: {command}\n")
         self.chat_memory.append("user", command)
+        task_started_at = time.perf_counter()
+        telemetry_skill_route = None
 
         # Safety check
         safety_check = await self.safety.is_action_safe(command)
@@ -434,6 +441,21 @@ class TomAgent:
             if _meta in ("system status", "health", "health check", "status",
                          "subsystem status", "system health"):
                 return self._health_response()
+            if _meta in ("system capability report", "capability health",
+                         "capability report", "full capability report"):
+                try:
+                    from tools.capability_health import format_capability_health
+                    return {"status": "success", "response_type": "capability_health",
+                            "message": format_capability_health()}
+                except Exception as _cap_err:
+                    return {"status": "error",
+                            "message": f"Capability health unavailable: {_cap_err}"}
+            if _meta in ("skill usage", "skill telemetry", "skill usage report",
+                         "skill report"):
+                if getattr(self, "skill_telemetry", None):
+                    return {"status": "success", "response_type": "skill_usage",
+                            "message": self.skill_telemetry.format_summary()}
+                return {"status": "error", "message": "Skill telemetry is unavailable."}
             if _meta in ("show logs", "logs", "show recent logs", "view logs",
                          "recent activity log"):
                 return self._logs_response()
@@ -495,6 +517,7 @@ class TomAgent:
                 route = self.command_router.route(command)
                 handler = route.handler
                 skill_route = self.skill_manager.route_task(command)
+                telemetry_skill_route = skill_route if skill_route.matched else None
 
                 # Honor needs_approval on ANY category (e.g. whatsapp_message is
                 # category "communication" but still flagged). Skip when the
@@ -693,6 +716,20 @@ class TomAgent:
             # Log completion with the REAL outcome (was: unconditional SUCCESS,
             # which made the audit log claim success for errored tasks).
             _outcome_ok = result.get("status") not in ("error", "cancelled", "unsupported")
+            if telemetry_skill_route and getattr(self, "skill_telemetry", None):
+                try:
+                    failure_reason = "" if _outcome_ok else str(result.get("message", result.get("status", "")))
+                    self.skill_telemetry.record_route(
+                        skill_name=telemetry_skill_route.skill_name,
+                        execution_mode=telemetry_skill_route.execution_mode,
+                        status="success" if _outcome_ok else "failure",
+                        elapsed_seconds=time.perf_counter() - task_started_at,
+                        failure_reason=failure_reason,
+                        command=command,
+                    )
+                except Exception as _tel_err:
+                    self.safety.log_action("WARN", target="skill_telemetry", status="FAILURE",
+                                           message=f"skill telemetry failed: {_tel_err}")
             self.safety.log_action("COMPLETED", target=command,
                                    status="SUCCESS" if _outcome_ok else "FAILURE",
                                    message=f"Completed ({result.get('status', 'unknown')}): {command[:100]}...")
@@ -750,6 +787,18 @@ class TomAgent:
         except Exception as e:
             error_msg = f"[ERROR] Task failed: {str(e)}"
             self.safety.log_action("ERROR", target=command, status="FAILURE", message=str(e))
+            if telemetry_skill_route and getattr(self, "skill_telemetry", None):
+                try:
+                    self.skill_telemetry.record_route(
+                        skill_name=telemetry_skill_route.skill_name,
+                        execution_mode=telemetry_skill_route.execution_mode,
+                        status="failure",
+                        elapsed_seconds=time.perf_counter() - task_started_at,
+                        failure_reason=str(e),
+                        command=command,
+                    )
+                except Exception:
+                    pass
             safe_print(f"\n{error_msg}\n")
             try:
                 self.learner.log_experience(command, "error", {"error": str(e)})

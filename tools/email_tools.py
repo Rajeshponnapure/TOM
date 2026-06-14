@@ -1,6 +1,7 @@
 import asyncio
 import os
 import subprocess
+from email.header import decode_header, make_header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -22,6 +23,15 @@ def safe_print(message: str):
     print(message.encode("ascii", errors="ignore").decode("ascii"))
 
 
+def _decode_mime_header(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        return str(make_header(decode_header(value))).strip()
+    except Exception:
+        return value.strip()
+
+
 def classify_email_item(email_item: Dict[str, Any]) -> Dict[str, Any]:
     """Classify a single email dict into priority/reply metadata."""
     import re as _re
@@ -32,8 +42,8 @@ def classify_email_item(email_item: Dict[str, Any]) -> Dict[str, Any]:
         match = _re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", header_value)
         return match.group(0) if match else header_value.strip()
 
-    subject = str(email_item.get("subject", "")).strip()
-    sender = str(email_item.get("from", "")).strip()
+    subject = _decode_mime_header(str(email_item.get("subject", "")).strip())
+    sender = _decode_mime_header(str(email_item.get("from", "")).strip())
     preview = str(email_item.get("body_preview", "")).strip()
     combined = f"{subject} {sender} {preview}".lower()
 
@@ -225,7 +235,11 @@ class EmailTools:
             for seq_num in seq_nums[-max_count:]:
                 msg = await asyncio.to_thread(
                     mail.fetch, [seq_num],
-                    ["BODY.PEEK[HEADER.FIELDS (DATE FROM SUBJECT TO)]", "RFC822.SIZE", "RFC822"],
+                    [
+                        "BODY.PEEK[HEADER.FIELDS (DATE FROM SUBJECT TO)]",
+                        "RFC822.SIZE",
+                        "BODY.PEEK[TEXT]<0.2048>",
+                    ],
                 )
                 try:
                     email_data = self._parse_email_message(msg)
@@ -243,7 +257,7 @@ class EmailTools:
         try:
             message_data = next(iter(msg.values()))
             headers = message_data.get(b"BODY[HEADER.FIELDS (DATE FROM SUBJECT TO)]") or b""
-            raw_message = message_data.get(b"RFC822") or b""
+            raw_message = message_data.get(b"BODY[TEXT]<0>") or message_data.get(b"BODY[TEXT]") or b""
             if headers:
                 header_text = headers.decode("utf-8", errors="replace")
                 for line in header_text.splitlines():
@@ -251,14 +265,15 @@ class EmailTools:
                     if lower_line.startswith("date:"):
                         email_data["date"] = line.split(":", 1)[1].strip()
                     elif lower_line.startswith("subject:"):
-                        email_data["subject"] = line.split(":", 1)[1].strip()
+                        email_data["subject"] = _decode_mime_header(line.split(":", 1)[1].strip())
                     elif lower_line.startswith("from:"):
-                        email_data["from"] = line.split(":", 1)[1].strip()
+                        email_data["from"] = _decode_mime_header(line.split(":", 1)[1].strip())
                     elif lower_line.startswith("to:"):
-                        email_data["to"] = line.split(":", 1)[1].strip()
+                        email_data["to"] = _decode_mime_header(line.split(":", 1)[1].strip())
             if raw_message:
-                preview = raw_message.decode("utf-8", errors="replace").split("\n\n", 1)[-1]
-                email_data["body_preview"] = preview[:300] + "\n..." if len(preview) > 300 else preview
+                preview = raw_message.decode("utf-8", errors="replace")
+                preview = " ".join(preview.split())
+                email_data["body_preview"] = preview[:300] + "..." if len(preview) > 300 else preview
         except Exception:
             pass
         return email_data

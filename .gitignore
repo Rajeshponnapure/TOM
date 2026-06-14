@@ -9,6 +9,7 @@
 __pycache__/
 *.pyc
 venv/
+.venv311/
 .pytest_cache/
 .pytest_tmp/
 
@@ -35,6 +36,10 @@ awesome-claude-skills/
 # ── Runtime state / personal data ──────────────────────
 tom_brain/
 output/
+outputs/
+memories/
+reports/
+*.log
 .claude/
 .sixth/
 

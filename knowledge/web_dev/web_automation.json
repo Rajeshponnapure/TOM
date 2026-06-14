@@ -1,0 +1,48 @@
+{
+  "domain": "Web Development",
+  "category": "web_dev",
+  "subcategory": "web_automation",
+  "description": "Knowledge for browser automation, Playwright testing, localhost verification, screenshots, and web scraping safety.",
+  "sections": [
+    {
+      "name": "Web Automation with Playwright",
+      "difficulty": "intermediate",
+      "explanation_simple": "Web automation controls a browser to verify flows that normal unit tests cannot see: navigation, forms, login screens, visual layout, screenshots, downloads, and localhost app behavior.",
+      "key_concepts": [
+        "Playwright: browser automation framework for Chromium, Firefox, and WebKit",
+        "Locator: stable way to target elements by role, text, label, or selector",
+        "Headless mode: browser runs without a visible window",
+        "Screenshot verification: saves visual proof of rendered state",
+        "Network interception: inspects or mocks API calls",
+        "Localhost smoke test: checks a local app before delivery"
+      ],
+      "code_examples": [
+        {
+          "title": "Playwright Localhost Smoke Test",
+          "code": "from playwright.sync_api import sync_playwright\n\nwith sync_playwright() as p:\n    browser = p.chromium.launch(headless=True)\n    page = browser.new_page(viewport={'width': 1280, 'height': 720})\n    page.goto('http://localhost:3000', wait_until='networkidle')\n    page.screenshot(path='tom_logs/web_smoke.png', full_page=True)\n    browser.close()"
+        }
+      ],
+      "learning_path": "Install browser runtime -> open page -> locate elements -> assert behavior -> capture screenshots -> inspect network"
+    },
+    {
+      "name": "Safe Web Scraping and Downloads",
+      "difficulty": "intermediate",
+      "explanation_simple": "Safe scraping respects authorization, robots rules where applicable, rate limits, file-size caps, and data privacy. For Tom, downloads and scraping should remain size-capped and approval-gated when they can touch the filesystem.",
+      "key_concepts": [
+        "Robots and terms: site rules that may restrict scraping",
+        "Rate limiting: prevents excessive automated requests",
+        "File-size cap: prevents accidental large downloads",
+        "Structured extraction: parse tables/JSON instead of brittle string slicing",
+        "Approval gate: user confirmation before risky filesystem or network actions"
+      ],
+      "code_examples": [],
+      "learning_path": "Check authorization -> fetch safely -> parse structured data -> store bounded output -> verify result"
+    }
+  ],
+  "topics": [
+    {
+      "name": "Web automation capability note",
+      "content": "Tom has web verification routes, but Playwright must be installed in the active Python 3.11 environment for full browser automation."
+    }
+  ]
+}

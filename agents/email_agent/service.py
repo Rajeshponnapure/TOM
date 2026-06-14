@@ -30,6 +30,8 @@ class EmailAgentService:
         self.check_interval_seconds = int(os.environ.get("EMAIL_CHECK_INTERVAL_SECONDS", "300"))
         self.reply_generation_timeout_seconds = int(os.environ.get("EMAIL_REPLY_TIMEOUT_SECONDS", "30"))
         self.open_important_in_client = os.environ.get("EMAIL_IMPORTANT_OPEN_IN_CLIENT", "true").lower() == "true"
+        self.history_max_bytes = int(os.environ.get("EMAIL_AGENT_HISTORY_MAX_BYTES", str(2 * 1024 * 1024)))
+        self.summary_max_chars = int(os.environ.get("EMAIL_AGENT_SUMMARY_MAX_CHARS", "420"))
 
         self.model_name = os.environ.get("OLLAMA_MODEL", "llama3.2:latest")
         self.base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -83,8 +85,10 @@ class EmailAgentService:
 
     def _append_history(self, payload: Dict[str, Any]) -> None:
         try:
+            self._trim_history_file()
             with self.history_file.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                handle.write(json.dumps(self._history_record(payload), ensure_ascii=False) + "\n")
+            self._trim_history_file()
         except Exception:
             pass
 
@@ -111,6 +115,67 @@ class EmailAgentService:
             "auto_replied_count": result.get("auto_replied_count", 0),
             "summary_lines": result.get("summary_lines", []),
         }
+
+    def _short_text(self, value: Any, max_chars: int | None = None) -> str:
+        text = " ".join(str(value or "").split())
+        limit = max_chars or self.summary_max_chars
+        return text[:limit] + "..." if len(text) > limit else text
+
+    def _compact_email(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": item.get("id", ""),
+            "sender": self._short_text(item.get("raw_sender") or item.get("sender"), 160),
+            "subject": self._short_text(item.get("subject"), 180),
+            "priority": item.get("priority", "unknown"),
+            "needs_reply": bool(item.get("needs_reply", False)),
+            "summary": self._short_text(item.get("summary")),
+        }
+
+    def _compact_draft(self, draft: Dict[str, Any]) -> Dict[str, Any]:
+        open_result = draft.get("open_result") or {}
+        return {
+            "recipient": self._short_text(draft.get("recipient"), 160),
+            "subject": self._short_text(draft.get("subject"), 180),
+            "status": draft.get("status", "unknown"),
+            "priority": draft.get("priority", "unknown"),
+            "approval_key": draft.get("approval_key", ""),
+            "reply_body_preview": self._short_text(draft.get("reply_body") or draft.get("body"), 350),
+            "open_status": open_result.get("status", "unknown"),
+            "open_message": self._short_text(open_result.get("message"), 240),
+        }
+
+    def _history_record(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        compact = self._compact_result(result)
+        compact.update(
+            {
+                "message": self._short_text(result.get("message"), 1200),
+                "important_emails": [self._compact_email(item) for item in result.get("important_emails", [])[:10]],
+                "low_priority_emails": [self._compact_email(item) for item in result.get("low_priority_emails", [])[:10]],
+                "draft_replies": [self._compact_draft(item) for item in result.get("draft_replies", [])[:10]],
+                "next_run_at": result.get("next_run_at"),
+            }
+        )
+        return compact
+
+    def _trim_history_file(self) -> None:
+        try:
+            if self.history_max_bytes <= 0 or not self.history_file.exists():
+                return
+            size = self.history_file.stat().st_size
+            if size <= self.history_max_bytes:
+                return
+            keep_bytes = max(64 * 1024, self.history_max_bytes // 2)
+            with self.history_file.open("rb") as handle:
+                handle.seek(max(0, size - keep_bytes))
+                data = handle.read()
+            first_newline = data.find(b"\n")
+            if first_newline > 0:
+                data = data[first_newline + 1:]
+            temp_file = self.history_file.with_suffix(".jsonl.tmp")
+            temp_file.write_bytes(data)
+            temp_file.replace(self.history_file)
+        except Exception:
+            pass
 
     def _important_key(self, analysis: Dict[str, Any]) -> str:
         message_id = str(analysis.get("id", "")).strip()
@@ -275,6 +340,9 @@ class EmailAgentService:
                     low_priority_emails.append(analysis)
 
                 if analysis["priority"] == "important" and analysis["needs_reply"]:
+                    approval_key = self._important_key(analysis)
+                    if approval_key in opened_important_keys:
+                        continue
                     reply_body = await self._draft_reply_body(analysis)
                     if analysis["sender"]:
                         draft_result = await self.email_tools.draft_email(
@@ -282,7 +350,6 @@ class EmailAgentService:
                             analysis["reply_subject"],
                             reply_body,
                         )
-                        approval_key = self._important_key(analysis)
                         open_result = {"status": "skipped", "message": "Opening disabled"}
                         if self.open_important_in_client and approval_key not in opened_important_keys:
                             open_result = await self.email_tools.open_email_client_draft(
@@ -294,8 +361,7 @@ class EmailAgentService:
                                     "Please review and click Send if you approve this important reply."
                                 ),
                             )
-                            if open_result.get("status") == "success":
-                                opened_important_keys.add(approval_key)
+                            opened_important_keys.add(approval_key)
 
                         draft_result["reply_body"] = reply_body
                         draft_result["priority"] = "important"

@@ -174,8 +174,8 @@ class EngineRouter:
         if re.search(r"\b(esp32|esp8266|micropython|arduino|raspberry pi pico)\b", c) and \
            re.search(r"\b(code|firmware|sketch|generate|sensor|mqtt|pinout)\b", c):
             return "iot"
-        if re.search(r"\b(regression|classif\w+|cluster\w*|auto[_ ]?ml|anomal\w+|time[- ]series)\b", c) and \
-           re.search(r"\b(model|train|ml|data|dataset|algorithm|forecast|kmeans|knn|svm|x=|y=)", c):
+        if re.search(r"\b(predictive analysis|prediction|predict|forecast|regression|classif\w+|cluster\w*|auto[_ ]?ml|anomal\w+|time[- ]series)\b", c) and \
+           re.search(r"\b(model|train|ml|data|dataset|algorithm|analysis|forecast|kmeans|knn|svm|x=|y=)", c):
             return "ml"
         if re.search(r"\b(move (the )?mouse|click at \d|press (the )?key|type text|take a screenshot|"
                      r"volume (up|down|to \d+)|mute|unmute|system info|screen ?shot)\b", c):

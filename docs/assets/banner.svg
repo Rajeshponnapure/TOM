@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340" role="img" aria-label="TOM — Local Autonomous Desktop Agent">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1020">
+        <animate attributeName="stop-color" values="#0b1020;#0d1530;#160b28;#0b1020" dur="12s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="100%" stop-color="#141433">
+        <animate attributeName="stop-color" values="#141433;#1a1140;#0e1a3a;#141433" dur="12s" repeatCount="indefinite"/>
+      </stop>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4F8CFF"/>
+      <stop offset="50%" stop-color="#7C5CFF"/>
+      <stop offset="100%" stop-color="#EC4899"/>
+      <animateTransform attributeName="gradientTransform" type="translate" values="-0.3 0; 0.3 0; -0.3 0" dur="8s" repeatCount="indefinite"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="340" fill="url(#bg)"/>
+
+  <!-- starfield dots -->
+  <g fill="#4F8CFF" opacity="0.5">
+    <circle cx="120" cy="70" r="2"><animate attributeName="opacity" values="0.2;1;0.2" dur="3s" repeatCount="indefinite"/></circle>
+    <circle cx="1040" cy="90" r="2.5"><animate attributeName="opacity" values="1;0.2;1" dur="4s" repeatCount="indefinite"/></circle>
+    <circle cx="980" cy="250" r="2"><animate attributeName="opacity" values="0.3;1;0.3" dur="2.5s" repeatCount="indefinite"/></circle>
+    <circle cx="200" cy="270" r="2"><animate attributeName="opacity" values="1;0.3;1" dur="3.5s" repeatCount="indefinite"/></circle>
+    <circle cx="640" cy="40" r="2"><animate attributeName="opacity" values="0.2;1;0.2" dur="5s" repeatCount="indefinite"/></circle>
+  </g>
+
+  <!-- pulsing orb -->
+  <g transform="translate(180,170)">
+    <circle r="60" fill="none" stroke="url(#accent)" stroke-width="2" opacity="0.6">
+      <animate attributeName="r" values="60;78;60" dur="4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.6;0;0.6" dur="4s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="42" fill="url(#accent)" filter="url(#glow)">
+      <animate attributeName="r" values="42;48;42" dur="3s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="16" fill="#ffffff" opacity="0.9">
+      <animate attributeName="opacity" values="0.9;0.5;0.9" dur="2s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- wordmark -->
+  <text x="320" y="180" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="116" font-weight="800" fill="url(#accent)" filter="url(#glow)">TOM</text>
+  <text x="324" y="226" font-family="Consolas, monospace" font-size="24" font-weight="600" fill="#cbd5e1">Local Autonomous Desktop Agent</text>
+
+  <!-- animated underline -->
+  <rect x="324" y="244" width="0" height="4" rx="2" fill="url(#accent)">
+    <animate attributeName="width" values="0;430;430" dur="2.4s" begin="0s" fill="freeze"/>
+  </rect>
+
+  <!-- tagline chips -->
+  <g font-family="Consolas, monospace" font-size="15" fill="#94a3b8">
+    <text x="324" y="288">100% local</text>
+    <text x="430" y="288">·</text>
+    <text x="450" y="288">Ollama LLM</text>
+    <text x="560" y="288">·</text>
+    <text x="580" y="288">voice + browser + desktop</text>
+    <text x="820" y="288">·</text>
+    <text x="840" y="288">approval-gated</text>
+  </g>
+
+  <!-- moving accent line bottom -->
+  <rect x="0" y="334" width="300" height="6" fill="url(#accent)">
+    <animate attributeName="x" values="-300;1200" dur="6s" repeatCount="indefinite"/>
+  </rect>
+</svg>

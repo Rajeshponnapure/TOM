@@ -68,6 +68,12 @@ class SkillManager:
         "ml": ["ml_engine"],
         "machine": ["ml_engine"],
         "nlp": ["ml_engine"],
+        "predictive": ["ml_engine"],
+        "prediction": ["ml_engine"],
+        "forecast": ["ml_engine"],
+        "time series": ["ml_engine"],
+        "regression": ["ml_engine"],
+        "classification": ["ml_engine"],
         "iot": ["iot_engine"],
         "esp32": ["iot_engine"],
         "esp8266": ["iot_engine"],
@@ -92,6 +98,8 @@ class SkillManager:
         "slack": ["external_api"],
         "github": ["external_api"],
         "notion": ["external_api"],
+        "react native": ["external_cli"],
+        "expo": ["external_cli"],
     }
 
     KNOWLEDGE_ONLY_SKILLS = {
@@ -154,6 +162,8 @@ class SkillManager:
         "media": ["media-production-skills"],
         "video": ["media-production-skills", "video-downloader"],
         "predictive": ["predictive-analysis-skills"],
+        "forecast": ["predictive-analysis-skills", "machine-learning"],
+        "time series": ["predictive-analysis-skills", "machine-learning"],
         "3d": ["3d-animation", "motion-animation"],
         "animation": ["motion-animation", "3d-animation"],
         "cross platform": ["cross-platform-dev"],
