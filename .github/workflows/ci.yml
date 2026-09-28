@@ -9,8 +9,11 @@ jobs:
         with: { python-version: "3.11" }
       - name: Syntax-compile all first-party modules
         run: |
-          python -m py_compile agent.py main.py tom_desktop_app.py safety/guards.py tools/*.py
-      - name: Install test runner
-        run: pip install pytest
-      - name: Pure-logic tests (router, skills, knowledge)
+          python -m py_compile agent.py main.py tom_desktop_app.py safety/guards.py tools/*.py demo/*.py
+      - name: Install test runner + agent-core deps (enough to run TomAgent end to end)
+        run: >
+          pip install pytest beautifulsoup4 lxml python-dotenv requests
+          langchain-core==1.3.2 langchain-ollama==1.1.0 playwright==1.59.0
+          google-auth google-auth-oauthlib imapclient email-validator
+      - name: Pure-logic tests (router, skills, knowledge, memory)
         run: pytest tests/ -v

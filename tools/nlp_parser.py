@@ -346,8 +346,12 @@ CRITICAL RULES:
                 SystemMessage(content=self._LLM_SYSTEM),
                 HumanMessage(content=f"Command: {command}{nlp_hint}"),
             ]
-            resp = await self.llm.ainvoke(messages)
-            content = resp.content.strip()
+            import asyncio as _asyncio
+            resp = await _asyncio.wait_for(
+                self.llm.ainvoke(messages),
+                timeout=float(os.environ.get("NLP_PARSE_TIMEOUT_SECONDS", "25")),
+            )
+            content = (resp.content or "").strip()
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0].strip()
             elif "```" in content:
@@ -467,6 +471,14 @@ CRITICAL RULES:
 
         if any(x in c for x in ("send email", "send the email", "email now", "send this email")):
             return "send_email"
+
+        # "write an email to Ravi …", "email Ravi about the budget", "draft a mail for HR"
+        # — an email verb up front wins over topic keywords such as "budget"/"report".
+        _email_verb = re.match(
+            r"^\s*(?:please\s+)?(?:(?:write|draft|compose|prepare)\s+(?:an?\s+|the\s+)?(?:e-?mail|mail)"
+            r"|e-?mail\s+(?!inbox\b)[a-z])", c)
+        if _email_verb and not any(x in c for x in ("send email", "send the email", "send this email")):
+            return "write_email"
 
         if any(x in c for x in ("write email", "draft email", "compose email", "email to", "write a mail",
                                   "write mail", "write letter", "cover letter", "resignation",
@@ -658,6 +670,28 @@ CRITICAL RULES:
                     return name
         return None
 
+    _NAME_EDGE_STOPWORDS = {
+        "to", "for", "about", "regarding", "re", "the", "a", "an", "my", "and",
+        "on", "that", "saying", "with", "from", "by", "via", "of", "in", "at",
+        "is", "are", "asking", "telling", "please",
+    }
+
+    @classmethod
+    def _clean_name(cls, candidate: Optional[str]) -> Optional[str]:
+        """Trim prepositions/filler that IGNORECASE name patterns sweep in.
+
+        "to Ravi" -> "Ravi", "Ravi about" -> "Ravi", "to" -> None.
+        """
+        if not candidate:
+            return None
+        words = candidate.split()
+        while words and words[0].lower() in cls._NAME_EDGE_STOPWORDS:
+            words.pop(0)
+        while words and words[-1].lower() in cls._NAME_EDGE_STOPWORDS:
+            words.pop()
+        cleaned = " ".join(words).strip(" ,.;:")
+        return cleaned or None
+
     def _extract_person_name(self, command: str) -> Optional[str]:
         patterns = [
             r'(?:send|text|message|tell|call|contact|email|mail)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)(?:\s|$)',
@@ -671,7 +705,7 @@ CRITICAL RULES:
             m = re.search(p, command, re.IGNORECASE)
             if m:
                 candidate = m.group(1) if m.lastindex else m.group(0)
-                candidate = candidate.strip()
+                candidate = self._clean_name(candidate.strip()) or ""
                 if len(candidate) >= 2 and candidate.lower() not in ("the", "a", "an", "my", "your",
                     "with", "for", "and", "but", "not", "are", "was", "were", "has", "had",
                     "on", "via", "through", "using", "by", "from", "to"):
@@ -711,7 +745,7 @@ CRITICAL RULES:
         for p in patterns:
             m = re.search(p, command)
             if m:
-                return m.group(1).strip()
+                return self._clean_name(m.group(1).strip())
         return None
 
     def _extract_filename(self, command: str) -> Optional[str]:

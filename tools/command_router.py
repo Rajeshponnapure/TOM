@@ -163,6 +163,13 @@ class CommandRouter:
             "unread emails", "unread mail",
         )
         action_tokens = ("summarize", "review", "check", "scan", "sort", "prioritize", "important", "latest")
+        # Composing a new email ("email Ravi about the budget review", "write an
+        # email to the team about the review") is not an inbox request.
+        if "inbox" not in lower and re.match(
+                r"^\s*(?:please\s+)?(?:(?:write|draft|compose|prepare)\s+(?:an?\s+|the\s+)?(?:e-?mail|mail)\b"
+                r"|e-?mail\s+(?!(?:inbox|summary)\b)[a-z][\w.-]*\s+(?:about|regarding|re|that|to|saying|asking)\b)",
+                lower):
+            return False
         if any(token in lower for token in inbox_tokens):
             return True
         return ("email" in lower or "mail" in lower) and any(token in lower for token in action_tokens)

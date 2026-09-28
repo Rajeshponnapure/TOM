@@ -202,6 +202,24 @@ C = {
     "orange":   "#f28c45",
 }
 
+def _llm_factory_describe() -> str:
+    try:
+        from tools import llm_factory
+        return llm_factory.describe()
+    except Exception:
+        return "Ollama"
+
+
+def _llm_factory_model() -> str:
+    try:
+        from tools import llm_factory
+        if llm_factory.provider() == "groq":
+            return llm_factory.groq_model("primary")
+    except Exception:
+        pass
+    return os.environ.get("OLLAMA_MODEL", "gemma4:latest")
+
+
 def hex_to_rgb(h):
     h = h.lstrip("#")
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
@@ -1428,7 +1446,7 @@ class TomDesktopApp:
         self._build_statusbar()
         self._show_view("dashboard")
         self._refresh_dashboard()
-        self._append_chat("meta", "TOM v2.0 — Gemma 4 engine. Initializing...")
+        self._append_chat("meta", f"TOM v2.0 — {_llm_factory_describe()}. Initializing...")
 
     def _build_header(self):
         self.header = tk.Frame(self.root, bg="#0a0e1a", height=50)
@@ -1467,7 +1485,7 @@ class TomDesktopApp:
             font=("Consolas", 11)).pack(side="left", padx=(0, 12))
 
         # Model toggle dropdown — populated from Ollama /api/tags in _startup
-        self._model_names = [os.environ.get("OLLAMA_MODEL", "gemma4:latest")]
+        self._model_names = [_llm_factory_model()]
         self.model_var = tk.StringVar(value=self._model_names[0])
         self.model_menu = tk.OptionMenu(right, self.model_var, *self._model_names,
                                         command=self._on_model_change)
@@ -1555,6 +1573,7 @@ class TomDesktopApp:
             ("files", "Files", "\u25a5"),
             ("capabilities", "Capabilities", "\u25c8"),
             ("health", "Health", "\u2695"),
+            ("memory", "Memory", "\u25c9"),
         ]
         for view_key, label, icon in nav_items:
             btn = self._make_nav_button(nav_wrap, icon + "  " + label, lambda k=view_key: self._show_view(k))
@@ -1727,7 +1746,7 @@ class TomDesktopApp:
 
         label_frame = tk.Frame(self.orb_panel, bg=C["bg"])
         label_frame.pack(pady=(8, 0))
-        tk.Label(label_frame, text="GEMMA 4 ENGINE", bg=C["bg"], fg=C["muted"], font=("Segoe UI", 7, "bold")).pack()
+        tk.Label(label_frame, text=_llm_factory_describe().split(" (")[0].upper() + " ENGINE", bg=C["bg"], fg=C["muted"], font=("Segoe UI", 7, "bold")).pack()
 
         self._ready_dot_canvas = tk.Canvas(label_frame, width=80, height=18, bg=C["bg"], highlightthickness=0)
         self._ready_dot_canvas.pack()
@@ -1812,9 +1831,10 @@ class TomDesktopApp:
         self.files_frame = tk.Frame(self.content_frame, bg=C["bg"])
         self.capabilities_frame = tk.Frame(self.content_frame, bg=C["bg"])
         self.health_frame = tk.Frame(self.content_frame, bg=C["bg"])
+        self.memory_frame = tk.Frame(self.content_frame, bg=C["bg"])
 
         for frm in (self.dashboard_frame, self.chat_frame, self.system_frame, self.charts_frame,
-                    self.files_frame, self.capabilities_frame, self.health_frame):
+                    self.files_frame, self.capabilities_frame, self.health_frame, self.memory_frame):
             frm.grid(row=0, column=0, sticky="nswe")
 
         self._build_dashboard_view(self.dashboard_frame)
@@ -1824,6 +1844,7 @@ class TomDesktopApp:
         self._build_files_view(self.files_frame)
         self._build_capabilities_view(self.capabilities_frame)
         self._build_health_view(self.health_frame)
+        self._build_memory_view(self.memory_frame)
 
     def _build_dashboard_view(self, parent):
         """Futuristic animated holographic dashboard — full canvas, 30fps."""
@@ -2276,6 +2297,18 @@ class TomDesktopApp:
             copy_btn.configure(command=lambda t=text, b=copy_btn: self._copy_to_clipboard(t, b))
             copy_btn.pack(side="left")
 
+        elif role == "memory":
+            wrapper = tk.Frame(bubble, bg=C["surface"])
+            wrapper.pack(anchor="w")
+            strip = tk.Frame(wrapper, bg=C["emerald"], width=3)
+            strip.pack(side="left", fill="y")
+            inner = tk.Frame(wrapper, bg="#12261f", padx=12, pady=8)
+            inner.pack(side="left")
+            tk.Label(inner, text="\u25c9  REMEMBERING", bg="#12261f", fg=C["emerald"],
+                font=("Segoe UI", 8, "bold")).pack(anchor="w")
+            tk.Label(inner, text=text, bg="#12261f", fg=C["text"],
+                font=("Segoe UI", 10), wraplength=520, justify="left").pack(anchor="w", pady=(2, 0))
+
         else:
             wrapper = tk.Frame(bubble, bg=C["surface"])
             wrapper.pack(anchor="center")
@@ -2416,6 +2449,125 @@ class TomDesktopApp:
             self.health_text.configure(state="disabled")
         except Exception:
             pass
+
+    # ── Memory Center (Hindsight long-term memory) ─────────────────────
+    def _build_memory_view(self, parent):
+        """What TOM has learned about the user — status, reflection, search, recent."""
+        parent.columnconfigure(0, weight=1)
+        parent.columnconfigure(1, weight=1)
+        parent.rowconfigure(2, weight=1)
+
+        hdr = tk.Frame(parent, bg=C["bg"], padx=24, pady=16)
+        hdr.grid(row=0, column=0, columnspan=2, sticky="ew")
+        tk.Label(hdr, text="Memory", bg=C["bg"], fg=C["text"],
+                 font=("Segoe UI", 17, "bold")).pack(anchor="w")
+        tk.Label(hdr, text="What TOM has learned from working with you — corrections, standing "
+                           "preferences and past outcomes. It is recalled before every task.",
+                 bg=C["bg"], fg=C["text2"], font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 0))
+        self.memory_status_var = tk.StringVar(value="Checking long-term memory…")
+        tk.Label(hdr, textvariable=self.memory_status_var, bg=C["bg"], fg=C["emerald"],
+                 font=("Consolas", 9), wraplength=820, justify="left").pack(anchor="w", pady=(8, 0))
+
+        # Search row
+        search = tk.Frame(parent, bg=C["bg"], padx=24)
+        search.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        search.columnconfigure(0, weight=1)
+        self.memory_query = tk.Entry(search, bg=C["surface2"], fg=C["text"], insertbackground=C["text"],
+                                     relief="flat", font=("Segoe UI", 11))
+        self.memory_query.grid(row=0, column=0, sticky="ew", ipady=6)
+        self.memory_query.insert(0, "PDFs")
+        self.memory_query.bind("<Return>", lambda _e: self._memory_recall())
+        for col, (label, cmd) in enumerate((("Recall", self._memory_recall),
+                                            ("What have you learned?", self._memory_reflect)), start=1):
+            tk.Button(search, text=label, command=cmd, bg=C["surface2"], fg=C["text"],
+                      activebackground=C["border2"], activeforeground=C["text"], relief="flat",
+                      bd=0, padx=14, pady=6, font=("Segoe UI", 9, "bold"), cursor="hand2").grid(
+                          row=0, column=col, padx=(8, 0))
+
+        def _panel(col, title):
+            box = tk.Frame(parent, bg=C["bg"], padx=(24 if col == 0 else 8), pady=4)
+            box.grid(row=2, column=col, sticky="nswe", padx=(0, 24 if col == 1 else 0))
+            box.columnconfigure(0, weight=1)
+            box.rowconfigure(1, weight=1)
+            tk.Label(box, text=title, bg=C["bg"], fg=C["text2"],
+                     font=("Segoe UI", 8, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 4))
+            txt = tk.Text(box, bg=C["surface2"], fg=C["text"], relief="flat", highlightthickness=0,
+                          font=("Segoe UI", 10), bd=0, wrap="word", state="disabled", padx=10, pady=8)
+            txt.grid(row=1, column=0, sticky="nswe")
+            return txt
+
+        self.memory_result_text = _panel(0, "RECALL / REFLECTION")
+        self.memory_recent_text = _panel(1, "RECENTLY STORED")
+        tk.Button(parent, text="\u21ba  Refresh", command=self._refresh_memory_view,
+                  bg=C["surface2"], fg=C["text2"], activebackground=C["border2"],
+                  activeforeground=C["text"], relief="flat", bd=0, padx=12, pady=8,
+                  font=("Segoe UI", 9), cursor="hand2").grid(
+                      row=3, column=0, columnspan=2, sticky="ew", padx=24, pady=(8, 16))
+
+    @staticmethod
+    def _set_text(widget, content: str):
+        try:
+            widget.configure(state="normal")
+            widget.delete("1.0", tk.END)
+            widget.insert("1.0", content)
+            widget.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _memory_or_none(self):
+        agent = getattr(self, "agent", None)
+        return getattr(agent, "memory", None) if agent and getattr(self, "agent_ready", False) else None
+
+    def _refresh_memory_view(self):
+        mem = self._memory_or_none()
+        if mem is None:
+            self.memory_status_var.set("TOM is still initializing — open this view again in a few seconds.")
+            return
+        st = mem.status()
+        self.memory_status_var.set(
+            f"{mem.status_line()}   ·   this session: {st['retained']} stored, "
+            f"{st['recalled']} recalls, {st['reflected']} reflections")
+        lines = []
+        for item in mem.recent_journal(limit=30):
+            tags = item.get("tags") or []
+            kind = "RULE" if "preference" in tags else "TASK"
+            words = (item.get("metadata") or {}).get("user_words") or item.get("content", "")
+            lines.append(f"[{kind}] {item.get('timestamp', '')[:16].replace('T', ' ')}\n{words}\n")
+        self._set_text(self.memory_recent_text,
+                       "\n".join(lines) or "Nothing stored yet. Correct TOM once "
+                                           "(e.g. \"always put PDFs in Invoices\") and it will show up here.")
+
+    def _memory_recall(self):
+        mem = self._memory_or_none()
+        query = self.memory_query.get().strip()
+        if mem is None or not query:
+            return
+        self._set_text(self.memory_result_text, f"Recalling '{query}'…")
+
+        def work():
+            hits = mem.recall(query, limit=10, budget="mid")
+            body = "\n\n".join(f"\u2022 {h.text}" + (f"   ({h.when})" if h.when else "") for h in hits)
+            self._enqueue(self._set_text, self.memory_result_text,
+                          body or f"Nothing remembered about '{query}' yet.\n{mem.last_error}".strip())
+            self._enqueue(self._refresh_memory_view)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _memory_reflect(self):
+        agent = getattr(self, "agent", None)
+        if self._memory_or_none() is None:
+            return
+        self._set_text(self.memory_result_text, "Reflecting on everything I've learned…")
+
+        def work():
+            try:
+                fut = asyncio.run_coroutine_threadsafe(
+                    agent.execute_task("what have you learned about me"), self._loop)
+                msg = str(fut.result(timeout=90).get("message", ""))
+            except Exception as exc:
+                msg = f"Reflection failed: {exc}"
+            self._enqueue(self._set_text, self.memory_result_text, msg)
+            self._enqueue(self._refresh_memory_view)
+        threading.Thread(target=work, daemon=True).start()
 
     def _build_system_view(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -2690,6 +2842,7 @@ class TomDesktopApp:
             "files": self.files_frame,
             "capabilities": self.capabilities_frame,
             "health": self.health_frame,
+            "memory": self.memory_frame,
         }.get(view_name, self.dashboard_frame)
         frame.tkraise()
         self._sync_nav_styles()
@@ -2702,6 +2855,8 @@ class TomDesktopApp:
             self.root.after(100, self._refresh_health_view)
         elif view_name == "capabilities":
             self.root.after(100, self._refresh_capabilities_view)
+        elif view_name == "memory":
+            self.root.after(100, self._refresh_memory_view)
 
     def _switch_view(self, view_name: str):
         self._show_view(view_name)
@@ -3234,6 +3389,14 @@ class TomDesktopApp:
             self._enqueue(self._on_response_ready, f"Analysis error: {exc}", None, None)
 
     def _on_response_ready(self, message: str, exp_id, result):
+        # Memory-shaped answers get their own "Remembering" card above the reply.
+        if isinstance(result, dict) and result.get("memories_used") and message.startswith("Remembering"):
+            head, _sep, rest = message.partition("\n\n")
+            body_lines = [ln.strip() for ln in head.split("\n")[1:] if ln.strip()]
+            self._append_chat("memory", "\n".join(body_lines) or head)
+            message = rest or message
+        elif isinstance(result, dict) and result.get("response_type") == "preference_saved":
+            self._append_chat("memory", "Saved to long-term memory.")
         self._append_chat("assistant", message)
         self.processing = False
         self.orb.status = "ready"
@@ -4460,8 +4623,12 @@ class TomDesktopApp:
             self._enqueue(self._append_chat, "meta", f"Failed to import TOM agent: {exc}")
             return
 
-        self._enqueue(self._set_status, "Checking Ollama...")
-        available = self._ollama_available()
+        from tools import llm_factory as _llm_factory
+        use_ollama = _llm_factory.provider() == "ollama"
+        if not use_ollama:
+            self._enqueue(self._append_chat, "meta", f"Model provider: {_llm_factory.describe()}")
+        self._enqueue(self._set_status, "Checking Ollama..." if use_ollama else "Connecting...")
+        available = self._ollama_available() if use_ollama else True
         if not available:
             self._enqueue(self._append_chat, "meta", "Ollama not reachable. Starting ollama serve...")
             self._start_ollama_server()
@@ -4473,10 +4640,10 @@ class TomDesktopApp:
 
         if not available:
             self._enqueue(self._append_chat, "meta", "Could not auto-start Ollama. Start it manually.")
-        else:
+        elif use_ollama:
             self._enqueue(self._append_chat, "meta", "Ollama is ready.")
 
-        self._enqueue(self._set_status, "Initializing TOM with Gemma 4...")
+        self._enqueue(self._set_status, f"Initializing TOM ({_llm_factory.describe()})...")
         try:
             # Check required Ollama models exist before initializing
             try:
@@ -4505,11 +4672,12 @@ class TomDesktopApp:
             self._enqueue(self._init_creative_tools)
             self._enqueue(self._set_status, "Ready")
             self._enqueue(self._update_statusbar, "Ready — TOM is online",
-                          os.environ.get("OLLAMA_MODEL", "gemma4"), True)
+                          getattr(self.agent, "model_name", os.environ.get("OLLAMA_MODEL", "gemma4")), True)
+            self._enqueue(self._append_chat, "meta", self.agent.memory.status_line())
             self._enqueue(self._update_voice_and_dashboard_state)
             self._enqueue(self._fetch_ollama_models)
             self._enqueue(self._append_chat, "assistant",
-                "Hi, I am TOM \u2014 powered by Gemma 4. I can create documents, analyze data, send emails, research the web, hold voice conversations, debug web apps, run security checks, and deploy multi-agent tasks. I also have deep expertise in Game Development (Unity/Unreal/Godot/PyGame), 3D & CGI production (Blender/ZBrush/Substance/Houdini), and Cybersecurity (pentesting, reverse engineering, exploit dev, forensics, cloud security). What would you like me to do?")
+                "Hi, I am TOM. I remember how you like things done \u2014 correct me once and I'll apply it next time. I can create documents, analyze data, send emails, research the web, hold voice conversations, debug web apps, run security checks, and deploy multi-agent tasks. I also have deep expertise in Game Development (Unity/Unreal/Godot/PyGame), 3D & CGI production (Blender/ZBrush/Substance/Houdini), and Cybersecurity (pentesting, reverse engineering, exploit dev, forensics, cloud security). What would you like me to do?")
         except Exception as exc:
             import traceback as _tb
             exc_detail = "".join(_tb.format_exception_only(type(exc), exc)).strip()

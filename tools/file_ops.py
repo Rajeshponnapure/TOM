@@ -47,8 +47,12 @@ def resolve_folder(text: str) -> Optional[str]:
     low = t.lower()
     for key, real in KNOWN_FOLDERS.items():
         if low == key or low == f"my {key}" or low.endswith(os.sep + key):
-            cand = Path.home() / real
+            # TOM_<NAME>_DIR (e.g. TOM_DOWNLOADS_DIR) redirects a known folder —
+            # handy for a sandbox copy or a non-standard profile location.
+            override = os.environ.get(f"TOM_{real.upper()}_DIR", "").strip()
+            cand = Path(os.path.expandvars(os.path.expanduser(override))) if override else Path.home() / real
             return str(cand) if cand.is_dir() else None
+    t = os.path.expandvars(os.path.expanduser(t))
     return t if os.path.isdir(t) else None
 
 
@@ -87,37 +91,61 @@ class FileOps:
                            + ("" if hits else " (none)")}
 
     # ── Organize (plan → approval → execute) ─────────────────────────────
-    def plan_organize_by_type(self, folder: str) -> Dict[str, Any]:
-        return self._plan_organize(folder, mode="type")
+    def plan_organize_by_type(self, folder: str, rules: Optional[List[Any]] = None) -> Dict[str, Any]:
+        """Group files by type. `rules` (tools.memory_rules.FolderRule) — the
+        user's remembered preferences — are applied first and override defaults."""
+        return self._plan_organize(folder, mode="type", rules=rules)
 
-    def plan_organize_by_year(self, folder: str) -> Dict[str, Any]:
-        return self._plan_organize(folder, mode="year")
+    def plan_organize_by_year(self, folder: str, rules: Optional[List[Any]] = None) -> Dict[str, Any]:
+        return self._plan_organize(folder, mode="year", rules=rules)
 
-    def _plan_organize(self, folder: str, mode: str) -> Dict[str, Any]:
+    def _plan_organize(self, folder: str, mode: str, rules: Optional[List[Any]] = None) -> Dict[str, Any]:
         folder = resolve_folder(folder) or folder
         if not os.path.isdir(folder):
             return {"status": "error", "message": f"Folder not found: {folder}"}
+        rules = list(rules or [])
         moves: List[Tuple[str, str]] = []
+        kept: List[str] = []
+        applied: Dict[str, Dict[str, Any]] = {}
         for entry in os.scandir(folder):
             if not entry.is_file():
                 continue
             ext = os.path.splitext(entry.name)[1]
-            if mode == "type":
-                sub = _group_for(ext)
+            group = _group_for(ext)
+            rule = None
+            for candidate in rules:
+                if candidate.matches(entry.name, group):
+                    rule = candidate
+                    break
+            if rule is not None:
+                hit = applied.setdefault(rule.describe(), {"rule": rule, "files": 0})
+                hit["files"] += 1
+                if rule.action == "skip":
+                    kept.append(entry.name)
+                    continue
+                sub = rule.dest
+            elif mode == "type":
+                sub = group
             else:
                 sub = str(datetime.fromtimestamp(entry.stat().st_mtime).year)
-            dest = os.path.join(folder, sub, entry.name)
+            dest = os.path.normpath(os.path.join(folder, *sub.replace("\\", "/").split("/"), entry.name))
             if os.path.abspath(entry.path) != os.path.abspath(dest):
                 moves.append((entry.path, dest))
         summary: Dict[str, int] = {}
-        for _src, dst in moves:
-            sub = os.path.basename(os.path.dirname(dst))
+        for src, dst in moves:
+            sub = os.path.relpath(os.path.dirname(dst), folder)
             summary[sub] = summary.get(sub, 0) + 1
+        message = (f"Plan: move {len(moves)} file(s) in {folder} into "
+                   f"{len(summary)} subfolder(s): "
+                   + ", ".join(f"{k} ({v})" for k, v in sorted(summary.items())))
+        if kept:
+            message += f". Leaving {len(kept)} file(s) in place"
         return {"status": "plan", "folder": folder, "moves": moves,
-                "summary": summary,
-                "message": f"Plan: move {len(moves)} file(s) in {folder} into "
-                           f"{len(summary)} subfolder(s): "
-                           + ", ".join(f"{k} ({v})" for k, v in sorted(summary.items()))}
+                "summary": summary, "kept": kept,
+                "applied_rules": [{"rule": v["rule"].describe(), "files": v["files"],
+                                   "source": getattr(v["rule"], "source", "")}
+                                  for v in applied.values()],
+                "message": message}
 
     def plan_bulk_rename(self, folder: str, find: str, replace: str) -> Dict[str, Any]:
         folder = resolve_folder(folder) or folder

@@ -48,20 +48,72 @@
 
 <div align="center">
 
-> ### TOM is a **Windows-first, 100% local** AI agent that runs your laptop through plain language.
+> ### TOM is a desktop automation agent that **gets better at your workflow the longer you use it.**
 >
-> One local **Ollama** model + browser automation + desktop control + document generation +
-> voice + background agents + semantic memory — on your machine, **no cloud API keys** for the core.
+> Correct it once — *"PDFs go in Invoices, not Documents"* — and it applies that next week, to new
+> files, however you phrase the request. Corrections, preferences and task outcomes live in
+> **[Hindsight](https://github.com/vectorize-io/hindsight)** long-term memory; files, email, documents,
+> browser and desktop control run on your own Windows machine.
 
 </div>
 
 <table align="center">
 <tr>
-<td align="center" width="33%">🏠<br/><b>Runs entirely local</b><br/><sub>Ollama LLM · ChromaDB memory · your data never leaves the machine</sub></td>
+<td align="center" width="33%">🧠<br/><b>Remembers how you work</b><br/><sub>Hindsight retain · recall · reflect — corrections carry across sessions</sub></td>
 <td align="center" width="33%">🗣️<br/><b>One natural-language surface</b><br/><sub>GUI chat · 25 quick actions · CLI · voice — same brain behind all</sub></td>
 <td align="center" width="33%">🛡️<br/><b>Safe by design</b><br/><sub>human approval before sending, deleting, running code; full audit trail</sub></td>
 </tr>
 </table>
+
+---
+
+## 🧠 TOM remembers how you work
+
+**The problem.** Assistants forget. You tell one how you like your Downloads folder, your email
+sign-off or your deck format, and next session you are explaining it again. Chat history is not
+the fix: it is a transcript of what was *said*, not a record of what was *learned*.
+
+**What TOM does.** Every correction and standing preference is stored as a fact in Hindsight.
+Before every task TOM recalls the ones that matter and acts on them — and shows you which it used.
+
+| | Session 1 (no memory) | You say once | Weeks later, new files, different wording |
+|---|---|---|---|
+| **Request** | `organize my downloads` | `No — PDFs always go in Invoices, not Documents.` | `tidy up my downloads folder` |
+| **TOM** | Groups by type; invoices land in `Documents/` | *"Got it — I'll remember that."* `.pdf files → Invoices/` | **Remembering:** `.pdf → Invoices/` · `screenshot → Screenshots/` · `leave installers where they are` — then moves files accordingly |
+
+### How Hindsight memory is used
+
+| Operation | When TOM calls it | Code |
+|---|---|---|
+| **`retain`** | A correction or preference ("always…", "never…", "from now on…", "no, …") — tagged `preference`, indexed immediately so the very next request can use it | `TomAgent._retain_preference` |
+| **`retain`** | Every finished task, with its outcome — tagged `task` + category, indexed in the background | `TomAgent._retain_outcome` |
+| **`recall`** | Before every task, in parallel with request parsing (no added latency). Results go into every LLM prompt and into a visible *Remembering* card | `TomAgent.execute_task`, `_build_memory_context` |
+| **`recall`** | Before organizing a folder — only `preference` memories, turned into concrete rules (`.pdf → Invoices/`, `leave installers`) that the file engine applies deterministically | `TomAgent.remembered_folder_rules`, `tools/memory_rules.py`, `tools/file_ops.py` |
+| **`reflect`** | *"What have you learned about me?"* and the **Memory** view — a grouped summary of how you work | `TomAgent._memory_command` |
+| **`reflect`** | Fallback with a JSON `response_schema` when recalled facts don't parse into folder rules | `memory_rules.FOLDER_RULES_SCHEMA` |
+
+One bank per installation (`tom-<id>`), created with a mission that tells Hindsight what to learn.
+Every call is time-boxed; if Hindsight is unreachable TOM keeps working and queues retains to disk,
+syncing them on the next successful call ([`tools/hindsight_memory.py`](tools/hindsight_memory.py)).
+
+```text
+ you ──► TomAgent.execute_task
+            │  ┌──────────── recall(request) ◄──────────────┐
+            ├──┤ parse request (NLP)          Hindsight bank │
+            │  └──► memories → prompts + "Remembering" card  │
+            ▼                                                │
+   router → file engine / email / docs / web / desktop       │
+            │                                                │
+            └──► retain(outcome) ─────────────────────────────┤
+ "no — PDFs go in Invoices" ──► retain(preference) ──────────┘
+ "what have you learned?"   ──► reflect()
+```
+
+**Try it:** [demo/DEMO_SCRIPT.md](demo/DEMO_SCRIPT.md) — `python demo/seed_history.py --fresh` then
+`python demo/run_demo.py` (add `--offline` to run without any accounts).
+
+Memory commands anywhere (chat, CLI, voice): `what have you learned about me?` ·
+`what do you remember about <topic>` · `memory status` · `remember that …`
 
 ---
 
@@ -396,6 +448,7 @@ rationale: [PRODUCT.md](PRODUCT.md)). Opens at **1420×880**.
 │  ▥ Files     │   │  + approval modals (sensitive actions)  │  │
 │  ◈ Capabil.  │   └─────────────────────────────────────────┘  │
 │  ⚕ Health    │   profiles: Core TOM · Email · Instagram        │
+│  ◉ Memory    │   what TOM has learned · recall · reflect       │
 │  ♪ Voice     │   ▶ Run Agent      ♫ Voice Mode                 │
 └──────────────┴───────────────────────────────────────────────┘
 ```
@@ -407,6 +460,7 @@ rationale: [PRODUCT.md](PRODUCT.md)). Opens at **1420×880**.
 | **System / Charts / Files** | Runtime panels |
 | **Capabilities** | Browsable list of everything TOM can do |
 | **Health** | Runtime capability-health report (`tools/capability_health.py`) |
+| **Memory** | Long-term memory status, *What have you learned?* (reflect), recall search, recently stored rules and outcomes. Answers shaped by memory show a green **Remembering** card in Chat |
 
 **Agent profiles:** Core TOM · Email Agent · Instagram Agent. **Voice Mode** opens a
 push-to-talk window. Shortcuts: `Ctrl+D` Dashboard · `Ctrl+C` Chat.
@@ -417,6 +471,8 @@ push-to-talk window. Shortcuts: `Ctrl+D` Dashboard · `Ctrl+C` Chat.
 
 | Layer | Module | What it gives you |
 |---|---|---|
+| 🧠 **Long-term memory** | `tools/hindsight_memory.py` | Hindsight retain/recall/reflect — corrections, preferences and task outcomes that carry across sessions. Offline queue, never blocks a task. |
+| 📏 **Memory → rules** | `tools/memory_rules.py` | Spots corrections/preferences; turns recalled facts into concrete folder rules the file engine applies. |
 | 🔎 **RAG memory** | `tools/rag_memory.py` | ChromaDB + `nomic-embed-text`; recalls conversations/docs/knowledge by *meaning*. 100% local. |
 | 🌱 **Self-evolution** | `tools/self_evolution.py` | Adaptive prompting from reward/penalty; learns your preferences. No GPU training. |
 | 🧩 **Skills** | `tools/skill_manager.py` | 47 local domain skills + opt-in `SKILL.md` packs, classified knowledge-only vs executable. |
@@ -439,6 +495,10 @@ push-to-talk window. Shortcuts: `Ctrl+D` Dashboard · `Ctrl+C` Chat.
 
 > Ollama offline → UI still starts, but reasoning, planning, and RAG memory are limited.
 
+**No local model?** Set `TOM_LLM_PROVIDER=groq` and `GROQ_API_KEY` in `.env` — every slot then runs
+on Groq (`GROQ_MODEL`, default `openai/gpt-oss-120b`) through the same interface
+([`tools/llm_factory.py`](tools/llm_factory.py)).
+
 ---
 
 ## 🚀 Quick start
@@ -449,7 +509,7 @@ push-to-talk window. Shortcuts: `Ctrl+D` Dashboard · `Ctrl+C` Chat.
 flowchart LR
     A["① Install<br/>Python 3.11"] --> B["② setup_python311_env.bat<br/>(.venv311 + deps)"]
     B --> C["③ ollama serve<br/>+ pull 3 models"]
-    C --> D["④ copy .env.example .env<br/>(optional)"]
+    C --> D["④ copy .env.example .env<br/>+ HINDSIGHT_API_KEY"]
     D --> E["⑤ launch_tom_ui.bat"]
     E --> F["🎉 TOM running"]
     classDef done fill:#22C55E,stroke:#fff,color:#fff
@@ -461,13 +521,15 @@ flowchart LR
 setup_python311_env.bat
 
 # 2️⃣  Start Ollama and pull the models
+#     (or skip: set TOM_LLM_PROVIDER=groq + GROQ_API_KEY in .env)
 ollama serve
 ollama pull gemma4:latest
 ollama pull qwen2.5-coder:7b-instruct
 ollama pull nomic-embed-text:latest
 
-# 3️⃣  (Optional) copy and edit config
+# 3️⃣  Copy config and add your Hindsight key so TOM remembers across sessions
 copy .env.example .env
+#     HINDSIGHT_API_KEY=...   (Hindsight Cloud)  — or HINDSIGHT_BASE_URL for a self-hosted server
 
 # 4️⃣  Launch
 launch_tom_ui.bat
@@ -491,6 +553,10 @@ Settings live in `.env` (copy from [.env.example](.env.example)). Nothing is req
 <details>
 <summary><b>Show all config groups</b></summary>
 
+- **Long-term memory:** `HINDSIGHT_API_KEY` (Hindsight Cloud) or `HINDSIGHT_BASE_URL`
+  (self-hosted), `HINDSIGHT_BANK_ID`, `HINDSIGHT_TIMEOUT_SECONDS`, `HINDSIGHT_ENABLED`.
+- **LLM provider:** `TOM_LLM_PROVIDER` (`ollama` | `groq`), `GROQ_API_KEY`, `GROQ_MODEL`,
+  `GROQ_FAST_MODEL`, `NLP_PARSE_TIMEOUT_SECONDS`.
 - **Core (LLM):** `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_FAST_MODEL`,
   `OLLAMA_CODE_MODEL`, `OLLAMA_EMBED_MODEL`, `OLLAMA_TIMEOUT_SECONDS`, `TASK_TIMEOUT_SECONDS`.
 - **Email** (Gmail/inbox): `EMAIL_ADDRESS`, `EMAIL_PASSWORD`, `GMAIL_CREDENTIALS_FILE`,
