@@ -11,6 +11,7 @@ import math
 import time
 import uuid
 import random
+import subprocess
 import threading
 import traceback
 from datetime import datetime, timedelta
@@ -211,9 +212,14 @@ class AutoScaler:
                     if gpus:
                         result["driver_version"] = gpus[0].driver
             elif _HAS_PSUTIL:
-                nvidia_smi = os.popen("nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>nul")
-                output = nvidia_smi.read().strip()
-                nvidia_smi.close()
+                kwargs = {"capture_output": True, "text": True, "timeout": 5}
+                if os.name == "nt":
+                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                nvidia_smi = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
+                    **kwargs,
+                )
+                output = nvidia_smi.stdout.strip() if nvidia_smi.returncode == 0 else ""
                 if output and "N/A" not in output:
                     result["available"] = True
                     for line in output.split("\n"):

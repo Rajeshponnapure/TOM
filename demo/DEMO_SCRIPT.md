@@ -45,7 +45,7 @@ python demo\run_demo.py --offline :: no accounts needed (in-memory stand-in)
 ## The script
 
 | # | You type | What TOM does | What to point out |
-|---|----------|---------------|-------------------|
+| --- | --- | --- | --- |
 | 1 | `organize my downloads` | Groups by type with its defaults — invoices land in **Documents/** | No memory yet. Generic. |
 | 2 | `No — PDFs always go in Invoices, not Documents.` | Replies *"Got it — I'll remember that"* and shows the rule it extracted: `.pdf files → Invoices/` | One correction, stored to Hindsight (`retain`). No retraining, no config file. |
 | 3 | *(skip ahead)* `python demo\seed_history.py --history --refill` | Adds three earlier sessions: screenshots → Screenshots, never move installers, email style, deck format. Drops new files in the sandbox. | Realistic multi-week history, timestamped in the past. |

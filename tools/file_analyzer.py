@@ -173,7 +173,8 @@ class FileAnalyzer:
         ffprobe = None
         for fp in ffprobe_paths:
             try:
-                subprocess.run([fp, "-version"], capture_output=True, timeout=5)
+                subprocess.run([fp, "-version"], capture_output=True, timeout=5,
+                               creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
                 ffprobe = fp
                 break
             except Exception:
@@ -183,7 +184,8 @@ class FileAnalyzer:
             try:
                 cmd = [ffprobe, "-v", "quiet", "-print_format", "json",
                        "-show_format", "-show_streams", str(path)]
-                out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                out = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
                 import json as j
                 data = j.loads(out.stdout)
                 streams = data.get("streams", [])
@@ -224,7 +226,8 @@ class FileAnalyzer:
         ffprobe = None
         for fp in ffprobe_paths:
             try:
-                subprocess.run([fp, "-version"], capture_output=True, timeout=5)
+                subprocess.run([fp, "-version"], capture_output=True, timeout=5,
+                               creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
                 ffprobe = fp
                 break
             except Exception:
@@ -234,7 +237,8 @@ class FileAnalyzer:
             try:
                 cmd = [ffprobe, "-v", "quiet", "-print_format", "json",
                        "-show_format", "-show_streams", str(path)]
-                out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                out = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
                 import json as j
                 data = j.loads(out.stdout)
                 fmt = data.get("format", {})

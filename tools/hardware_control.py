@@ -285,7 +285,8 @@ class HardwareControl:
         try:
             import subprocess
             result = subprocess.run(["powershell", "-command", "Get-Clipboard"],
-                                    capture_output=True, text=True, timeout=5)
+                                    capture_output=True, text=True, timeout=5,
+                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             return result.stdout.strip()
         except Exception:
             return ""
@@ -325,7 +326,8 @@ class HardwareControl:
             ps = f'(Get-AudioDevice -PlaybackVolume).Volume'
             try:
                 import subprocess
-                r = subprocess.run(["powershell", "-Command", ps], capture_output=True, text=True, timeout=5)
+                r = subprocess.run(["powershell", "-Command", ps], capture_output=True, text=True, timeout=5,
+                                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
                 if r.stdout.strip():
                     return {"status": "success", "volume": float(r.stdout.strip()), "message": "Windows audio (basic)"}
             except Exception:
@@ -347,7 +349,8 @@ class HardwareControl:
         except ImportError:
             ps = f'Set-AudioDevice -PlaybackVolume {int(level * 100)}'
             try:
-                r = subprocess.run(["powershell", "-Command", ps], capture_output=True, text=True, timeout=5)
+                r = subprocess.run(["powershell", "-Command", ps], capture_output=True, text=True, timeout=5,
+                                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
                 return {"status": "success", "volume": level, "percent": int(level * 100)}
             except Exception:
                 pass

@@ -84,7 +84,9 @@ class InstagramAgentController:
 
         creationflags = 0
         if os.name == "nt":
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+            # The Instagram worker has no UI; do not briefly show a console
+            # when TOM is running through pythonw.exe.
+            creationflags = subprocess.CREATE_NO_WINDOW
 
         process = subprocess.Popen(
             [sys.executable, str(self.script_path), "--daemon"],

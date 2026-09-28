@@ -751,6 +751,7 @@ class WebAutomationSuite:
             capture_output=True,
             text=True,
             timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
         if build_proc.returncode == 0:
             results["build_status"] = "success"
@@ -765,6 +766,7 @@ class WebAutomationSuite:
             cwd=project_path,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
         await asyncio.sleep(3)
         results["server_status"] = "started"

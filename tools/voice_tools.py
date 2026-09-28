@@ -40,6 +40,7 @@ class VoiceTools:
         self._conv_thread: Optional[threading.Thread] = None
         self._conv_stop = threading.Event()
         self._speaking = False
+        self._speech_stop = threading.Event()
 
         # Audio level callback (for UI visualization)
         self.on_audio_level: Optional[Callable] = None
@@ -123,6 +124,7 @@ class VoiceTools:
     def speak(self, text: str, timeout_seconds: int = 30) -> Dict[str, Any]:
         if not self.output_enabled:
             return {"status": "skipped", "message": "Voice output disabled"}
+        self._speech_stop.clear()
         self._speaking = True
         try:
             if self._edge_tts_ok:
@@ -147,6 +149,9 @@ class VoiceTools:
                 communicate = edge_tts.Communicate(text[:2000], self.voice_name, rate=self.voice_rate)
                 loop.run_until_complete(communicate.save(tmp))
                 loop.close()
+                if self._speech_stop.is_set():
+                    result.update({"status": "stopped", "message": "Voice playback stopped."})
+                    return
                 self._play_audio(tmp)
             except Exception as exc:
                 result["status"] = "error"
@@ -175,6 +180,26 @@ class VoiceTools:
         t.start()
         return t
 
+    def stop_speaking(self) -> Dict[str, Any]:
+        """Interrupt playback without disabling voice for a future response."""
+        self._speech_stop.set()
+        try:
+            import pygame
+            if pygame.mixer.get_init():
+                pygame.mixer.music.stop()
+                try:
+                    pygame.mixer.music.unload()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            if self._tts_engine:
+                self._tts_engine.stop()
+        except Exception:
+            pass
+        return {"status": "stopped", "message": "Voice playback stopped."}
+
     def _play_audio(self, filepath: str):
         # Try pygame first.
         # FIX: catch EVERY pygame failure (pygame.error from mixer.init when the
@@ -188,8 +213,10 @@ class VoiceTools:
                 pygame.mixer.init()
             pygame.mixer.music.load(filepath)
             pygame.mixer.music.play()
-            while pygame.mixer.music.get_busy():
+            while pygame.mixer.music.get_busy() and not self._speech_stop.is_set():
                 pygame.time.wait(50)
+            if self._speech_stop.is_set():
+                pygame.mixer.music.stop()
             try:
                 pygame.mixer.music.unload()  # release file lock (pygame >= 2.0)
             except Exception:
@@ -204,7 +231,8 @@ class VoiceTools:
                 try:
                     subprocess.run(
                         [cmd, "-nodisp", "-autoexit", "-loglevel", "quiet", filepath],
-                        timeout=30, capture_output=True)
+                        timeout=30, capture_output=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
                     return
                 except FileNotFoundError:
                     continue
@@ -224,7 +252,8 @@ class VoiceTools:
             )
             subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
-                timeout=30, capture_output=True)
+                timeout=30, capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             return
         except Exception:
             pass
@@ -469,6 +498,7 @@ class VoiceTools:
         return {"status": "started", "message": "Voice conversation mode active. Say 'stop' or 'bye' to end."}
 
     def stop_conversation_mode(self) -> Dict[str, Any]:
+        self.stop_speaking()
         if not self._conv_active:
             return {"status": "not_active", "message": "Conversation mode is not running."}
         self._conv_stop.set()

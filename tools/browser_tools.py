@@ -93,6 +93,19 @@ class BrowserTools:
         executable_path = os.getenv("CHROME_EXECUTABLE") or None
         if executable_path and not os.path.exists(executable_path):
             executable_path = None
+        if not executable_path and os.name == "nt":
+            # Playwright's bundled Chromium is optional when Chrome is already
+            # installed.  Prefer a real local Chrome installation so the Web
+            # Auto and Auto-Debug buttons work out of the box on Windows.
+            chrome_candidates = [
+                os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+                             "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
+                             "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                             "Google", "Chrome", "Application", "chrome.exe"),
+            ]
+            executable_path = next((path for path in chrome_candidates if os.path.exists(path)), None)
 
         args = []
         if profile_directory and profile_directory != "Default":
