@@ -174,6 +174,7 @@ class DependencyManager:
                 text=True,
                 timeout=timeout,
                 env=env,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             return {
                 "returncode": result.returncode,

@@ -785,6 +785,7 @@ class VoiceUIWindow:
         self._audio_level = 0.0
         self._running = True
         self._conversation_active = False
+        self._agent_future = None
 
         self._particles = []
         self._pulse = 0.0
@@ -1130,6 +1131,7 @@ class VoiceUIWindow:
                     try:
                         future = asyncio.run_coroutine_threadsafe(
                             self.app.agent.execute_task(heard), self.app._loop)
+                        self._agent_future = future
                         response = future.result(timeout=120)
                         if isinstance(response, dict):
                             response = response.get("message", str(response))
@@ -1155,7 +1157,10 @@ class VoiceUIWindow:
 
     def _stop_conversation(self):
         self._conversation_active = False
+        if self._agent_future is not None and not self._agent_future.done():
+            self._agent_future.cancel()
         if self.app.voice:
+            self.app.voice.stop_speaking()
             self.app.voice.stop_conversation_mode()
         self._set_state("idle")
 
@@ -1255,6 +1260,7 @@ class TomDesktopApp:
         self.agent = None
         self.agent_ready = False
         self.processing = False
+        self._active_task_future = None
 
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(target=self._run_async_loop, daemon=True)
@@ -1609,10 +1615,16 @@ class TomDesktopApp:
         self.run_btn.pack(fill="x")
 
         v2_actions = [
-            ("  \u2699  Web Auto",    self._handle_web_automation, C["cyan"]),
-            ("  \u25c6  Auto-Debug",  self._handle_auto_debug,     C["orange"]),
-            ("  \u2606  Multi-Agent", self._handle_multi_agent,    C["purple"]),
-            ("  \u2714  Security",    self._handle_security_check, C["red"]),
+            # These actions need task-specific input.  Calling their handlers
+            # directly used to raise a missing ``detail`` argument error.
+            ("  \u2699  Web Auto",    lambda: self._prompt_and_run(
+                "Enter URL or localhost port to verify:", self._handle_web_automation), C["cyan"]),
+            ("  \u25c6  Auto-Debug",  lambda: self._prompt_and_run(
+                "Enter URL or localhost port to debug:", self._handle_auto_debug), C["orange"]),
+            ("  \u2606  Multi-Agent", lambda: self._prompt_and_run(
+                "Describe the multi-agent task:", self._handle_multi_agent), C["purple"]),
+            ("  \u2714  Security",    lambda: self._prompt_and_run(
+                "Enter URL to check safety:", self._handle_security_check), C["red"]),
             ("  \u25ce  System Check", self._run_system_verification, C["emerald"]),
         ]
         for text, cmd, color in v2_actions:
@@ -2139,6 +2151,12 @@ class TomDesktopApp:
             bg=C["blue"], fg="#ffffff", activebackground="#2563eb", activeforeground="#ffffff",
             relief="flat", bd=0, padx=18, pady=8, font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.send_btn.grid(row=0, column=3, padx=(0, 0))
+
+        self.stop_btn = tk.Button(input_row, text="■ Stop", command=self._cancel_active_work,
+            bg=C["surface2"], fg=C["red"], activebackground=C["border2"], activeforeground=C["red"],
+            relief="flat", bd=0, padx=12, pady=8, font=("Segoe UI", 9, "bold"),
+            cursor="hand2", state="disabled")
+        self.stop_btn.grid(row=0, column=4, padx=(6, 0))
 
         fb_row = tk.Frame(bottom_bar, bg=C["bg"])
         fb_row.grid(row=2, column=0, sticky="ew", pady=(6, 0))
@@ -3211,15 +3229,13 @@ class TomDesktopApp:
     def _run_active_agent_action(self):
         if self.processing:
             return
-        workflow_commands = {
-            "core": "Show me the current dashboard status and what I should prioritize.",
-            "email": "Summarize my inbox, triage important emails, and draft safe replies.",
-            "instagram": "Run the Instagram AI news workflow and summarize important posts.",
-        }
-        cmd = workflow_commands.get(self.active_agent_key, "Help me with the current task.")
         self._show_view("chat")
-        self.input_var.set(cmd)
-        self.send_message()
+        # Do not fabricate a task or a response. The active agent only runs
+        # from the user's actual instruction in the chat input.
+        self.input_entry.focus_set()
+        if not self.input_var.get().strip():
+            label = self.agent_profiles[self.active_agent_key]["label"]
+            self._append_chat("meta", f"{label} is ready. Enter a task, then click Send.")
 
     def _open_voice_ui(self):
         """Open the dedicated Voice Conversation UI window."""
@@ -3318,6 +3334,7 @@ class TomDesktopApp:
                     self._append_chat("user", text if text else f"Analyze: {os.path.basename(analyze_path)}")
                 self._append_chat("meta", f"TOM is analyzing {os.path.basename(analyze_path)}...")
                 self.send_btn.configure(state="disabled")
+                self.stop_btn.configure(state="normal")
                 self.orb.status = "loading"
                 self.processing = True
                 threading.Thread(target=self._process_file_analysis,
@@ -3342,6 +3359,7 @@ class TomDesktopApp:
         self._append_chat("meta", f"TOM is thinking...")
 
         self.send_btn.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
         self.orb.status = "loading"
         self.processing = True
         threading.Thread(target=self._process_message, args=(routed,), daemon=True).start()
@@ -3353,9 +3371,13 @@ class TomDesktopApp:
         self._status_direction = 1
 
     def _process_message(self, text: str):
+        future = None
         try:
             future = asyncio.run_coroutine_threadsafe(self.agent.execute_task(text), self._loop)
+            self._active_task_future = future
             result = future.result(timeout=180)
+            if future is not self._active_task_future:
+                return
             message = str(result.get("message", "Done."))
             exp_id = result.get("experience_id")
             self.last_response_message = message
@@ -3370,14 +3392,45 @@ class TomDesktopApp:
 
             self._enqueue(self._on_response_ready, message, exp_id, result)
         except Exception as exc:
-            self._enqueue(self._on_response_ready, f"Error: {exc}", None, None)
+            if future is not None and future.cancelled():
+                self._enqueue(self._on_work_cancelled)
+            elif future is self._active_task_future:
+                self._enqueue(self._on_response_ready, f"Error: {exc}", None, None)
+
+    def _cancel_active_work(self):
+        """Stop a pending task and any currently spoken response."""
+        future = self._active_task_future
+        if future is not None and not future.done():
+            future.cancel()
+        if self.voice_mode_enabled:
+            self._stop_voice_ui()
+        elif self.voice:
+            self.voice.stop_speaking()
+            self.voice.stop_conversation_mode()
+        self._active_task_future = None
+        self.processing = False
+        self.orb.status = "ready"
+        self.send_btn.configure(state="normal")
+        self.stop_btn.configure(state="disabled")
+        self._append_chat("meta", "Stopped the current response and voice playback.")
+
+    def _on_work_cancelled(self):
+        self._active_task_future = None
+        self.processing = False
+        self.orb.status = "ready"
+        self.send_btn.configure(state="normal")
+        self.stop_btn.configure(state="disabled")
 
     def _process_file_analysis(self, file_path: str, question: str):
         """Analyze a file/image using the agent's vision + file analysis pipeline."""
+        future = None
         try:
             future = asyncio.run_coroutine_threadsafe(
                 self.agent.analyze_file(file_path, question), self._loop)
+            self._active_task_future = future
             result = future.result(timeout=180)
+            if future is not self._active_task_future:
+                return
             message = str(result.get("message", "Analysis complete."))
             exp_id = result.get("experience_id")
             self.last_response_message = message
@@ -3386,7 +3439,10 @@ class TomDesktopApp:
             self.activity_counts["analysis"] += 1
             self._enqueue(self._on_response_ready, message, exp_id, result)
         except Exception as exc:
-            self._enqueue(self._on_response_ready, f"Analysis error: {exc}", None, None)
+            if future is not None and future.cancelled():
+                self._enqueue(self._on_work_cancelled)
+            elif future is self._active_task_future:
+                self._enqueue(self._on_response_ready, f"Analysis error: {exc}", None, None)
 
     def _on_response_ready(self, message: str, exp_id, result):
         # Memory-shaped answers get their own "Remembering" card above the reply.
@@ -3401,6 +3457,7 @@ class TomDesktopApp:
         self.processing = False
         self.orb.status = "ready"
         self.send_btn.configure(state="normal")
+        self.stop_btn.configure(state="disabled")
         self.input_entry.focus_set()
 
         state = "normal" if exp_id else "disabled"
@@ -4676,8 +4733,6 @@ class TomDesktopApp:
             self._enqueue(self._append_chat, "meta", self.agent.memory.status_line())
             self._enqueue(self._update_voice_and_dashboard_state)
             self._enqueue(self._fetch_ollama_models)
-            self._enqueue(self._append_chat, "assistant",
-                "Hi, I am TOM. I remember how you like things done \u2014 correct me once and I'll apply it next time. I can create documents, analyze data, send emails, research the web, hold voice conversations, debug web apps, run security checks, and deploy multi-agent tasks. I also have deep expertise in Game Development (Unity/Unreal/Godot/PyGame), 3D & CGI production (Blender/ZBrush/Substance/Houdini), and Cybersecurity (pentesting, reverse engineering, exploit dev, forensics, cloud security). What would you like me to do?")
         except Exception as exc:
             import traceback as _tb
             exc_detail = "".join(_tb.format_exception_only(type(exc), exc)).strip()
@@ -4712,7 +4767,9 @@ class TomDesktopApp:
         try:
             kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "stdin": subprocess.DEVNULL}
             if os.name == "nt":
-                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+                # This can run when the UI was launched through pythonw.exe.
+                # CREATE_NO_WINDOW prevents a cmd window from flashing onscreen.
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             subprocess.Popen(["ollama", "serve"], **kwargs)
         except Exception as exc:
             self._enqueue(self._append_chat, "meta", f"Unable to start Ollama: {exc}")

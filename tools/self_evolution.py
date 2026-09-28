@@ -64,6 +64,19 @@ class SelfEvolution:
         self._data     = _load_json(EVOLUTION_FILE, self._default_data())
         self._profile  = _load_json(PROFILE_FILE,   self._default_profile())
         self._patterns = _load_json(PATTERNS_FILE,  {})
+        # Saved TOM profiles can predate fields added in newer releases.
+        # Normalize them at startup so a successful task never fails merely
+        # because its persisted learning state has an older schema.
+        if not isinstance(self._data, dict):
+            self._data = {}
+        if not isinstance(self._profile, dict):
+            self._profile = {}
+        if not isinstance(self._patterns, dict):
+            self._patterns = {}
+        for key, value in self._default_data().items():
+            self._data.setdefault(key, value)
+        for key, value in self._default_profile().items():
+            self._profile.setdefault(key, value)
         self._session_commands: List[Dict] = []
         logger.info("[EVOLUTION] Self-evolution engine initialised.")
 

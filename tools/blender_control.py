@@ -38,7 +38,10 @@ class BlenderControl:
             if os.path.exists(path):
                 return path
         try:
-            result = subprocess.run(["where", "blender"], capture_output=True, text=True, timeout=5)
+            kwargs = {"capture_output": True, "text": True, "timeout": 5}
+            if os.name == "nt":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            result = subprocess.run(["where", "blender"], **kwargs)
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.strip().splitlines()[0]
         except Exception:

@@ -155,8 +155,18 @@ def make_chat_model(model: str, max_tokens: int = 4096, temperature: float = 0.1
     except Exception:
         pass  # never let the safety net break model construction
 
-    return ChatOllama(model=model, base_url=base_url, temperature=temperature,
-                      num_predict=max_tokens)
+    kwargs: dict = {
+        "model": model,
+        "base_url": base_url,
+        "temperature": temperature,
+        "num_predict": max_tokens,
+    }
+    # Qwen 3.x models emit their reasoning separately. With TOM's compact
+    # chat budget, the reasoning can consume every generated token and leave
+    # the visible response empty. Disable it for normal assistant responses.
+    if "qwen3" in model.lower():
+        kwargs["reasoning"] = False
+    return ChatOllama(**kwargs)
 
 
 def make_groq_model(model: str, max_tokens: int = 4096, temperature: float = 0.1) -> Any:

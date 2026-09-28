@@ -12,9 +12,14 @@ logger = logging.getLogger(__name__)
 def _run_ps(script: str, timeout: int = 10) -> str:
     """Run a short PowerShell snippet and return stdout."""
     try:
+        kwargs = {"capture_output": True, "text": True, "timeout": timeout}
+        if os.name == "nt":
+            # TOM invokes these short discovery commands from the desktop UI.
+            # Never create a visible terminal for an internal background check.
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True, text=True, timeout=timeout,
+            **kwargs,
         )
         return proc.stdout.strip()
     except Exception:

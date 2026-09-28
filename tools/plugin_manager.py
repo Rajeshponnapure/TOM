@@ -134,6 +134,7 @@ class PluginManager:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             return {
                 "status": "success" if proc.returncode == 0 else "error",

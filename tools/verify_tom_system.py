@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import urllib.request
 from pathlib import Path
 from typing import Callable, Dict, List
 
+from dotenv import load_dotenv
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# Validate the models this TOM installation is configured to use, rather than
+# an old hard-coded model set from a previous setup.
+load_dotenv(ROOT / ".env")
 
 from tools.command_router import CommandRouter
 from tools.nlp_parser import CommandParser
@@ -82,7 +89,12 @@ def check_imports() -> Dict[str, object]:
 
 
 def check_ollama_models() -> Dict[str, object]:
-    required = {"gemma4:latest", "qwen2.5-coder:7b-instruct", "nomic-embed-text:latest"}
+    required = {
+        os.environ.get("OLLAMA_MODEL", "gemma4:latest"),
+        os.environ.get("OLLAMA_FAST_MODEL", "qwen2.5-coder:7b-instruct"),
+        os.environ.get("OLLAMA_CODE_MODEL", "qwen2.5-coder:7b-instruct"),
+        os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text:latest"),
+    }
     try:
         with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=10) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
