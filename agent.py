@@ -386,7 +386,7 @@ class TomAgent:
         correction = memory_rules.is_correction(command)
         if correction and self._last_command:
             content = (f"After TOM handled the request \"{self._last_command[:200]}\" "
-                       f"(TOM replied: \"{self._last_response[:240]}\"), the user corrected TOM: "
+                       f"(TOM replied: \"{' '.join(self._last_response.split())[:240]}\"), the user corrected TOM: "
                        f"\"{command}\"")
         else:
             content = f"The user told TOM a standing instruction: \"{command}\""
@@ -2368,17 +2368,33 @@ class TomAgent:
 
     # ── CHAT ────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _user_request_text(command: str) -> str:
+        """The user's own words, without the desktop app's agent-mode preamble.
+
+        In Email/Instagram Agent mode the app sends "You are Email Agent
+        mode. ...\n\nUser request: <text>". The preamble names the agent, so
+        matching plugins against the whole string ran that plugin for every
+        message (inbox triage instead of "write an email to ...").
+        """
+        command = command or ""
+        marker = "user request:"
+        idx = command.lower().rfind(marker)
+        return command[idx + len(marker):].strip() if idx >= 0 else command
+
     def _should_use_plugin_route(self, command_lower: str) -> bool:
-        if not any(token in command_lower for token in ("plugin", "agent", "run ", "execute ", "launch ")):
+        request = self._user_request_text(command_lower).lower()
+        if not any(token in request for token in ("plugin", "agent", "run ", "execute ", "launch ")):
             return False
-        return self.plugin_manager.match_plugin(command_lower) is not None
+        return self.plugin_manager.match_plugin(request) is not None
 
     async def _handle_plugin_routed_task(self, command: str) -> Dict[str, Any]:
-        plugin = self.plugin_manager.match_plugin(command)
+        request = self._user_request_text(command)
+        plugin = self.plugin_manager.match_plugin(request)
         if not plugin:
             return {"status": "error", "message": "No matching plugin found."}
 
-        lower = command.lower()
+        lower = request.lower()
         args = []
         if "daemon" in lower or "background" in lower:
             args = ["--daemon"]

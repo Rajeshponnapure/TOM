@@ -26,9 +26,15 @@ class BrowserTools:
         self.context = None
         self.page = None
         self.chrome_profile = None
+        self.last_error = ""
 
-    async def init_browser(self, headless: bool = False, profile: Optional[str] = None) -> Dict[str, Any]:
-        """Initialize Playwright browser for automation with optional Chrome profile"""
+    async def init_browser(self, headless: bool = False, profile: Optional[str] = None,
+                           use_profile: bool = True) -> Dict[str, Any]:
+        """Initialize Playwright browser for automation with optional Chrome profile.
+
+        use_profile=False starts a clean browser without the user's Chrome
+        profile (used when a tool needs a page and none is open yet).
+        """
         try:
             result = {
                 "status": "success",
@@ -37,6 +43,9 @@ class BrowserTools:
 
             self.playwright = await async_playwright().start()
             chrome_settings = self._get_chrome_settings(profile)
+            if not use_profile:
+                chrome_settings["user_data_dir"] = None
+                chrome_settings["args"] = []
 
             if chrome_settings["user_data_dir"]:
                 try:
@@ -150,7 +159,21 @@ class BrowserTools:
         if self.context:
             self.page = await self.context.new_page()
             return self.page
-        return None
+        # Nothing launched yet (only WhatsApp used to start the browser, so
+        # Web Auto / Auto-Debug always failed with "No active browser page").
+        headless = os.getenv("TOM_BROWSER_HEADLESS", "false").strip().lower() in ("1", "true", "yes")
+        result = await self.init_browser(headless=headless, use_profile=False)
+        if result.get("status") != "success":
+            self.last_error = result.get("message", "")
+            if self.playwright is not None:
+                try:
+                    await self.playwright.stop()
+                except Exception:
+                    pass
+                self.playwright = None
+            return None
+        self.last_error = ""
+        return self.page
 
     async def open_url(self, url: str) -> Dict[str, Any]:
         """Opens a URL in the browser"""

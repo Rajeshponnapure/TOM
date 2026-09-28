@@ -187,6 +187,10 @@ class SafetyGuards:
         except KeyboardInterrupt:
             print("\n[User cancelled]")
             return False
+        except (EOFError, RuntimeError, OSError):
+            # No console (GUI / frozen exe): deny instead of crashing.
+            safe_print("[No console available for confirmation - action denied]")
+            return False
 
     # ── Website Legitimacy ──────────────────────────────────────────────
 

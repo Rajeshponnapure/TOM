@@ -72,3 +72,29 @@ def test_each_quick_action_reaches_its_handler():
         else:
             assert app.prompted == [], qa["label"]
             assert app.input_var.value == qa["cmd"], qa["label"]
+
+
+def test_hardware_commands_parse_coordinates_and_keep_case():
+    calls = []
+
+    class HW:
+        def is_available(self):
+            return True
+
+        def __getattr__(self, name):
+            return lambda *a, **k: calls.append((name, a)) or {"status": "success"}
+
+    app = tom_desktop_app.TomDesktopApp.__new__(tom_desktop_app.TomDesktopApp)
+    app.hardware = HW()
+    app._append_chat = lambda role, text: None
+    app._enqueue = lambda fn, *a: None
+    cases = {
+        "move mouse to 500 500": ("move_mouse", (500, 500)),   # the dialog's own example
+        "click at 10, 20": ("click", (10, 20)),
+        "type Hello World": ("type_text", ("Hello World",)),   # case preserved
+        "scroll 5": ("scroll", (5,)),
+    }
+    for command, expected in cases.items():
+        calls.clear()
+        app._handle_hardware(command)
+        assert calls[0] == expected, command

@@ -87,7 +87,8 @@ class WebAutomationSuite:
             raise WebAutomationError("BrowserTools not available")
         page = await self.browser_tools._get_active_page()
         if not page:
-            raise WebAutomationError("No active browser page")
+            reason = getattr(self.browser_tools, "last_error", "")
+            raise WebAutomationError("No active browser page" + (f": {reason}" if reason else ""))
         return page
 
     async def start_listeners(self):
@@ -122,11 +123,13 @@ class WebAutomationSuite:
         self._listener_active = False
 
     def _on_console(self, msg):
+        # Playwright (Python) gives location as a dict: url/lineNumber/columnNumber.
+        loc = msg.location or {}
         entry = ConsoleEntry(
             level=msg.type,
             text=msg.text,
-            source=msg.location.url if msg.location else "",
-            line=msg.location.line_number if msg.location else 0,
+            source=loc.get("url", "") if isinstance(loc, dict) else getattr(loc, "url", ""),
+            line=(loc.get("lineNumber", 0) if isinstance(loc, dict) else getattr(loc, "line_number", 0)) or 0,
         )
         self._console_logs.append(entry)
 
@@ -696,6 +699,10 @@ class WebAutomationSuite:
         """Open URL, wait, and verify expected text appears."""
         page = await self._get_page()
         try:
+            # Listen before navigating, or console/network errors raised while
+            # the page loads are missed and the check reports 0 errors.
+            await self.start_listeners()
+            self._console_logs, self._network_logs, self._page_errors = [], [], []
             await page.goto(url, wait_until="networkidle", timeout=timeout)
             await asyncio.sleep(1)
 

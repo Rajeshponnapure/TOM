@@ -3194,6 +3194,36 @@ class TomDesktopApp:
             self.input_entry.focus_set()
             self.input_entry.icursor(tk.END)
 
+    def _ask_approval(self, request) -> bool:
+        """Approval dialog for the agent; callable from any thread.
+
+        The agent asks from worker threads, so the dialog is shown on the UI
+        thread and this thread waits for the answer. No answer within five
+        minutes counts as "no".
+        """
+        lines = [f"Action: {request.action}", "", str(request.summary)]
+        for key, value in (request.details or {}).items():
+            lines.append(f"{key}: {str(value)[:200]}")
+        lines += ["", f"Risk: {request.risk_level}", "", "Allow TOM to do this?"]
+        text = "\n".join(lines)[:1800]
+        answer = {"ok": False}
+        done = threading.Event()
+
+        def ask():
+            try:
+                answer["ok"] = bool(messagebox.askyesno(
+                    "TOM - Approval required", text, icon="warning", parent=self.root))
+            finally:
+                done.set()
+
+        if threading.current_thread() is threading.main_thread():
+            ask()
+        else:
+            self._enqueue(ask)
+            done.wait(timeout=300)
+        self._append_chat("meta", f"{'Approved' if answer['ok'] else 'Denied'}: {request.action}")
+        return answer["ok"]
+
     def _prompt_and_run(self, prompt_text: str, handler):
         import tkinter.simpledialog as sd
         result = sd.askstring("TOM", prompt_text, parent=self.root)
@@ -4766,6 +4796,11 @@ class TomDesktopApp:
             from agent import set_progress_callback
             set_progress_callback(self._on_agent_progress)
             self.agent = self._TomAgent()
+            # Sensitive actions (send email/WhatsApp, delete, run code) ask for
+            # approval. The default prompt reads the console, which a GUI
+            # doesn't have, so ask with a dialog instead.
+            if getattr(self.agent, "approval_manager", None) is not None:
+                self.agent.approval_manager.provider = self._ask_approval
             self.agent_ready = True
             self._enqueue(self._init_web_automation)
             self._enqueue(self._init_orchestrator)
