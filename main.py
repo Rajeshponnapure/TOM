@@ -21,8 +21,8 @@ def safe_print(message: str):
 
 async def main():
     print("\n" + "=" * 55)
-    print("  TOM AUTONOMOUS SYSTEM — Professional AI Assistant")
-    print("  Gemma 4 | NLP | Voice | Documents | Data Analysis")
+    print("  TOM — the automation agent that remembers how you work")
+    print("  Memory | Files | Email | Documents | Web | Voice")
     print("=" * 55 + "\n")
 
     tom_agent = TomAgent()
@@ -32,6 +32,7 @@ async def main():
 
     voice_status = voice_tools.status()
     safe_print(f"Model: {tom_agent.model_name} (primary) / {tom_agent.code_model_name} (code)")
+    safe_print(tom_agent.memory.status_line())
     safe_print(f"Voice input: {'ON' if voice_status['voice_input_enabled'] else 'OFF'}")
     safe_print(f"Voice output: {'ON' if voice_status['voice_output_enabled'] else 'OFF'}")
 
@@ -71,6 +72,13 @@ TOM PROFESSIONAL COMMANDS:
   Schedule [task]             — Background scheduling
   Voice mode / Talk           — Voice conversation mode
   Reward / Penalty            — Feedback on responses
+
+LONG-TERM MEMORY (TOM learns from your corrections):
+  No — PDFs always go in Invoices   — Correct TOM once; applied from then on
+  Remember that [fact]              — Store a standing preference
+  What have you learned about me?   — Summary of everything TOM has learned
+  What do you remember about [x]    — Search memory
+  Memory status                     — Connection, counts, recently stored
 
   Tips for professional work:
   - "Create a professional PowerPoint about climate change with internet research"

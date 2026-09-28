@@ -46,3 +46,10 @@ reports/
 # ── OS noise ───────────────────────────────────────────
 Thumbs.db
 .DS_Store
+
+# ── Working notes (never shipped) ──────────────────────
+_audit/
+PRD.md
+*_PRD.md
+demo/sandbox/
+demo/.demo_env

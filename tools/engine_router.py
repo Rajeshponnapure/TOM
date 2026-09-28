@@ -200,7 +200,7 @@ class EngineRouter:
         if re.search(r"\b(verify|check)\b.*\b(localhost|web ?app|webapp)\b", c) or \
            c.startswith("verify website"):
             return "webauto"
-        if re.search(r"\borganize\b.*\b(folder|downloads|desktop|documents|files|photos|pictures)\b", c) or \
+        if re.search(r"\b(organi[sz]e|tidy(?: up)?|clean ?up|declutter|sort(?: out)?)\b.*\b(folder|downloads|desktop|documents|files|photos|pictures)\b", c) or \
            re.search(r"\bfind (all |every )?[\w*.]*\s*(files|pdfs|images|photos|documents)\b", c) or \
            re.search(r"\b(bulk rename|rename all)\b", c) or \
            re.search(r"\b(zip|compress)\b.*\b(folder|directory|downloads|documents)\b", c) or \
@@ -595,10 +595,13 @@ class EngineRouter:
         ops = FileOps()
         c = command.lower()
 
+        # Match on the original text so Linux/macOS paths keep their case.
         folder_m = re.search(
-            r"(?:\bin|\bfrom|\bof)?\s*(my\s+)?(downloads|documents|desktop|pictures|photos|music|videos|[a-z]:\\[^\s\"]+|/[^\s\"]+)",
-            c)
-        folder = folder_m.group(2) if folder_m else "downloads"
+            r"[\"']([^\"']+[\\/][^\"']*)[\"']"
+            r"|(?:\bin|\bfrom|\bof)?\s*(?:my\s+)?(downloads|documents|desktop|pictures|photos|music|videos"
+            r"|[a-z]:\\[^\s\"]+|~?/[^\s\"]+)",
+            command, re.IGNORECASE)
+        folder = (folder_m.group(1) or folder_m.group(2)) if folder_m else "downloads"
 
         if re.search(r"\bfind\b", c):
             ext_m = re.search(r"\b(pdfs?|images?|photos?|docs?|documents|videos?|\*?\.[a-z0-9]{2,4})\b", c)
@@ -623,30 +626,69 @@ class EngineRouter:
                 return self._ok("engine_fileops",
                                 "Tell me the pattern, e.g.: bulk rename in downloads 'IMG_' to 'Holiday_'")
             plan = ops.plan_bulk_rename(folder, pat_m.group(1), pat_m.group(2))
-        elif "year" in c:
-            plan = ops.plan_organize_by_year(folder)
         else:
-            plan = ops.plan_organize_by_type(folder)
+            # Long-term memory: the user's remembered folder rules override defaults.
+            rules, memory_note = [], ""
+            agent_ref = self._agent
+            if agent_ref is not None and hasattr(agent_ref, "remembered_folder_rules"):
+                try:
+                    rules, memory_note = await agent_ref.remembered_folder_rules(command)
+                except Exception as exc:
+                    memory_note = f"(memory unavailable: {str(exc)[:80]})"
+            if "year" in c:
+                plan = ops.plan_organize_by_year(folder, rules=rules)
+            else:
+                plan = ops.plan_organize_by_type(folder, rules=rules)
+            if plan.get("status") == "plan":
+                plan["memory_note"] = memory_note
+                plan["rules_available"] = [r.describe() for r in rules]
 
         if plan.get("status") != "plan":
             return self._ok("engine_fileops", plan.get("message", "Could not build a plan."))
         if not plan["moves"]:
-            return self._ok("engine_fileops", "Nothing to do — " + plan["message"])
+            extras = self._memory_extras(plan)
+            preface = extras.pop("memory_preface", "")
+            return self._ok("engine_fileops", preface + "Nothing to do — " + plan["message"], **extras)
 
+        extras = self._memory_extras(plan)
+        preface = extras.pop("memory_preface", "")
         agent = self._agent
         if agent is None or not getattr(agent, "approval_manager", None):
-            return self._ok("engine_fileops", "[DRY RUN — approval system unavailable]\n" + plan["message"])
+            return self._ok("engine_fileops",
+                            preface + "[DRY RUN — approval system unavailable]\n" + plan["message"], **extras)
         import asyncio as _aio
         from tools.approval import ApprovalRequest
         approved = await _aio.to_thread(
             agent.approval_manager.request_approval,
-            ApprovalRequest(action="file_ops", summary=plan["message"],
-                            details={"count": len(plan["moves"])}, risk_level="medium"))
+            ApprovalRequest(action="file_ops", summary=preface + plan["message"],
+                            details={"count": len(plan["moves"]),
+                                     "remembered_rules": [r["rule"] for r in plan.get("applied_rules", [])]},
+                            risk_level="medium"))
         if not approved:
             return {"status": "cancelled", "response_type": "engine_fileops",
-                    "message": "File operation cancelled. (Plan was: " + plan["message"][:200] + ")"}
+                    "message": "File operation cancelled. (Plan was: " + plan["message"][:200] + ")", **extras}
         res = ops.execute_plan(plan)
-        return self._ok("engine_fileops", res["message"])
+        summary = ", ".join(f"{k} ({v})" for k, v in sorted(plan.get("summary", {}).items()))
+        detail = f"{res['message']}\nNow in: {summary}" if summary else res["message"]
+        if plan.get("kept"):
+            detail += f"\nLeft in place: {', '.join(plan['kept'][:8])}"
+        return self._ok("engine_fileops", preface + detail, **extras)
+
+    @staticmethod
+    def _memory_extras(plan: Dict[str, Any]) -> Dict[str, Any]:
+        """Surface which remembered rules shaped this plan (shown as 'Remembering: …')."""
+        applied = plan.get("applied_rules") or []
+        extras: Dict[str, Any] = {"applied_rules": applied,
+                                  "memories_used": [a["rule"] for a in applied]}
+        if applied:
+            lines = "\n".join(f"  • {a['rule']}  ({a['files']} file{'s' if a['files'] != 1 else ''})"
+                               for a in applied)
+            extras["memory_preface"] = f"Remembering how you like this folder organized:\n{lines}\n\n"
+        elif plan.get("memory_note"):
+            extras["memory_preface"] = plan["memory_note"] + "\n\n"
+        else:
+            extras["memory_preface"] = ""
+        return extras
 
     # ── Web recipes (Phase B3) ────────────────────────────────────────────
     def _run_webrecipes(self, command: str) -> Dict[str, Any]:

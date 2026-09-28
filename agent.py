@@ -5,9 +5,9 @@ import re
 import subprocess
 from typing import Any, Dict, Optional
 
-from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 
+from tools import llm_factory
 from tools.os_tools import OSTools
 from tools.browser_tools import BrowserTools
 from tools.file_tools import FileTools
@@ -34,6 +34,8 @@ from tools.file_analyzer import FileAnalyzer
 from tools.project_paths import PROJECT_ROOT, project_path_str
 from tools.skill_manager import SkillManager, SkillRoute
 from tools.capability_resolver import CapabilityResolver
+from tools.hindsight_memory import get_memory, MemoryHit, TAG_PREFERENCE, TAG_CORRECTION, TAG_TASK
+from tools import memory_rules
 import base64
 import time
 
@@ -64,13 +66,17 @@ class TomAgent:
         self.model_timeout_seconds = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "120"))
         self.task_timeout_seconds = int(os.environ.get("TASK_TIMEOUT_SECONDS", "180"))
 
-        base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        # ── LLM factory (model-agnostic, provider-agnostic) ──────────────
+        # TOM_LLM_PROVIDER=ollama (local, default) or groq (hosted).
+        # Call switch_model(name) at any time to hot-swap all slots.
+        self.llm_provider = llm_factory.provider()
+        if self.llm_provider == "groq":
+            self.model_name = llm_factory.groq_model("primary")
+            self.fast_model_name = llm_factory.groq_model("fast")
+            self.code_model_name = llm_factory.groq_model("code")
 
-        # ── LLM factory (model-agnostic) ─────────────────────────────────
-        # All three LLM slots use whatever model is in the environment.
-        # Call switch_model(name) at any time to hot-swap all of them.
-        def _make(model: str, tokens: int) -> "ChatOllama":
-            return ChatOllama(model=model, base_url=base_url, temperature=0.1, num_predict=tokens)
+        def _make(model: str, tokens: int):
+            return llm_factory.make_chat_model(model, max_tokens=tokens)
 
         self.llm      = _make(self.model_name,      4096)  # primary (complex reasoning)
         self.fast_llm = _make(self.fast_model_name, 2048)  # fast (parsing, NLP)
@@ -113,6 +119,13 @@ class TomAgent:
         self._last_response = ""
         self._last_exp_id = None
         self._last_result = None
+
+        # ── Long-term memory (Hindsight) ─────────────────────────────────
+        # What TOM has *learned* about this user: corrections, standing
+        # preferences and task outcomes — recalled before every task.
+        self.memory = get_memory()
+        self._recalled: list = []          # MemoryHit list for the task in flight
+        safe_print(f"[MEMORY] {self.memory.status_line()}")
 
         # ── RAG semantic memory ──────────────────────────────────────────
         # Stores all conversations, documents, and knowledge as vectors.
@@ -191,9 +204,8 @@ class TomAgent:
             safe_print(f"[ENGINES] Could not initialise: {_eng_err}")
 
     def _make_llm(self, model: str, max_tokens: int = 4096):
-        """Factory — create a ChatOllama instance for any model name."""
-        base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-        return ChatOllama(model=model, base_url=base_url, temperature=0.1, num_predict=max_tokens)
+        """Factory — create a chat model for any model name on the active provider."""
+        return llm_factory.make_chat_model(model, max_tokens=max_tokens)
 
     def switch_model(self, model_name: str) -> None:
         """
@@ -204,9 +216,10 @@ class TomAgent:
         self.model_name      = model_name
         self.fast_model_name = model_name   # single-model mode: use same model everywhere
         self.code_model_name = model_name
-        os.environ["OLLAMA_MODEL"]      = model_name
-        os.environ["OLLAMA_FAST_MODEL"] = model_name
-        os.environ["OLLAMA_CODE_MODEL"] = model_name
+        env_prefix = "GROQ" if llm_factory.provider() == "groq" else "OLLAMA"
+        os.environ[f"{env_prefix}_MODEL"]      = model_name
+        os.environ[f"{env_prefix}_FAST_MODEL"] = model_name
+        os.environ[f"{env_prefix}_CODE_MODEL"] = model_name
 
         self.llm      = self._make_llm(model_name, max_tokens=4096)
         self.fast_llm = self._make_llm(model_name, max_tokens=2048)
@@ -220,7 +233,11 @@ class TomAgent:
     def _build_memory_context(self, query: str) -> str:
         """Build context string: recent chat + RAG semantic retrieval + curated knowledge."""
         chat_ctx = self.chat_memory.build_context(query=query, recent_n=14, relevant_n=10, max_chars=4000)
-        parts = [chat_ctx]
+        parts = []
+        long_term = self._long_term_context()
+        if long_term:
+            parts.append(long_term)
+        parts.append(chat_ctx)
         if self.rag and self.rag.available:
             try:
                 rag_ctx = self.rag.build_rag_context(query, max_chars=2500)
@@ -232,6 +249,148 @@ class TomAgent:
         if know_ctx:
             parts.append(know_ctx)
         return "\n\n".join(p for p in parts if p)
+
+    # ── LONG-TERM MEMORY (Hindsight) ────────────────────────────────────
+
+    def _long_term_context(self, max_chars: int = 1800) -> str:
+        """Recalled memories for the task in flight, formatted for prompts."""
+        hits = getattr(self, "_recalled", None) or []
+        if not hits:
+            return ""
+        prefs = [h for h in hits if h.is_preference]
+        others = [h for h in hits if not h.is_preference]
+        lines = ["Long-term memory — learned from earlier sessions with this user. "
+                 "Apply these; if two conflict, the more recent one wins:"]
+        for h in prefs + others:
+            stamp = f" ({h.when})" if h.when else ""
+            lines.append(f"- {h.text}{stamp}")
+        return "\n".join(lines)[:max_chars]
+
+    def _relevant_preferences(self, command: str, limit: int = 3) -> list:
+        """Recalled preferences worth showing the user for this request."""
+        category = memory_rules.categorize(command)
+        shown = []
+        for h in getattr(self, "_recalled", None) or []:
+            if not h.is_preference:
+                continue
+            if category != "general" and memory_rules.categorize(h.text) not in (category, "general"):
+                continue
+            shown.append(h.text)
+            if len(shown) >= limit:
+                break
+        return shown
+
+    async def remembered_folder_rules(self, command: str):
+        """Folder-organizing rules this user taught TOM in earlier sessions.
+
+        1. recall() preference/correction memories about organizing files
+        2. parse them into concrete FolderRules (deterministic)
+        3. if memories exist but none parse, ask reflect() for structured rules
+        Returns (rules, note) — note explains memory state when no rule applies.
+        """
+        if not self.memory.available:
+            return [], ""
+        query = ("How does the user want files in their folders organized? "
+                 "Where should PDFs, invoices, screenshots, images, installers and other file "
+                 f"types go, and what should be left alone? Request: {command}")
+        hits = await self.memory.arecall(query, tags=[TAG_PREFERENCE, TAG_CORRECTION], limit=12,
+                                         budget="mid")
+        texts = [h.text for h in hits]
+        # The user's own words (local journal) back up Hindsight's extracted facts.
+        for item in self.memory.recent_journal(limit=40):
+            tags = item.get("tags") or []
+            if (TAG_PREFERENCE in tags or TAG_CORRECTION in tags) and "file_organization" in tags:
+                raw = (item.get("metadata") or {}).get("user_words")
+                if raw:
+                    texts.append(raw)
+        rules = memory_rules.parse_folder_rules(texts)
+        if not rules and hits:
+            out = await self.memory.areflect(
+                "List the user's rules for organizing files into subfolders.",
+                response_schema=memory_rules.FOLDER_RULES_SCHEMA, timeout=40.0)
+            if out.get("ok"):
+                rules = memory_rules.rules_from_structured(out.get("structured"), source="reflect")
+        if hits and not rules:
+            return [], "(I checked my memory — nothing specific about organizing this folder yet.)"
+        return rules, ""
+
+    def _retain_preference(self, command: str) -> None:
+        """Store a correction / standing preference the user just stated."""
+        category = memory_rules.categorize(command)
+        correction = memory_rules.is_correction(command)
+        if correction and self._last_command:
+            content = (f"After TOM handled the request \"{self._last_command[:200]}\" "
+                       f"(TOM replied: \"{self._last_response[:240]}\"), the user corrected TOM: "
+                       f"\"{command}\"")
+        else:
+            content = f"The user told TOM a standing instruction: \"{command}\""
+        tags = [TAG_PREFERENCE, category] + ([TAG_CORRECTION] if correction else [])
+        self.memory.retain(content, context=f"user preference about {category.replace('_', ' ')}",
+                           tags=tags, metadata={"user_words": command[:400], "category": category},
+                           index_now=True)
+
+    def _retain_outcome(self, command: str, result: Dict[str, Any], intent: str) -> None:
+        """Store what TOM did and how it went, so future attempts can learn from it."""
+        status = str(result.get("status", "unknown"))
+        category = memory_rules.categorize(command)
+        how = result.get("response_type") or intent or "general"
+        message = " ".join(str(result.get("message", "")).split())[:320]
+        content = f"The user asked TOM: \"{command[:300]}\". TOM handled it as '{how}' and the outcome was {status}."
+        if message:
+            content += f" TOM's reply: {message}"
+        applied = result.get("applied_rules") or []
+        if applied:
+            content += " Remembered rules applied: " + "; ".join(a["rule"] for a in applied) + "."
+        self.memory.retain(content, context=f"task outcome — {category.replace('_', ' ')}",
+                           tags=[TAG_TASK, category, f"status:{status}"],
+                           metadata={"category": category, "status": status})
+
+    async def _memory_command(self, command: str) -> Optional[Dict[str, Any]]:
+        """Meta commands about TOM's long-term memory. None if not one."""
+        low = command.lower().strip().rstrip("?!. ")
+        learned = ("what have you learned about me", "what have you learned",
+                   "what do you know about me", "what do you remember about me",
+                   "what have you learnt about me", "what did you learn about me",
+                   "how do i like things done", "memory summary", "summarize your memory",
+                   "what do you remember")
+        if low in learned:
+            if not self.memory.available:
+                return {"status": "error", "response_type": "memory",
+                        "message": self.memory.status_line()}
+            out = await self.memory.areflect(
+                "Summarize what you have learned about how this user likes their work done: "
+                "standing preferences, rules and corrections, grouped by area (files, email, "
+                "documents, other). Short bullet points, most recent instruction first when they conflict.",
+                budget="mid", timeout=60.0)
+            text = out.get("text") or "I don't have enough history with you yet — correct me as we go and I'll remember."
+            return {"status": "success" if out.get("ok") else "error", "response_type": "memory_reflect",
+                    "message": "Here's what I've learned about how you work:\n\n" + text}
+        if low in ("memory", "memory status", "show memory", "show memories", "long term memory",
+                   "long-term memory", "hindsight status"):
+            st = self.memory.status()
+            recent = self.memory.recent_journal(limit=8)
+            lines = [self.memory.status_line(),
+                     f"This session: {st['retained']} retained · {st['recalled']} recalls · "
+                     f"{st['reflected']} reflections · {st['failed']} failed · {st['pending']} queued"]
+            if recent:
+                lines.append("\nMost recent things I stored:")
+                for item in recent:
+                    tag = "rule" if TAG_PREFERENCE in (item.get("tags") or []) else "task"
+                    words = (item.get("metadata") or {}).get("user_words") or item.get("content", "")
+                    lines.append(f"  [{tag}] {words[:140]}")
+            return {"status": "success", "response_type": "memory_status", "message": "\n".join(lines)}
+        m = re.match(r"^(?:what do you (?:remember|know) about|recall|search (?:your )?memory for)\s+(.+)$", low)
+        if m:
+            topic = m.group(1).strip()
+            hits = await self.memory.arecall(topic, limit=8, budget="mid")
+            if not hits:
+                return {"status": "success", "response_type": "memory_recall",
+                        "message": f"Nothing in my long-term memory about '{topic}' yet."}
+            body = "\n".join(f"  • {h.text}" + (f"  ({h.when})" if h.when else "") for h in hits)
+            return {"status": "success", "response_type": "memory_recall",
+                    "message": f"What I remember about '{topic}':\n{body}",
+                    "memories_used": [h.text for h in hits]}
+        return None
 
     def _build_knowledge_context(self, query: str, max_chars: int = 1400) -> str:
         """Retrieve curated domain knowledge for the query (fails silently to "").
@@ -400,6 +559,9 @@ class TomAgent:
         self.chat_memory.append("user", command)
         task_started_at = time.perf_counter()
         telemetry_skill_route = None
+        self._recalled = []
+        recall_task = None
+        parsed: Dict[str, Any] = {}
 
         # Safety check
         safety_check = await self.safety.is_action_safe(command)
@@ -471,8 +633,26 @@ class TomAgent:
                             "message": f"Voice stack failed to load: {_vt_err}. "
                                        f"Fix: pip install SpeechRecognition pyttsx3 pyaudio edge-tts pygame"}
 
+            # ── Long-term memory: meta commands, preferences, recall ──────
+            mem_result = await self._memory_command(command)
+            if mem_result is not None:
+                return mem_result
+            if memory_rules.is_preference_statement(command):
+                self._retain_preference(command)
+                if memory_rules.is_pure_preference(command):
+                    return self._acknowledge_preference(command)
+            if self.memory.available:
+                # Runs while the request is being parsed — no added latency.
+                recall_task = asyncio.create_task(self.memory.arecall(command, limit=8))
+
             safe_print("[STEP 1] Understanding your request...")
-            parsed = await self.understand_command(command)
+            try:
+                parsed = await self.understand_command(command)
+            finally:
+                if recall_task is not None:
+                    self._recalled = await recall_task
+                    if self._recalled:
+                        safe_print(f"[MEMORY] Recalled {len(self._recalled)} relevant memories.")
             command_lower = command.lower().strip()
             intent = parsed.get("intent", "")
             safe_print(f"[STEP 2] Detected intent: {intent}")
@@ -493,6 +673,8 @@ class TomAgent:
                     )
                 else:
                     msg = "Thanks for the feedback! I'll keep improving."
+                if not memory_rules.is_preference_statement(command):
+                    self._retain_preference(command)
                 return {"status": "success", "message": msg, "response_type": "feedback"}
 
             # ── MCP connector calls ───────────────────────────────────────
@@ -631,6 +813,11 @@ class TomAgent:
                 elif handler == "execute_web_search":
                     result = await self._web_search(command, parsed)
 
+                # Email drafting the router didn't claim ("email Ravi about the
+                # budget") — must win over skill/topic routes keyed on "budget" etc.
+                elif parsed.get("intent") == "write_email" and handler == "generate_chat_response":
+                    result = await self._handle_email_write(command, parsed)
+
                 # Specialized engines (ML/IoT/VLSI/Hardware/Blender/GameDev/
                 # News/Env/Auto-update/Autonomous/Multi-agent) — previously
                 # GUI-only; now natural-language reachable. Conservative
@@ -712,6 +899,21 @@ class TomAgent:
                         result = await self._universal_task_attempt(command, parsed)
                     else:
                         result = await self.generate_chat_response(command)
+
+            # Long-term memory: show which remembered preferences shaped this
+            # answer, then store the outcome so future attempts learn from it.
+            if not result.get("memories_used") and result.get("status") not in ("error", "cancelled"):
+                shown = self._relevant_preferences(command)
+                if shown:
+                    result["memories_used"] = shown
+                    result["message"] = ("Remembering from earlier:\n"
+                                         + "\n".join(f"  • {t}" for t in shown)
+                                         + "\n\n" + str(result.get("message", "")))
+            try:
+                self._retain_outcome(command, result, parsed.get("intent", ""))
+            except Exception as _mem_err:
+                self.safety.log_action("WARN", target="hindsight", status="FAILURE",
+                                       message=f"retain outcome failed: {_mem_err}")
 
             # Log completion with the REAL outcome (was: unconditional SUCCESS,
             # which made the audit log claim success for errored tasks).
@@ -800,6 +1002,12 @@ class TomAgent:
                 except Exception:
                     pass
             safe_print(f"\n{error_msg}\n")
+            if recall_task is not None and not recall_task.done():
+                recall_task.cancel()
+            try:
+                self._retain_outcome(command, {"status": "error", "message": str(e)}, "")
+            except Exception:
+                pass
             try:
                 self.learner.log_experience(command, "error", {"error": str(e)})
             except Exception:
@@ -826,6 +1034,28 @@ class TomAgent:
                 except Exception:
                     pass
             return {"status": "error", "message": error_msg}
+
+    def _acknowledge_preference(self, command: str) -> Dict[str, Any]:
+        """Reply to a pure preference/correction — no LLM round-trip needed."""
+        category = memory_rules.categorize(command)
+        lines = ["Got it — I'll remember that."]
+        if category == "file_organization":
+            rules = memory_rules.parse_folder_rules([command])
+            if rules:
+                lines.append("Rules I'll apply next time I organize a folder:")
+                lines += [f"  • {r.describe()}" for r in rules]
+        if self.memory.available:
+            lines.append("(Saved to long-term memory — it carries over to future sessions.)")
+        else:
+            lines.append(f"(Queued locally: {self.memory.status_line()})")
+        message = "\n".join(lines)
+        try:
+            self.chat_memory.append("assistant", message)
+        except Exception:
+            pass
+        self._last_command, self._last_response = command, message
+        return {"status": "success", "response_type": "preference_saved", "message": message,
+                "memories_used": [command]}
 
     # ── BUILD AGENT ─────────────────────────────────────────────────────
 
@@ -1565,40 +1795,60 @@ class TomAgent:
     # ── EMAIL ───────────────────────────────────────────────────────────
 
     async def _handle_email_write(self, command: str, parsed: Dict) -> Dict[str, Any]:
-        """Write/draft an email with LLM-generated context-aware content."""
-        recipient = parsed.get("email_address") or parsed.get("recipient_name") or ""
-        subject = parsed.get("subject") or "Message from TOM"
+        """Write/draft an email with LLM-generated, memory-aware content.
+
+        A real address → saved draft (EmailTools.draft_email). A bare name
+        ("email Ravi about …") → the draft text is returned for review, since
+        there is no address to attach it to yet.
+        """
+        email_address = parsed.get("email_address") or ""
+        recipient = email_address or parsed.get("recipient_name") or parsed.get("person_name") or ""
+        recipient = CommandParser._clean_name(recipient) or ""
+        subject = parsed.get("subject") or ""
         message_body = parsed.get("message_body") or ""
-        person_name = parsed.get("person_name") or ""
 
         if not recipient:
             return {"status": "error",
-                    "message": "Could not identify recipient. Include an email address or person name."}
+                    "message": "Who is the email for? Include a name or an email address."}
 
-        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', recipient):
-            # If it's a name, try to use the context to draft anyway
-            if person_name:
-                safe_print(f"[EMAIL] Recipient identified as name: {recipient}")
-                memory_context = self._build_memory_context(command)
-                result = await self.email_tools.draft_email_with_llm(
-                    recipient,
-                    f"Write an email to {recipient}. Context: {command}. Subject: {subject}. "
-                    f"Message: {message_body}\n\nConversation memory:\n{memory_context}",
-                    self.llm,
-                )
-                return result
-            return {"status": "error", "message": f"Invalid email format for: {recipient}. Use name@domain.com"}
-
-        # Use LLM to draft contextually
         memory_context = self._build_memory_context(command)
-        result = await self.email_tools.draft_email_with_llm(
-            recipient,
-            f"Write an email to {recipient}. Context from user: {command}. Subject from user: {subject}. "
-            f"{'User also said: ' + message_body[:500] if message_body else ''}"
-            f"\n\nConversation memory:\n{memory_context}",
-            self.llm,
+        brief = (
+            f"Write an email to {recipient}. Request from the user: {command}. "
+            + (f"Subject hint: {subject}. " if subject else "")
+            + (f"User also said: {message_body[:500]}. " if message_body else "")
+            + "Follow every stated preference about tone, length and sign-off found in memory."
+            + f"\n\nMemory:\n{memory_context}"
         )
-        return result
+
+        if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', recipient):
+            return await self.email_tools.draft_email_with_llm(recipient, brief, self.llm)
+
+        safe_print(f"[EMAIL] Drafting for a name (no address yet): {recipient}")
+        draft_prompt = self._safe_prompt([
+            ("system",
+             "You are TOM, a professional email assistant. Draft a complete, polished email. "
+             "Respond ONLY with:\nSUBJECT: <subject>\nBODY:\n<body>"),
+            ("user", "{brief}"),
+        ])
+        resp = await self._invoke_llm(draft_prompt, {"brief": brief}, "email_draft", self.llm)
+        content = (getattr(resp, "content", "") or "").strip()
+        draft_subject, draft_body = "", content
+        if "BODY:" in content:
+            head, draft_body = content.split("BODY:", 1)
+            for line in head.splitlines():
+                if line.upper().startswith("SUBJECT:"):
+                    draft_subject = line.split(":", 1)[1].strip()
+            draft_body = draft_body.strip()
+        draft_subject = draft_subject or subject or "Message from TOM"
+        return {
+            "status": "success",
+            "response_type": "email_draft",
+            "recipient": recipient,
+            "subject": draft_subject,
+            "body": draft_body,
+            "message": (f"Draft email to {recipient}\nSubject: {draft_subject}\n\n{draft_body}\n\n"
+                        f"(Tell me {recipient}'s email address and I'll prepare it for sending.)"),
+        }
 
     async def execute_email_send_flow(self, command: str, parsed: Dict) -> Dict[str, Any]:
         """Send an email with LLM-generated content and async approval."""
@@ -2181,15 +2431,19 @@ class TomAgent:
 
     async def generate_voice_response(self, command: str) -> Dict[str, Any]:
         command_lower = command.lower().strip()
-        # If action request, use full pipeline
+        # If action request — or anything about memory/preferences — use the full pipeline
         if any(k in command_lower for k in ("open ", "send ", "create ", "write ", "make ",
                                               "email ", "whatsapp", "analyze", "search",
-                                              "launch ", "start ", "read ", "show ")):
+                                              "launch ", "start ", "read ", "show ",
+                                              "organize", "organise", "tidy", "clean up",
+                                              "remember", "learned", "learnt")) or \
+                memory_rules.is_preference_statement(command):
             result = await self.execute_task(command)
             raw = result.get("message", "")
             result["message"] = self._strip_for_speech(raw)
             return result
 
+        self._recalled = await self.memory.arecall(command, limit=5) if self.memory.available else []
         memory_context = self._build_memory_context(command)
         voice_system = (
             "You are TOM in VOICE mode. Keep responses under 2-3 sentences. "
