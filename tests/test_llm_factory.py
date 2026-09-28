@@ -86,3 +86,23 @@ def test_persist_model_env_uses_provider_prefix(tmp_path):
     text = env.read_text(encoding="utf-8")
     assert "GROQ_MODEL=groq-main" in text
     assert "OLLAMA_MODEL" not in text
+
+
+def test_unreachable_llm_hint_names_the_fix(ollama, monkeypatch):
+    # httpx reports a down Ollama as "All connection attempts failed", which
+    # alone doesn't tell the user to start Ollama — the hint must.
+    import agent
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    try:
+        try:
+            raise ConnectionRefusedError("[Errno 111] Connection refused")
+        except ConnectionRefusedError as inner:
+            raise RuntimeError("All connection attempts failed") from inner
+    except RuntimeError as exc:
+        hint = agent._llm_unreachable_hint(exc)
+    assert "ollama serve" in hint and "localhost:11434" in hint
+
+    monkeypatch.setenv("TOM_LLM_PROVIDER", "groq")
+    assert "GROQ_API_KEY" in agent._llm_unreachable_hint(ConnectionError("x"))
+
+    assert agent._llm_unreachable_hint(ValueError("bad json")) == ""
