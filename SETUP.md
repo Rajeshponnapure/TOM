@@ -5,6 +5,7 @@ packaged `.exe`). Follow the sections in order. For the design/architecture cont
 [ARCHITECTURE.md](ARCHITECTURE.md); for the feature overview, see [README.md](README.md).
 
 Setup values fall into three buckets:
+
 - **Required** — needed for TOM to start and use local reasoning.
 - **Optional** — only for a specific feature (email, custom Chrome profile, OCR, voice).
 - **Not needed** — browser automation that reuses your signed-in Chrome session needs
@@ -128,15 +129,23 @@ annotated reference is in [.env.example](.env.example) and
 [ENVIRONMENT_SETUP_GUIDE.md](ENVIRONMENT_SETUP_GUIDE.md).
 
 ### Required for the core app
+
 - `OLLAMA_BASE_URL` — usually `http://localhost:11434`
 - `OLLAMA_MODEL` — default `gemma4:latest`
 
+If a configured model is not pulled, TOM falls back to an installed model of the
+right kind (another tag of the same model first, then any chat model; embedding
+models are never used for chat) and logs the `ollama pull <name>` fix. Choosing a
+model from the desktop dropdown is saved to `.env` so it survives restarts.
+
 ### Recommended for stability
+
 - `OLLAMA_TIMEOUT_SECONDS` — LLM call timeout (default 120)
 - `TASK_TIMEOUT_SECONDS` — per-task timeout (default 180)
 - `OLLAMA_FAST_MODEL`, `OLLAMA_CODE_MODEL`, `OLLAMA_EMBED_MODEL` — model slots
 
 ### Only for Gmail / email features
+
 - `EMAIL_ADDRESS` — the Gmail address you sign in with
 - `EMAIL_PASSWORD` — a Gmail **App Password** (if using SMTP/IMAP directly)
 - `GMAIL_CREDENTIALS_FILE` — path to the Google OAuth client JSON
@@ -146,18 +155,22 @@ annotated reference is in [.env.example](.env.example) and
 See [GMAIL_OAUTH_SETUP.md](GMAIL_OAUTH_SETUP.md) for the OAuth walkthrough.
 
 ### Only for the Instagram agent
+
 - `INSTAGRAM_CHROME_PROFILE`, `INSTAGRAM_POSTS_PER_RUN`,
   `INSTAGRAM_CHECK_INTERVAL_SECONDS`, `INSTAGRAM_AUTO_SEND_REPORT_EMAIL`, and the other
   `INSTAGRAM_*` tuning values in `.env.example`.
 
 ### Only for custom Chrome startup
+
 - `CHROME_PROFILE_PATH` — custom Chrome user-data directory
 - `CHROME_EXECUTABLE` — override if Chrome is installed somewhere unusual
 
 ### Only for OCR / screen reading
+
 - `TESSERACT_CMD` — path to `tesseract.exe` if it is not on PATH
 
 ### Only for voice
+
 - `VOICE_INPUT_ENABLED` / `VOICE_OUTPUT_ENABLED` — turn voice on/off
 - `TOM_VOICE`, `TOM_VOICE_RATE`, `VOICE_RECOGNITION_ENGINE`, and threshold tuning values
 
@@ -195,6 +208,7 @@ The launcher finds Python 3.11, checks that core dependencies import, then start
 `tom_desktop_app.py`.
 
 **Other launchers:**
+
 - `launch_tom_safe.bat` — voice disabled + console visible. Use this first if the app
   crashes or behaves oddly.
 - `launch_tom_debug.bat` — console visible for full tracebacks.
@@ -236,6 +250,7 @@ SETUP_TOM.bat
 ```
 
 Notes:
+
 - The binary is **unsigned**, so Windows SmartScreen may warn on first run.
 - **Rebuild after every code change** — the frozen EXE does not auto-pick-up edits.
 - The frozen EXE **does not read `.env`**. Env-gated features fall back to their
@@ -267,6 +282,7 @@ iscc installer\tom_installer.iss
 ## 11) Icon assets
 
 Put artwork in `resources\`:
+
 - `tom_icon.png` — square PNG used in the UI
 - `tom_icon.ico` — Windows icon for the EXE and shortcuts
 
@@ -312,7 +328,7 @@ sending anything.
 ## 14) Troubleshooting
 
 | Symptom | Fix |
-|---|---|
+| --- | --- |
 | "TOM requires Python 3.11.x" | Install official Python 3.11, then `setup_python311_env.bat`. |
 | "TOM dependencies are missing" | Re-run `setup_python311_env.bat`. |
 | `pip install pyaudio` fails | Use `pipwin install pyaudio` or a `cp311` PyAudio wheel. |

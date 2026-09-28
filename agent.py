@@ -59,10 +59,14 @@ def safe_print(message: str):
 class TomAgent:
     def __init__(self):
         # Primary model (Gemma 4 - best for complex reasoning)
-        self.model_name = os.environ.get("OLLAMA_MODEL", "gemma4:latest")
-        self.fast_model_name = os.environ.get("OLLAMA_FAST_MODEL", "qwen2.5-coder:7b-instruct")
-        self.code_model_name = os.environ.get("OLLAMA_CODE_MODEL", "qwen2.5-coder:7b-instruct")
-        self.embed_model_name = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
+        # ── Model slots (resolved against installed Ollama models) ──────
+        # Each slot reads its OLLAMA_*_MODEL env var; if the configured model
+        # is not pulled on this machine, llm_factory falls back to an
+        # installed model so TOM never dies with 404 "model not found".
+        self.model_name      = llm_factory.resolve_model("primary")
+        self.fast_model_name = llm_factory.resolve_model("fast")
+        self.code_model_name = llm_factory.resolve_model("code")
+        self.embed_model_name = llm_factory.resolve_model("embed")
         self.model_timeout_seconds = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "120"))
         self.task_timeout_seconds = int(os.environ.get("TASK_TIMEOUT_SECONDS", "180"))
 
@@ -220,6 +224,7 @@ class TomAgent:
         os.environ[f"{env_prefix}_MODEL"]      = model_name
         os.environ[f"{env_prefix}_FAST_MODEL"] = model_name
         os.environ[f"{env_prefix}_CODE_MODEL"] = model_name
+        self._persist_model_env(model_name, env_prefix)
 
         self.llm      = self._make_llm(model_name, max_tokens=4096)
         self.fast_llm = self._make_llm(model_name, max_tokens=2048)
@@ -229,6 +234,40 @@ class TomAgent:
         # Rebuild NLP parser with updated LLM
         self.nlp_parser = CommandParser(llm=self.fast_llm)
         safe_print(f"[MODEL] All LLMs switched to: {model_name}")
+
+    @staticmethod
+    def _persist_model_env(model_name: str, env_prefix: str = "OLLAMA",
+                           env_path=None) -> None:
+        """Write the model choice into the project .env so it survives restarts.
+
+        The desktop dropdown swaps all chat slots to one model (single-model
+        mode), so <PREFIX>_MODEL, <PREFIX>_FAST_MODEL and <PREFIX>_CODE_MODEL
+        are all persisted (PREFIX is OLLAMA or GROQ, matching the active
+        provider). The embed slot is left alone — embeddings need an
+        embedding model, not a chat model.
+        """
+        try:
+            if env_path is None:
+                env_path = PROJECT_ROOT / ".env"
+            lines: list = env_path.read_text(encoding="utf-8").splitlines() \
+                if env_path.is_file() else []
+            keys = (f"{env_prefix}_MODEL", f"{env_prefix}_FAST_MODEL", f"{env_prefix}_CODE_MODEL")
+            for key in keys:
+                # Matches "KEY=value", "export KEY=value" and "KEY=value  # note".
+                pattern = re.compile(rf"^\s*(?:export\s+)?{re.escape(key)}\s*=")
+                replaced = False
+                for i, line in enumerate(lines):
+                    if pattern.match(line):
+                        lines[i] = f"{key}={model_name}"
+                        replaced = True
+                        break
+                if not replaced:
+                    if lines and lines[-1].strip():
+                        lines.append("")
+                    lines.append(f"{key}={model_name}")
+            env_path.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
+        except Exception as exc:
+            safe_print(f"[MODEL] Could not persist model to .env: {exc}")
 
     def _build_memory_context(self, query: str) -> str:
         """Build context string: recent chat + RAG semantic retrieval + curated knowledge."""

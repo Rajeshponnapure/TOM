@@ -50,5 +50,5 @@ def test_kv_extraction():
 
 def test_unmatched_execute_is_unhandled():
     r = EngineRouter()
-    res = asyncio.get_event_loop().run_until_complete(r.execute("hello there"))
+    res = asyncio.run(r.execute("hello there"))
     assert res["status"] == "unhandled"
