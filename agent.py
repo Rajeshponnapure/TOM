@@ -334,7 +334,10 @@ class TomAgent:
         status = str(result.get("status", "unknown"))
         category = memory_rules.categorize(command)
         how = result.get("response_type") or intent or "general"
-        message = " ".join(str(result.get("message", "")).split())[:320]
+        raw = str(result.get("message", ""))
+        if raw.startswith("Remembering") and "\n\n" in raw:
+            raw = raw.split("\n\n", 1)[1]          # the applied rules are recorded separately below
+        message = " ".join(raw.split())[:320]
         content = f"The user asked TOM: \"{command[:300]}\". TOM handled it as '{how}' and the outcome was {status}."
         if message:
             content += f" TOM's reply: {message}"
