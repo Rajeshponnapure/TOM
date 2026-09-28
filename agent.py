@@ -46,6 +46,33 @@ def set_progress_callback(fn):
     global _progress_callback
     _progress_callback = fn
 
+_UNREACHABLE_MARKERS = ("all connection attempts failed", "connection refused",
+                        "failed to connect to ollama", "max retries exceeded")
+
+
+def _llm_unreachable_hint(exc: BaseException) -> str:
+    """Fix-it hint when a task failed because the model server is unreachable.
+
+    httpx/ollama surface this as "All connection attempts failed", which does
+    not tell the user that Ollama (or Groq) is the problem.
+    """
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        text = str(exc).lower()
+        if (isinstance(exc, ConnectionError) or type(exc).__name__ == "ConnectError"
+                or any(m in text for m in _UNREACHABLE_MARKERS)):
+            if llm_factory.provider() == "groq":
+                return ("Could not reach the Groq API. Check your internet connection "
+                        "and GROQ_API_KEY in .env.")
+            base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            return (f"Could not reach the Ollama model server at {base_url}. "
+                    f"Start it with 'ollama serve' (and 'ollama pull {llm_factory.resolve_model('primary')}'), "
+                    "or set TOM_LLM_PROVIDER=groq with GROQ_API_KEY in .env.")
+        exc = exc.__cause__ or exc.__context__
+    return ""
+
+
 def safe_print(message: str):
     clean = message.encode("ascii", errors="ignore").decode("ascii")
     print(clean)
@@ -359,7 +386,7 @@ class TomAgent:
         correction = memory_rules.is_correction(command)
         if correction and self._last_command:
             content = (f"After TOM handled the request \"{self._last_command[:200]}\" "
-                       f"(TOM replied: \"{self._last_response[:240]}\"), the user corrected TOM: "
+                       f"(TOM replied: \"{' '.join(self._last_response.split())[:240]}\"), the user corrected TOM: "
                        f"\"{command}\"")
         else:
             content = f"The user told TOM a standing instruction: \"{command}\""
@@ -1030,6 +1057,9 @@ class TomAgent:
 
         except Exception as e:
             error_msg = f"[ERROR] Task failed: {str(e)}"
+            hint = _llm_unreachable_hint(e)
+            if hint:
+                error_msg += f"\n{hint}"
             self.safety.log_action("ERROR", target=command, status="FAILURE", message=str(e))
             if telemetry_skill_route and getattr(self, "skill_telemetry", None):
                 try:
@@ -2338,17 +2368,33 @@ class TomAgent:
 
     # ── CHAT ────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _user_request_text(command: str) -> str:
+        """The user's own words, without the desktop app's agent-mode preamble.
+
+        In Email/Instagram Agent mode the app sends "You are Email Agent
+        mode. ...\n\nUser request: <text>". The preamble names the agent, so
+        matching plugins against the whole string ran that plugin for every
+        message (inbox triage instead of "write an email to ...").
+        """
+        command = command or ""
+        marker = "user request:"
+        idx = command.lower().rfind(marker)
+        return command[idx + len(marker):].strip() if idx >= 0 else command
+
     def _should_use_plugin_route(self, command_lower: str) -> bool:
-        if not any(token in command_lower for token in ("plugin", "agent", "run ", "execute ", "launch ")):
+        request = self._user_request_text(command_lower).lower()
+        if not any(token in request for token in ("plugin", "agent", "run ", "execute ", "launch ")):
             return False
-        return self.plugin_manager.match_plugin(command_lower) is not None
+        return self.plugin_manager.match_plugin(request) is not None
 
     async def _handle_plugin_routed_task(self, command: str) -> Dict[str, Any]:
-        plugin = self.plugin_manager.match_plugin(command)
+        request = self._user_request_text(command)
+        plugin = self.plugin_manager.match_plugin(request)
         if not plugin:
             return {"status": "error", "message": "No matching plugin found."}
 
-        lower = command.lower()
+        lower = request.lower()
         args = []
         if "daemon" in lower or "background" in lower:
             args = ["--daemon"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import tempfile
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
@@ -13,6 +14,7 @@ if str(ROOT) not in sys.path:
 from agent import TomAgent
 from tools.capability_resolver import CapabilityResolver
 from tools.command_router import CommandRouter
+from tools.hindsight_memory import HindsightMemory
 from tools.nlp_parser import CommandParser
 from tools.skill_manager import SkillManager
 
@@ -149,6 +151,11 @@ def build_agent() -> TomAgent:
     agent.safety = FakeSafety()
     agent.approval_manager = FakeApproval()
     agent.chat_memory = FakeMemory()
+    # Long-term memory offline (no client) with its journal in a temp dir,
+    # so sandbox runs never touch the user's real memory state.
+    agent.memory = HindsightMemory(client=None, state_dir=Path(tempfile.mkdtemp(prefix="tom_sandbox_mem_")))
+    agent.memory.enabled = False
+    agent._recalled = []
     agent.learner = FakeLearner()
     agent.rag = SimpleNamespace(available=False)
     agent.evolution = None

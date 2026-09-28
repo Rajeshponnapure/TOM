@@ -36,12 +36,28 @@ class ApprovalManager:
         lines.append("Type 'yes' to approve or 'no' to cancel.")
         return "\n".join(lines)
 
+    # Set by a GUI front end: takes the request, returns True to approve.
+    # When unset, approval falls back to a console prompt.
+    provider: Optional[Callable[[ApprovalRequest], bool]] = None
+
     def request_approval(
         self,
         request: ApprovalRequest,
         prompt_fn: Optional[Callable[[str], str]] = None,
     ) -> bool:
+        if prompt_fn is None and self.provider is not None:
+            try:
+                return bool(self.provider(request))
+            except Exception as exc:
+                print(f"[APPROVAL] Prompt failed ({exc}); action denied.")
+                return False
         prompt = prompt_fn or input
         print(self.format_request(request))
-        response = prompt("Approval: ").strip().lower()
+        try:
+            response = prompt("Approval: ").strip().lower()
+        except (EOFError, RuntimeError, OSError):
+            # No console attached (pythonw / frozen GUI exe): deny rather
+            # than crash the task with "EOF when reading a line".
+            print("[APPROVAL] No console available to ask for approval; action denied.")
+            return False
         return response in {"yes", "y", "approve", "approved", "confirm"}

@@ -4,6 +4,7 @@ import math
 import os
 import queue
 import random
+import re
 import subprocess
 import sys
 import threading
@@ -1948,7 +1949,13 @@ class TomDesktopApp:
         for i in range(_QA_COLS):
             qa_strip.columnconfigure(i, weight=1)
 
-        for idx, qa in enumerate(self.quick_actions[:12]):
+        # The grid has room for 12 cells. When there are more actions, the
+        # last cell becomes "More" and opens a menu with the rest, so every
+        # quick action stays reachable (13 of 25 used to have no button).
+        _QA_CELLS = 12
+        overflow = len(self.quick_actions) > _QA_CELLS
+        shown = self.quick_actions[:_QA_CELLS - 1] if overflow else self.quick_actions[:_QA_CELLS]
+        for idx, qa in enumerate(shown):
             col = qa["color"]
             btn = tk.Button(
                 qa_strip, text=f"{qa['icon']}  {qa['label']}",
@@ -1961,6 +1968,28 @@ class TomDesktopApp:
             btn.bind("<Enter>", lambda e, b=btn, c=col: b.configure(bg=C["surface2"]))
             btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=C["surface"]))
             btn.grid(row=idx // _QA_COLS, column=idx % _QA_COLS, sticky="ew", padx=3, pady=3)
+
+        if overflow:
+            rest = self.quick_actions[len(shown):]
+            self.qa_more_menu = tk.Menu(self.root, tearoff=0, bg=C["surface"], fg=C["text"],
+                                        activebackground=C["surface2"], activeforeground=C["text"],
+                                        font=("Segoe UI", 9))
+            for qa in rest:
+                self.qa_more_menu.add_command(label=f"{qa['icon']}  {qa['label']}",
+                                              command=lambda cmd=qa["cmd"]: self._quick_action(cmd))
+            more_btn = tk.Button(
+                qa_strip, text=f"⋯  More ({len(rest)})",
+                bg=C["surface"], fg=C["text2"],
+                activebackground=C["surface2"], activeforeground=C["text"],
+                relief="flat", bd=0, padx=6, pady=10,
+                font=("Segoe UI", 9, "bold"), cursor="hand2",
+            )
+            more_btn.configure(command=lambda b=more_btn: self.qa_more_menu.tk_popup(
+                b.winfo_rootx(), b.winfo_rooty() + b.winfo_height()))
+            more_btn.bind("<Enter>", lambda e, b=more_btn: b.configure(bg=C["surface2"]))
+            more_btn.bind("<Leave>", lambda e, b=more_btn: b.configure(bg=C["surface"]))
+            idx = len(shown)
+            more_btn.grid(row=idx // _QA_COLS, column=idx % _QA_COLS, sticky="ew", padx=3, pady=3)
 
         # Start animation loop
         self._holo_anim_running = True
@@ -2275,6 +2304,11 @@ class TomDesktopApp:
         self.chat_canvas.yview_moveto(1.0)
 
     def _append_chat(self, role: str, text: str):
+        # Tk widgets may only be touched from the UI thread. Handlers run on
+        # worker threads (see _prompt_and_run), so marshal those calls over.
+        if threading.current_thread() is not threading.main_thread():
+            self._enqueue(self._append_chat, role, text)
+            return
         ts = time.strftime("%H:%M")
         bubble = tk.Frame(self.chat_inner, bg=C["surface"])
         bubble.pack(fill="x", padx=16, pady=4, anchor="w")
@@ -3116,39 +3150,43 @@ class TomDesktopApp:
                 self.root.after(33, self._render_chart_canvas)
 
     def _quick_action(self, cmd_prefix: str):
-        if "Web Auto" in cmd_prefix:
+        # Dispatch on the action's label: several command texts don't contain
+        # their keyword ("Check website safety: " vs "Security"), which sent
+        # those actions to the plain chat prefill instead of their prompt.
+        key = next((qa["label"] for qa in self.quick_actions if qa["cmd"] == cmd_prefix), cmd_prefix)
+        if "Web Auto" in key:
             self._prompt_and_run("Enter URL or localhost port to verify:", self._handle_web_automation)
-        elif "Multi-Agent" in cmd_prefix:
+        elif "Multi-Agent" in key:
             self._prompt_and_run("Describe the multi-agent task:", self._handle_multi_agent)
-        elif "Security" in cmd_prefix:
+        elif "Security" in key:
             self._prompt_and_run("Enter URL to check safety:", self._handle_security_check)
-        elif "File Anal" in cmd_prefix:
+        elif "File Anal" in key:
             self._prompt_and_run("Enter file path to analyze:", self._handle_file_analysis)
-        elif "Data Anal" in cmd_prefix:
+        elif "Data Anal" in key:
             self._prompt_and_run("Enter file path or description for data analysis:", self._handle_data_analysis)
-        elif "Autonomous" in cmd_prefix:
+        elif "Autonomous" in key:
             self._prompt_and_run("Describe the autonomous task to execute:", self._handle_autonomous)
-        elif "Hardware" in cmd_prefix:
+        elif "Hardware" in key:
             self._prompt_and_run("Describe hardware action (e.g., 'move mouse to 500 500', 'click', 'type Hello'):", self._handle_hardware)
-        elif "Skill" in cmd_prefix:
+        elif "Skill" in key:
             self._prompt_and_run("Enter skill name or question (e.g., 'design', 'data engineering', 'what skills are loaded?'):", self._handle_skill_query)
-        elif "ML" in cmd_prefix:
+        elif "ML" in key:
             self._prompt_and_run("ML task (e.g., 'regression linear X=[1,2,3] y=[2,4,6]', 'classify knn', 'auto_ml', 'cluster kmeans', 'ts arima'):", self._handle_ml)
-        elif "IoT" in cmd_prefix:
+        elif "IoT" in key:
             self._prompt_and_run("IoT task (e.g., 'esp32 dht11 mqtt', 'micropython esp8266', 'protocol mqtt broker', 'sensor bme280'):", self._handle_iot)
-        elif "VLSI" in cmd_prefix:
+        elif "VLSI" in key:
             self._prompt_and_run("VLSI task (e.g., 'verilog counter width=8', 'rtl fsm states=4', 'embedded stm32 gpio', 'freertos tasks=3'):", self._handle_vlsi)
-        elif "Env" in cmd_prefix:
+        elif "Env" in key:
             self._prompt_and_run("Env task (e.g., 'create venv', 'install flask', 'update all', 'migrate 3.11', 'check conflicts', 'analyze project'):", self._handle_env)
-        elif "News" in cmd_prefix:
+        elif "News" in key:
             self._prompt_and_run("News task (e.g., 'daily briefing', 'tech roundup', 'world events', 'search AI advances', 'trending'):", self._handle_news)
-        elif "Voice+" in cmd_prefix:
+        elif "Voice+" in key:
             self._prompt_and_run("Voice+ task (e.g., 'analyze emotion text: I feel sad', 'start conversation', 'assess mental state', 'speak Hello world'):", self._handle_voice_enhanced)
-        elif "Game Dev" in cmd_prefix:
+        elif "Game Dev" in key:
             self._prompt_and_run("Game dev command (e.g., 'scaffold pygame my_game platformer', 'script unity player movement', 'engines', 'installed'):", self._handle_game_dev)
-        elif "Blender" in cmd_prefix:
+        elif "Blender" in key:
             self._prompt_and_run("Blender command (e.g., 'cube', 'sphere', 'terrain', 'house', 'lights', 'render', 'animation', 'list'):", self._handle_blender)
-        elif "Auto-Update" in cmd_prefix:
+        elif "Auto-Update" in key:
             self._prompt_and_run("Auto-update command (e.g., 'check', 'pull', 'pip', 'full', 'research <topic>', 'trending', 'history'):", self._handle_auto_update)
         else:
             self._show_view("chat")
@@ -3156,11 +3194,45 @@ class TomDesktopApp:
             self.input_entry.focus_set()
             self.input_entry.icursor(tk.END)
 
+    def _ask_approval(self, request) -> bool:
+        """Approval dialog for the agent; callable from any thread.
+
+        The agent asks from worker threads, so the dialog is shown on the UI
+        thread and this thread waits for the answer. No answer within five
+        minutes counts as "no".
+        """
+        lines = [f"Action: {request.action}", "", str(request.summary)]
+        for key, value in (request.details or {}).items():
+            lines.append(f"{key}: {str(value)[:200]}")
+        lines += ["", f"Risk: {request.risk_level}", "", "Allow TOM to do this?"]
+        text = "\n".join(lines)[:1800]
+        answer = {"ok": False}
+        done = threading.Event()
+
+        def ask():
+            try:
+                answer["ok"] = bool(messagebox.askyesno(
+                    "TOM - Approval required", text, icon="warning", parent=self.root))
+            finally:
+                done.set()
+
+        if threading.current_thread() is threading.main_thread():
+            ask()
+        else:
+            self._enqueue(ask)
+            done.wait(timeout=300)
+        self._append_chat("meta", f"{'Approved' if answer['ok'] else 'Denied'}: {request.action}")
+        return answer["ok"]
+
     def _prompt_and_run(self, prompt_text: str, handler):
         import tkinter.simpledialog as sd
         result = sd.askstring("TOM", prompt_text, parent=self.root)
         if result:
-            handler(result.strip())
+            # Run off the UI thread: several handlers do network or long
+            # subprocess work (news feeds, pip, git, renders) that froze the
+            # window until they finished. Handlers only report via
+            # _append_chat/_enqueue, which are safe from any thread.
+            threading.Thread(target=handler, args=(result.strip(),), daemon=True).start()
 
     def _toggle_voice_mode(self):
         if not self.voice:
@@ -3874,22 +3946,24 @@ class TomDesktopApp:
         if not self.hardware or not self.hardware.is_available():
             self._append_chat("meta", "[Hardware Control not available - install pyautogui: pip install pyautogui]")
             return
-        detail = detail.strip().lower()
+        raw = detail.strip()
+        detail = raw.lower()
+        # Coordinates may come with filler words ("move mouse to 500 500",
+        # "click at 10, 20"), so pick the numbers out instead of splitting.
+        nums = [int(n) for n in re.findall(r"-?\d+", detail)]
         response_msg = ""
         try:
             if detail.startswith("move") or detail.startswith("move mouse"):
-                parts = detail.replace("move mouse", "").replace("move", "").strip().split()
-                if len(parts) >= 2:
-                    x, y = int(parts[0]), int(parts[1])
+                if len(nums) >= 2:
+                    x, y = nums[0], nums[1]
                     r = self.hardware.move_mouse(x, y)
                     response_msg = f"Moved mouse to ({x}, {y})"
                 else:
                     response_msg = "Usage: move mouse <x> <y>"
             elif detail.startswith("click"):
-                parts = detail.replace("click", "").strip().split()
-                if len(parts) >= 2:
-                    r = self.hardware.click(int(parts[0]), int(parts[1]))
-                    response_msg = f"Clicked at ({parts[0]}, {parts[1]})"
+                if len(nums) >= 2:
+                    r = self.hardware.click(nums[0], nums[1])
+                    response_msg = f"Clicked at ({nums[0]}, {nums[1]})"
                 else:
                     r = self.hardware.click()
                     pos = self.hardware.get_mouse_position()
@@ -3901,7 +3975,8 @@ class TomDesktopApp:
                 r = self.hardware.double_click()
                 response_msg = "Double clicked"
             elif detail.startswith("type"):
-                text = detail.replace("type", "", 1).strip().strip("\"'")
+                # Type the user's original text, not the lowercased copy.
+                text = raw[len("type"):].strip().strip("\"'")
                 r = self.hardware.type_text(text)
                 response_msg = f"Typed {len(text)} characters"
             elif detail.startswith("press"):
@@ -3909,8 +3984,7 @@ class TomDesktopApp:
                 r = self.hardware.press_key(key)
                 response_msg = f"Pressed key: {key}"
             elif detail.startswith("scroll"):
-                parts = detail.replace("scroll", "").strip().split()
-                clicks = int(parts[0]) if parts else 3
+                clicks = nums[0] if nums else 3
                 r = self.hardware.scroll(clicks)
                 response_msg = f"Scrolled {clicks} clicks"
             elif detail.startswith("screenshot") or detail.startswith("ss"):
@@ -4722,6 +4796,11 @@ class TomDesktopApp:
             from agent import set_progress_callback
             set_progress_callback(self._on_agent_progress)
             self.agent = self._TomAgent()
+            # Sensitive actions (send email/WhatsApp, delete, run code) ask for
+            # approval. The default prompt reads the console, which a GUI
+            # doesn't have, so ask with a dialog instead.
+            if getattr(self.agent, "approval_manager", None) is not None:
+                self.agent.approval_manager.provider = self._ask_approval
             self.agent_ready = True
             self._enqueue(self._init_web_automation)
             self._enqueue(self._init_orchestrator)
