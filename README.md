@@ -13,7 +13,7 @@
 
 <br/>
 
-<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=22&duration=2800&pause=700&color=4F8CFF&center=true&vCenter=true&width=840&lines=Control+your+whole+laptop+with+natural+language.;100%25+local+%E2%80%94+no+cloud+API+keys+for+the+core.;Docs+%C2%B7+email+%C2%B7+browser+%C2%B7+code+%C2%B7+ML+%C2%B7+voice+%C2%B7+agents.;Not+a+chatbot.+An+entity+you+give+work+to." alt="Tagline"/>
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=22&duration=2800&pause=700&color=4F8CFF&center=true&vCenter=true&width=840&lines=Correct+it+once.+It+remembers+next+time.;Long-term+memory+powered+by+Hindsight.;Files+%C2%B7+email+%C2%B7+docs+%C2%B7+browser+%C2%B7+desktop+%C2%B7+voice.;Not+a+chatbot.+An+agent+that+learns+your+workflow." alt="Tagline"/>
 
 <br/><br/>
 
@@ -33,10 +33,10 @@
 ![Top language](https://img.shields.io/github/languages/top/Rajeshponnapure/TOM?style=flat-square)
 
 <!-- Feature flags -->
-![Local](https://img.shields.io/badge/100%25-Local-22C55E?style=flat-square)
+![Hindsight](https://img.shields.io/badge/Memory-Hindsight-22C55E?style=flat-square)
 ![Voice](https://img.shields.io/badge/Voice-STT_%2B_TTS-7C5CFF?style=flat-square)
 ![Safety](https://img.shields.io/badge/Safety-Approval--gated-EF4444?style=flat-square)
-![Memory](https://img.shields.io/badge/Memory-RAG_%2F_ChromaDB-EC4899?style=flat-square)
+![RAG](https://img.shields.io/badge/Context-RAG_%2F_ChromaDB-EC4899?style=flat-square)
 
 <br/>
 
@@ -109,6 +109,10 @@ syncing them on the next successful call ([`tools/hindsight_memory.py`](tools/hi
  "what have you learned?"   ──► reflect()
 ```
 
+Learn more: [Hindsight on GitHub](https://github.com/vectorize-io/hindsight) ·
+[Hindsight docs](https://hindsight.vectorize.io/) ·
+[What is agent memory?](https://vectorize.io/what-is-agent-memory)
+
 **Try it:** [demo/DEMO_SCRIPT.md](demo/DEMO_SCRIPT.md) — `python demo/seed_history.py --fresh` then
 `python demo/run_demo.py` (add `--offline` to run without any accounts).
 
@@ -137,21 +141,21 @@ Memory commands anywhere (chat, CLI, voice): `what have you learned about me?` �
 
 <div align="center">
 
-<!-- Drop docs/assets/demo.gif in to replace this. See docs/assets/README.md -->
-<img src="docs/assets/demo.gif" alt="▶ Demo GIF placeholder — record a 10–20s clip and save it to docs/assets/demo.gif (see docs/assets/README.md)" width="80%"/>
+<img src="docs/assets/demo.gif" alt="TOM organizes Downloads with defaults, is corrected once, then applies the remembered rules to a new batch of files" width="70%"/>
 
-<sub>📹 <b>Placeholder.</b> Add <code>docs/assets/demo.gif</code> to show a real command end-to-end — see <a href="docs/assets/README.md">docs/assets/README.md</a>.</sub>
+<sub>Organize → one correction → weeks later, <i>"tidy up my downloads folder"</i>: the remembered rules are applied unprompted.
+Recorded from the real desktop app with the offline memory stand-in (<code>tests/fake_hindsight.py</code>) so the clip is reproducible.</sub>
 
 </div>
 
 <table>
 <tr>
-<td width="50%"><img src="docs/assets/dashboard.png" alt="Dashboard view — animated orb + 25 quick actions (add docs/assets/dashboard.png)"/></td>
-<td width="50%"><img src="docs/assets/chat.png" alt="Chat view + approval modal (add docs/assets/chat.png)"/></td>
+<td width="50%"><img src="docs/assets/dashboard.png" alt="TOM dashboard — animated orb, live status and quick actions"/></td>
+<td width="50%"><img src="docs/assets/chat.png" alt="Chat — a green Remembering card lists the rules recalled from memory before TOM acts"/></td>
 </tr>
 <tr>
 <td align="center"><sub>🟦 Dashboard — animated orb + quick actions</sub></td>
-<td align="center"><sub>🟪 Chat — with human-in-the-loop approval modal</sub></td>
+<td align="center"><sub>🟩 Chat — the <b>Remembering</b> card shows which memories shaped the action</sub></td>
 </tr>
 </table>
 
@@ -473,7 +477,7 @@ push-to-talk window. Shortcuts: `Ctrl+D` Dashboard · `Ctrl+C` Chat.
 |---|---|---|
 | 🧠 **Long-term memory** | `tools/hindsight_memory.py` | Hindsight retain/recall/reflect — corrections, preferences and task outcomes that carry across sessions. Offline queue, never blocks a task. |
 | 📏 **Memory → rules** | `tools/memory_rules.py` | Spots corrections/preferences; turns recalled facts into concrete folder rules the file engine applies. |
-| 🔎 **RAG memory** | `tools/rag_memory.py` | ChromaDB + `nomic-embed-text`; recalls conversations/docs/knowledge by *meaning*. 100% local. |
+| 🔎 **RAG memory** | `tools/rag_memory.py` | ChromaDB + `nomic-embed-text`; recalls conversations/docs/knowledge by *meaning*. Runs locally. |
 | 🌱 **Self-evolution** | `tools/self_evolution.py` | Adaptive prompting from reward/penalty; learns your preferences. No GPU training. |
 | 🧩 **Skills** | `tools/skill_manager.py` | 47 local domain skills + opt-in `SKILL.md` packs, classified knowledge-only vs executable. |
 | 📈 **Skill telemetry** | `tools/skill_telemetry.py` | Tracks which skills actually run + complete/fail/degrade. |
@@ -835,9 +839,10 @@ Built on the open-source ecosystem: **Ollama**, **LangChain**, **ChromaDB**,
 NumPy / scikit-learn**, **python-docx / python-pptx / ReportLab**, **APScheduler**,
 **PyInstaller**, **pytest**.
 
-> ⚠️ **License:** this repo has **no `LICENSE` file yet**. Until one is added, default
-> copyright applies (all rights reserved) — others can view but not legally reuse it. Add a
-> license (e.g. MIT / Apache-2.0) via <https://choosealicense.com> to make reuse explicit.
+Long-term memory by **[Hindsight](https://github.com/vectorize-io/hindsight)**
+([docs](https://hindsight.vectorize.io/) · [what is agent memory?](https://vectorize.io/what-is-agent-memory)).
+
+**License:** [MIT](LICENSE).
 
 <div align="center">
 
