@@ -749,9 +749,11 @@ class TomAgent:
             if mem_result is not None:
                 return mem_result
             if memory_rules.is_preference_statement(command):
+                retained_before = self.memory.stats["retained"]
                 self._retain_preference(command)
                 if memory_rules.is_pure_preference(command):
-                    return self._acknowledge_preference(command)
+                    saved = await self._memory_write_settled(retained_before)
+                    return self._acknowledge_preference(command, saved=saved)
             if self.memory.available:
                 # Runs while the request is being parsed — no added latency.
                 recall_task = asyncio.create_task(self.memory.arecall(command, limit=8))
@@ -768,6 +770,10 @@ class TomAgent:
             intent = parsed.get("intent", "")
             safe_print(f"[STEP 2] Detected intent: {intent}")
             engine_key = self.engine_router.detect(command_lower) if self.engine_router else None
+            if engine_key is None and self.engine_router and intent == "file_operation":
+                # The keyword router missed it but the sentence was understood as a file request
+                # (e.g. "arrange the pdfs on my desktop into a folder called Bills").
+                engine_key = "fileops"
 
             # ── Feedback handling ─────────────────────────────────────────
             # User says "that was wrong", "too long", "more detail", etc.
@@ -1221,8 +1227,20 @@ class TomAgent:
         except Exception:
             return False
 
-    def _acknowledge_preference(self, command: str) -> Dict[str, Any]:
-        """Reply to a pure preference/correction — no LLM round-trip needed."""
+    async def _memory_write_settled(self, retained_before: int) -> bool:
+        """Wait (briefly) for the just-issued retain; True only if Hindsight really accepted it."""
+        if not self.memory.available:
+            return False
+        await asyncio.to_thread(self.memory.flush, 8.0)
+        return self.memory.stats["retained"] > retained_before
+
+    def _acknowledge_preference(self, command: str, saved: Optional[bool] = None) -> Dict[str, Any]:
+        """Reply to a pure preference/correction — no LLM round-trip needed.
+
+        `saved` is what actually happened: True = Hindsight confirmed it, False = it is only kept
+        locally for now. The old text said "Saved to long-term memory" whenever memory was merely
+        configured, even while every save was failing.
+        """
         category = memory_rules.categorize(command)
         lines = ["Got it — I'll remember that."]
         if category == "file_organization":
@@ -1230,8 +1248,15 @@ class TomAgent:
             if rules:
                 lines.append("Rules I'll apply next time I organize a folder:")
                 lines += [f"  • {r.describe()}" for r in rules]
-        if self.memory.available:
+        if saved is None:
+            saved = self.memory.available            # legacy callers that did not check
+        if saved:
             lines.append("(Saved to long-term memory — it carries over to future sessions.)")
+        elif self.memory.available:
+            reason = self.memory.last_error or "Hindsight has not answered yet"
+            waiting = self.memory.pending_count()
+            lines.append(f"(NOT saved to Hindsight yet — {reason}. It is kept on this computer"
+                         f"{f' ({waiting} waiting)' if waiting else ''} and I will retry automatically.)")
         else:
             lines.append(f"(Queued locally: {self.memory.status_line()})")
         message = "\n".join(lines)
