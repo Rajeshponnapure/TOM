@@ -17,7 +17,7 @@ def create_migration_package():
         "start_email_agent_daemon.bat",
         "start_instagram_agent_daemon.bat",
         "setup_secondary_laptop.ps1",
-        "SECONDARY_LAPTOP_DEPLOYMENT_PLAN.md",
+        "docs/SECONDARY_MACHINE.md",
         "config/",
         "tools/",
         "agents/",

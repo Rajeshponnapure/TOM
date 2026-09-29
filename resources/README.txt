@@ -2,10 +2,10 @@ Resource files for TOM Desktop
 
 Place Tom image assets here so the UI and launcher can find them regardless of working directory.
 
-Recommended files (any of these):
-- tom_icon.png      -> used for UI logo and icon generation
-- tom with bng.png
-- tom without bng.png
+Files the app looks for (the first one found is used):
+- tom_icon.png         -> UI logo and icon generation
+- tom with bng.png     -> logo with background (optional)
+- tom without bng.png  -> logo without background (optional)
 
 To create a Windows .ico from a PNG, run:
 

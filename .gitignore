@@ -5,13 +5,27 @@
 *.pem
 *.key
 
+# ── Personal data ──────────────────────────────────────
+data/whatsapp_contacts.json
+data/file_ops_journal.json
+tom_brain/
+memories/
+output/
+outputs/
+reports/
+tom_logs/
+content_drafts/
+
 # ── Python ─────────────────────────────────────────────
 __pycache__/
 *.pyc
 venv/
+.venv/
 .venv311/
 .pytest_cache/
 .pytest_tmp/
+.ruff_cache/
+.mypy_cache/
 
 # ── Build output ───────────────────────────────────────
 build/
@@ -20,31 +34,28 @@ dist_updated/
 *.exe
 *.spec.bak
 *.py.bak
+*.bak
+*.zip
+TOM-Installer.exe
 
 # ── Runtime state / logs ───────────────────────────────
-tom_logs/
 *.pid
+*.log
 .cache/
-tom_brain/chroma_db/
 
-# ── Archives / backups ─────────────────────────────────
-*.zip
+# ── Demo scratch ───────────────────────────────────────
+demo/sandbox/
+demo/.demo_env
 
 # ── Vendored third-party repo (has its own .git; not tracked here) ──
 awesome-claude-skills/
 
-# ── Runtime state / personal data ──────────────────────
-tom_brain/
-output/
-outputs/
-memories/
-reports/
-data/file_ops_journal.json
-*.log
+# ── Editors / OS / tooling noise ───────────────────────
+.idea/
+.vscode/
 .claude/
 .sixth/
-
-# ── OS noise ───────────────────────────────────────────
+.freebuff/
 Thumbs.db
 .DS_Store
 
@@ -52,7 +63,3 @@ Thumbs.db
 _audit/
 PRD.md
 *_PRD.md
-demo/sandbox/
-demo/.demo_env
-content_drafts/
-.freebuff/

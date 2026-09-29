@@ -1,0 +1,22 @@
+[project]
+name = "tom-agent"
+version = "1.0.0"
+description = "TOM - a desktop automation agent that remembers how you work (long-term memory by Hindsight)."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11,<3.12"
+# Runtime dependencies are pinned in requirements.txt (the single source of truth for installs).
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--basetemp=.pytest_tmp"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["knowledge", "skills", "demo/sandbox", ".pytest_tmp"]
+
+[tool.ruff.lint]
+# Correctness gate: syntax errors, undefined names, misuse of `is`, invalid comparisons.
+# Style rules are intentionally not enforced yet; see CONTRIBUTING.md.
+select = ["E9", "F63", "F7", "F82"]

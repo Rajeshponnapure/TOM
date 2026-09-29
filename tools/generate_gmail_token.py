@@ -58,7 +58,7 @@ def check_client_secret(path: Path) -> str:
     if not path.is_file():
         return (f"I can't find the client file at {path}\n"
                 f"  Download it from Google Cloud Console > APIs & Services > Credentials > your OAuth client "
-                f"(type: Desktop app) > Download JSON, and save it there (see GMAIL_OAUTH_SETUP.md).")
+                f"(type: Desktop app) > Download JSON, and save it there (see docs/GMAIL_OAUTH_SETUP.md).")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:

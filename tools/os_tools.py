@@ -400,25 +400,6 @@ class OSTools:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    async def get_chrome_profiles(self) -> list:
-        """Gets list of Chrome profiles"""
-        chrome_base = os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\Google\Chrome\User Data")
-        try:
-            # Try to find profile directories
-            import subprocess
-            result = subprocess.run(
-                ["powershell", "-Command", "Get-ChildItem -Path", f'"{chrome_base}\"', "-Directory"],
-                capture_output=True, text=True, timeout=10
-            )
-            
-            if result.returncode == 0:
-                profiles = [d.replace("Default", "Rajesh Ponnapureddy") for d in result.stdout.split("\n") if d.strip()]
-                return {"status": "success", "profiles": profiles}
-            else:
-                return {"status": "error", "message": "Could not access Chrome profiles"}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-
     def log_action(self, result: Dict[str, Any]):
         """Logs action using Safety Guards"""
         from safety.guards import SafetyGuards
