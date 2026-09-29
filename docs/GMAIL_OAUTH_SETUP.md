@@ -59,6 +59,13 @@ python tools\generate_gmail_token.py
 * While the OAuth consent screen is in **Testing**, add your Gmail address under *Audience -> Test users*, otherwise Google
   shows "access denied". Google also expires refresh tokens after **7 days** for external apps in Testing; publish the
   consent screen ("In production") for a token that keeps working, or simply re-run this script weekly.
+* **"This site can't be reached - localhost refused to connect"** after you click Allow: your sign-in worked, the
+  browser just couldn't reach the script's local listener (the script now uses `127.0.0.1`, which avoids the usual
+  IPv4/IPv6 `localhost` mix-up, but a VPN, proxy, antivirus or firewall can still block it). Go back to the terminal,
+  press **Ctrl+C**, and paste the *whole address-bar URL* of that error page when asked. You can also run
+  `python tools\generate_gmail_token.py --manual` to do it that way from the start.
+* If your TOM folder is inside OneDrive/Dropbox, the token file gets synced to the cloud. Prefer a location outside it:
+  `GMAIL_TOKEN_FILE=C:\Users\<you>\.tom\gmail_token.json` in `.env`.
 * The token is a password-equivalent. `*token*.json` is already in `.gitignore` - never commit or share it.
 
 ---
@@ -95,7 +102,7 @@ The downloaded file will be named `client_secret_*.json` or similar.
 
 **Rename it to:** `google-credentials.json`
 
-**Place it here:** `C:\Users\saimo\tom_autonomous_agent\google-credentials.json`
+**Place it here:** `<your TOM folder>\google-credentials.json`
 
 ✅ **Done!** Your `google-credentials.json` is ready.
 
@@ -149,7 +156,7 @@ def _load_gmail_credentials(self):
 Check your project root folder:
 
 ```
-c:\Users\saimo\tom_autonomous_agent\
+<your TOM folder>\
 ├─ google-credentials.json      ✅ You downloaded this
 ├─ google-credentials_token.json ✅ TOM will create this on first run
 ```
@@ -167,9 +174,9 @@ Your `.env` files are already configured correctly:
 ```bash
 # Root .env and all agent .env files have these:
 
-GMAIL_CREDENTIALS_FILE=C:/Users/saimo/tom_autonomous_agent/google-credentials.json
-GMAIL_TOKEN_FILE=C:/Users/saimo/tom_autonomous_agent/google-credentials_token.json
-EMAIL_ADDRESS=ponnapureddyrajesh43936@gmail.com
+GMAIL_CREDENTIALS_FILE=C:/path/to/TOM/google-credentials.json
+GMAIL_TOKEN_FILE=C:/path/to/TOM/google-credentials_token.json
+EMAIL_ADDRESS=you@gmail.com
 ```
 
 **No manual changes needed!** These are already set.
@@ -194,7 +201,7 @@ $ python agents/instagram_ai_news_agent/main.py
 ✅ Gmail authenticated!
 📧 Sending test email...
 
-✅ Report sent to ponnapureddyrajesh43936@gmail.com
+✅ Report sent to you@gmail.com
 ```
 
 ---
@@ -208,7 +215,7 @@ $ python agents/instagram_ai_news_agent/main.py
 **Fix:**
 1. Go to Google Cloud Console → Download credentials again
 2. Rename to `google-credentials.json`
-3. Place in: `C:\Users\saimo\tom_autonomous_agent\`
+3. Place in: `<your TOM folder>\`
 4. Try again
 
 ### "Invalid grant" Error
@@ -297,7 +304,7 @@ $ python agents/instagram_ai_news_agent/main.py
 ## Summary Checklist
 
 - [ ] Downloaded `google-credentials.json` from Google Cloud Console
-- [ ] Placed it in `C:\Users\saimo\tom_autonomous_agent\`
+- [ ] Placed it in `<your TOM folder>\`
 - [ ] `.env` files are configured (already done by me)
 - [ ] Ready to run agent (first run will auto-generate token.json)
 

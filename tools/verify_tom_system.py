@@ -321,10 +321,10 @@ def check_compile() -> Dict[str, object]:
 
 
 def check_comprehensive_tests() -> Dict[str, object]:
-    proc = _run([sys.executable, "test_tom_comprehensive.py"], timeout=180)
+    proc = _run([sys.executable, "tests/manual/scorecard.py"], timeout=180)
     if proc.returncode != 0 or "0 failed" not in proc.stdout:
         return _fail("comprehensive_tests", (proc.stdout + proc.stderr)[-2000:])
-    return _ok("comprehensive_tests", "test_tom_comprehensive.py passed")
+    return _ok("comprehensive_tests", "tests/manual/scorecard.py passed")
 
 
 def check_smoke_tests() -> Dict[str, object]:

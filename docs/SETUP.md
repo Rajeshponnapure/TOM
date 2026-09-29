@@ -2,7 +2,7 @@
 
 This guide takes a fresh Windows machine to a working TOM install (development run or
 packaged `.exe`). Follow the sections in order. For the design/architecture context, see
-[ARCHITECTURE.md](ARCHITECTURE.md); for the feature overview, see [README.md](README.md).
+[ARCHITECTURE.md](ARCHITECTURE.md); for the feature overview, see [README.md](../README.md).
 
 Setup values fall into three buckets:
 
@@ -67,7 +67,7 @@ python --version      # must print 3.11.x
 interpreter and installs everything:
 
 ```powershell
-cd C:\path\to\tom_autonomous_agent
+cd C:\path\to\TOM
 setup_python311_env.bat
 ```
 
@@ -128,8 +128,7 @@ copy .env.example .env
 ```
 
 Every value has a working default, so an empty `.env` is fine to start. The full
-annotated reference is in [.env.example](.env.example) and
-[ENVIRONMENT_SETUP_GUIDE.md](ENVIRONMENT_SETUP_GUIDE.md).
+annotated reference is in [`.env.example`](../.env.example).
 
 ### Required for the core app
 
@@ -254,12 +253,12 @@ a heads-up in the chat window rather than switching providers quietly — clear 
 # Diagnostic self-check — imports, capabilities, optional libraries
 .venv311\Scripts\python.exe tools\verify_tom_system.py
 
-# Full test suite (pytest.ini already pins --basetemp to .pytest_tmp)
+# Full test suite (pyproject.toml already pins --basetemp to .pytest_tmp)
 .venv311\Scripts\python.exe -m pytest
 ```
 
 > **Windows temp note:** the default pytest temp dir under `pytest-of-<user>` can have
-> broken ACLs on some machines. `pytest.ini` already redirects `--basetemp` to
+> broken ACLs on some machines. `pyproject.toml` already redirects `--basetemp` to
 > `.pytest_tmp` to avoid this — don't override it.
 
 ---
@@ -369,7 +368,7 @@ sending anything.
 | Chrome profile launch fails | Confirm Chrome installed and the profile exists; optionally set `CHROME_PROFILE_PATH`. |
 | `read my screen` does nothing | Install Tesseract; set `TESSERACT_CMD`; keep the target window visible. |
 | EXE ignores `.env` / code changes | Run from source for `.env`; rebuild with `build.bat` after edits. |
-| pytest permission errors in temp | Don't override `--basetemp`; it's pinned to `.pytest_tmp` in `pytest.ini`. |
+| pytest permission errors in temp | Don't override `--basetemp`; it's pinned to `.pytest_tmp` in `pyproject.toml`. |
 
 ---
 

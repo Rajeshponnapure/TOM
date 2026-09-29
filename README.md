@@ -40,7 +40,7 @@
 
 <br/>
 
-### [ 🚀 Quick start ](#-quick-start) · [ 🧩 Features ](#-feature-showcase) · [ 🏛️ Architecture ](#️-architecture) · [ 🧠 Intelligence ](#-intelligence-layer) · [ 🛠️ Setup ](SETUP.md) · [ ❓ FAQ ](#-faq)
+### [ 🚀 Quick start ](#-quick-start) · [ 🧩 Features ](#-feature-showcase) · [ 🏛️ Architecture ](#️-architecture) · [ 🧠 Intelligence ](#-intelligence-layer) · [ 🛠️ Setup ](docs/SETUP.md) · [ ❓ FAQ ](#-faq)
 
 </div>
 
@@ -171,7 +171,7 @@ Recorded from the real desktop app with the offline memory stand-in (<code>tests
 <table>
 <tr>
 <td align="center" width="25%">📄<br/><b>Documents</b><br/><sub>Word · Excel · PPT · PDF · letters</sub></td>
-<td align="center" width="25%">✉️<br/><b>Communication</b><br/><sub>email draft/send · inbox triage · WhatsApp</sub></td>
+<td align="center" width="25%">✉️<br/><b>Communication</b><br/><sub>email draft/send · inbox triage · WhatsApp · Slack · Discord · Telegram</sub></td>
 <td align="center" width="25%">📊<br/><b>Data &amp; ML</b><br/><sub>analysis · dashboards · ML · vision</sub></td>
 <td align="center" width="25%">🌐<br/><b>Web</b><br/><sub>search · site gen · scrape · verify · safety</sub></td>
 </tr>
@@ -204,7 +204,8 @@ Recorded from the real desktop app with the offline memory stand-in (<code>tests
 | Draft context-aware emails | `write an email to John about the meeting` | LLM-drafted |
 | Send email | `send email to john@x.com` | **approval-gated** |
 | Inbox triage (summarize · rank · draft replies) | `check my inbox` | Gmail OAuth / IMAP |
-| WhatsApp messages | `whatsapp Mom saying I'll be late` | via browser session |
+| WhatsApp messages (approved first; exact number if known) | `send Mom a message on WhatsApp saying I'll be late` | WhatsApp Desktop (Windows) or WhatsApp Web |
+| Slack / Discord / Telegram messages (approved first, confirmed by the service) | `message Ravi on telegram: running late` | bot token / webhook in `.env` |
 
 </details>
 
@@ -397,7 +398,7 @@ flowchart TB
     class OUT d
 ```
 
-> Full layer-by-layer spec, DB schema, and plugin contract live in [ARCHITECTURE.md](ARCHITECTURE.md).
+> Full layer-by-layer spec, DB schema, and plugin contract live in [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
@@ -441,7 +442,7 @@ explanatory message instead of crashing.
 ## 🖥️ The desktop app
 
 `tom_desktop_app.py` is a Tkinter shell tuned for a bright room and high contrast (design
-rationale: [PRODUCT.md](PRODUCT.md)). Opens at **1420×880**.
+rationale: [PRODUCT.md](docs/PRODUCT.md)). Opens at **1420×880**.
 
 ```
 ┌──────────────┬───────────────────────────────────────────────┐
@@ -509,7 +510,7 @@ own. The embedding slot stays local either way (Groq has no embeddings endpoint)
 
 ## 🚀 Quick start
 
-> ⚠️ **Requires Python 3.11.x specifically** (not 3.10, not 3.12). Full guide → [SETUP.md](SETUP.md).
+> ⚠️ **Requires Python 3.11.x specifically** (not 3.10, not 3.12). Full guide → [SETUP.md](docs/SETUP.md).
 
 ```mermaid
 flowchart LR
@@ -569,9 +570,15 @@ Settings live in `.env` (copy from [.env.example](.env.example)). Nothing is req
   A variable already exported in your shell wins over `.env`; TOM reports the conflict in chat.
 - **Core (LLM):** `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_FAST_MODEL`,
   `OLLAMA_CODE_MODEL`, `OLLAMA_EMBED_MODEL`, `OLLAMA_TIMEOUT_SECONDS`, `TASK_TIMEOUT_SECONDS`.
-- **Email** (Gmail/inbox): `EMAIL_ADDRESS`, `EMAIL_PASSWORD`, `GMAIL_CREDENTIALS_FILE`,
-  `GMAIL_TOKEN_FILE`, `IMAP_HOST`, `IMAP_PORT`, `SMTP_SERVER`, `SMTP_PORT`
-  → see [GMAIL_OAUTH_SETUP.md](GMAIL_OAUTH_SETUP.md).
+- **Email** (Gmail/inbox): `EMAIL_ADDRESS`, `EMAIL_PASSWORD` (app password) **or**
+  `GMAIL_CREDENTIALS_FILE` / `GMAIL_TOKEN_FILE` (OAuth), `IMAP_HOST`, `IMAP_PORT`, `IMAP_SSL`,
+  `SMTP_SERVER`, `SMTP_PORT`, `SMTP_STARTTLS`, `EMAIL_AUTO_REPLY_ENABLED` (opt-in, off by default)
+  → see [GMAIL_OAUTH_SETUP.md](docs/GMAIL_OAUTH_SETUP.md); create the OAuth token with
+  `python tools/generate_gmail_token.py`.
+- **WhatsApp:** `WHATSAPP_MODE` (`auto` / `web` / `desktop`), `WHATSAPP_CONTACTS` (name → phone number,
+  so a message goes to an exact chat instead of a name search).
+- **Chat apps:** `SLACK_BOT_TOKEN`, `DISCORD_WEBHOOK_URL` / `DISCORD_WEBHOOKS`,
+  `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHATS`. Without them TOM opens the app and says nothing was sent.
 - **Instagram agent:** `INSTAGRAM_CHROME_PROFILE`, `INSTAGRAM_POSTS_PER_RUN`,
   `INSTAGRAM_CHECK_INTERVAL_SECONDS`, `INSTAGRAM_AUTO_SEND_REPORT_EMAIL`, …
 - **Browser:** `CHROME_EXECUTABLE`, `CHROME_PROFILE_PATH`.
@@ -584,7 +591,7 @@ Settings live in `.env` (copy from [.env.example](.env.example)). Nothing is req
 > ✅ **No API keys** for Chrome automation, Instagram/YouTube browsing, or local Office —
 > those use your signed-in browser session and local apps.
 
-Full annotated reference: [.env.example](.env.example) · [ENVIRONMENT_SETUP_GUIDE.md](ENVIRONMENT_SETUP_GUIDE.md).
+Full annotated reference: [.env.example](.env.example).
 
 ---
 
@@ -626,32 +633,33 @@ proves no tool module is dead. **CI fails the build if either contract breaks.**
 ## 🗂️ Project structure
 
 ```text
-tom_autonomous_agent/
+TOM/
 ├─ 🖥️  tom_desktop_app.py        # Tkinter GUI (primary entry point)
 ├─ 🧠  agent.py                  # TomAgent — orchestration, routing, execution, logging
 ├─ ⌨️   main.py                   # CLI entry point
-├─ 🛡️  safety/guards.py          # allow/deny rules + audit logging
-├─ 🧰  tools/                    # all capability engines (45+ modules)
+├─ 🛡️  safety/guards.py          # allow/deny rules, protected paths, audit logging
+├─ 🧰  tools/                    # capability engines (60+ modules)
 │   ├─ command_router · engine_router · skill_manager · knowledge_engine
 │   ├─ capability_registry · capability_health · skill_telemetry · approval
+│   ├─ hindsight_memory · memory_rules · chat_memory · rag_memory
 │   ├─ browser_tools · chrome_profiles · screen_tools · file_tools · file_ops
-│   ├─ email_tools · whatsapp_tools · web_recipes · web_automation
+│   ├─ email_tools · whatsapp_tools · chat_apps · web_recipes · web_automation
 │   ├─ code_runner · ml_engine · iot_engine · vlsi_engine · game_dev · blender_control
 │   ├─ data_analysis · document_creator · pdf_tools · hardware_control
-│   ├─ voice_tools · voice_enhanced · rag_memory · self_evolution · learning
+│   ├─ voice_tools · voice_enhanced · self_evolution · learning
 │   └─ scheduler · autonomous_agent · agent_orchestrator · mcp_manager · news_agent …
 ├─ 🤖  agents/                   # discoverable sub-agents (email, instagram, ai-news)
 ├─ 📚  knowledge/                # JSON domain packs + Markdown notes
 ├─ 🧩  skills/                   # 47 numbered domain skills + SKILL.md packs
-├─ 🧷  memories/                 # lifetime chat + session experiences (JSON)
-├─ 📒  tom_logs/                 # audit log, skill telemetry, agent state
 ├─ ⚙️   config/                   # system_prompt.txt
-├─ 🎨  resources/                # icons / artwork (tom_icon.png/.svg/.ico)
-├─ 🖼️  docs/assets/              # README banner + screenshots/GIF
-├─ 📦  installer/tom_installer.iss  # Inno Setup script
-├─ 🧪  tests/                    # pytest suite
-├─ 🔁  .github/workflows/ci.yml  # compile + pytest on push/PR
-└─ 📌  requirements.txt          # pinned deps (Python 3.11 only)
+├─ 🎨  resources/                # icons / artwork
+├─ 📖  docs/                     # ARCHITECTURE · SETUP · GMAIL_OAUTH_SETUP · INSTAGRAM_WORKFLOW · …
+├─ 🎬  demo/                     # scripted memory demo + recording script
+├─ 📦  installer/                # Inno Setup script
+├─ 🧪  tests/                    # pytest suite (tests/manual/scorecard.py = scored self-check)
+├─ 🔁  .github/                  # CI workflow, issue/PR templates, Dependabot
+├─ 🪟  *.bat / *.ps1 / *.vbs     # Windows launchers, setup, build
+└─ 📌  requirements.txt · requirements-ci.txt · pyproject.toml
 ```
 
 ---
@@ -662,17 +670,22 @@ tom_autonomous_agent/
 # Diagnostic self-check (imports, capabilities, optional libs)
 .venv311\Scripts\python.exe tools\verify_tom_system.py
 
-# Test suite (pytest.ini pins --basetemp to .pytest_tmp on Windows)
+# Test suite (pyproject.toml pins --basetemp to .pytest_tmp for Windows)
 .venv311\Scripts\python.exe -m pytest
+
+# Lint gate used by CI (syntax errors, undefined names)
+.venv311\Scripts\python.exe -m pip install ruff
+.venv311\Scripts\python.exe -m ruff check .
 ```
 
-**GitHub Actions** (`.github/workflows/ci.yml`) runs on every push & PR:
+**GitHub Actions** (`.github/workflows/ci.yml`) runs on every pull request and every push to `main`:
 
 ```mermaid
 flowchart LR
     P["push / PR"] --> S["setup-python 3.11"]
-    S --> C["py_compile all first-party modules"]
-    C --> T["pytest tests/ -v<br/>(router · skills · knowledge · registry integrity)"]
+    S --> C["compile all first-party modules"]
+    C --> L["ruff check<br/>(syntax · undefined names)"]
+    L --> T["pytest<br/>(routing · mail · chat apps · files · memory · registry integrity)"]
     T --> R{green?}
     R -->|yes| OK["✅ merge-ready"]
     R -->|no| X["❌ build fails"]
@@ -681,8 +694,10 @@ flowchart LR
 ```
 
 The suite covers command routing, engine detection, **capability-registry integrity** (no
-fake capabilities, no orphan tools), reliability, voice fixes, skill/knowledge loading,
-telemetry, and the Phase B task suites.
+fake capabilities, no orphan tools), and whole-agent runs through `TomAgent.execute_task`
+against in-process fake SMTP / IMAP / Slack / Discord / Telegram servers (real sockets, no
+network), a real Chromium page standing in for WhatsApp Web (skipped when Chromium isn't
+installed), file organizing with undo, and the long-term-memory contract.
 
 ---
 
@@ -743,7 +758,7 @@ timeline
     Planned : SQLite memory/audit backend : Plugin metadata + install/update flow : FastAPI service for remote control : Power BI automation hooks
 ```
 
-> Roadmap is distilled from [ARCHITECTURE.md](ARCHITECTURE.md) §14. Items move as the code lands.
+> Roadmap is distilled from [ARCHITECTURE.md](docs/ARCHITECTURE.md) §14. Items move as the code lands.
 
 ---
 
@@ -762,7 +777,7 @@ flowchart LR
 2. Work in the **Python 3.11** env (`setup_python311_env.bat`).
 3. Add a real executor for any new capability **and** register it in
    `tools/capability_registry.py` — CI rejects fake capabilities and orphan tools.
-4. Run `pytest` and `python tools/verify_tom_system.py` before opening a PR.
+4. Run `pytest`, `ruff check .` and `python tools/verify_tom_system.py` before opening a PR (details in [CONTRIBUTING.md](CONTRIBUTING.md)).
 5. Keep changes **additive and failure-isolated** (lazy imports, graceful degradation).
 6. Match the house rules in [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md): verify before
    you ship, no untested code, honest uncertainty.
@@ -805,7 +820,7 @@ Yes — set `OLLAMA_MODEL` (and the fast/code/embed slots) to any Ollama model, 
 <summary><b>Voice won't start — what now?</b></summary>
 
 Launch with `launch_tom_safe.bat` (voice off) to confirm the rest works, then install
-`SpeechRecognition` + PyAudio (a prebuilt `cp311` wheel on Windows). See [SETUP.md](SETUP.md).
+`SpeechRecognition` + PyAudio (a prebuilt `cp311` wheel on Windows). See [SETUP.md](docs/SETUP.md).
 </details>
 
 <details>
@@ -824,21 +839,21 @@ Not yet — a FastAPI service is on the roadmap. Today TOM is a local Tkinter de
 | "TOM requires Python 3.11.x" | Install official Python 3.11, then `setup_python311_env.bat`. |
 | "TOM dependencies are missing" | Re-run `setup_python311_env.bat`. |
 | LLM replies limited / empty | Start Ollama (`ollama serve`) and pull the models above. |
-| Voice error re `SpeechRecognition`/`pyaudio` | Install them; on Windows use a prebuilt PyAudio wheel (see SETUP.md). |
+| Voice error re `SpeechRecognition`/`pyaudio` | Install them; on Windows use a prebuilt PyAudio wheel (see docs/SETUP.md). |
 | Voice misbehaving | `launch_tom_safe.bat` (voice off) or `VOICE_INPUT_ENABLED=false`. |
 | Chrome profile launch fails | Confirm Chrome installed + profile exists; optionally set `CHROME_PROFILE_PATH`. |
 | Screen reading does nothing | Install Tesseract OCR; set `TESSERACT_CMD` if not on PATH. |
 | EXE ignores edits / `.env` | Rebuild with `build.bat`; run from source for `.env`. |
-| pytest permission errors in temp | Don't override `--basetemp`; it's pinned to `.pytest_tmp` in `pytest.ini`. |
+| pytest permission errors in temp | Don't override `--basetemp`; it's pinned to `.pytest_tmp` in `pyproject.toml`. |
 
-Deeper setup + new-machine checklist → [SETUP.md](SETUP.md).
+Deeper setup + new-machine checklist → [SETUP.md](docs/SETUP.md).
 
 ---
 
 ## 🙌 Credits & license
 
 **Author / owner:** Rajesh Ponnapureddy — built TOM as a daily-driver personal automation
-agent (see [PRODUCT.md](PRODUCT.md)).
+agent (see [PRODUCT.md](docs/PRODUCT.md)).
 
 Built on the open-source ecosystem: **Ollama**, **LangChain**, **ChromaDB**,
 **sentence-transformers**, **Playwright**, **PyAutoGUI**, **Tesseract**, **pandas /

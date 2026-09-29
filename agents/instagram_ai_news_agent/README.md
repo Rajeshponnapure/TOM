@@ -15,7 +15,7 @@ Automatically scrolls your Instagram feed, extracts AI-related posts, generates 
 
 ### 1. Configure Environment Variables
 
-For the canonical list of environment values and where to get them, see [../../ENVIRONMENT_SETUP_GUIDE.md](../../ENVIRONMENT_SETUP_GUIDE.md).
+For the canonical list of environment values and where to get them, see [`.env.example`](../../.env.example).
 
 Copy `config.example.env` to `.env` and fill in your details:
 
@@ -89,7 +89,7 @@ You can control the Instagram daemon from TOM commands:
 
 ### Run on Schedule (Every 3 Hours)
 
-See [ARCHITECTURE.md](../../ARCHITECTURE.md) for integrating with the main TOM scheduler.
+See [ARCHITECTURE.md](../../docs/ARCHITECTURE.md) for integrating with the main TOM scheduler.
 
 The scheduler can be configured in the main `agent.py` to call this agent every 3 hours.
 

@@ -25,8 +25,6 @@ _DATAS = [
     ('AGENTS.md', '.'),
     ('CLAUDE.md', '.'),
     ('SYSTEM_PROMPT.md', '.'),
-    ('tom without bng.png', '.'),
-    ('tom with bng.png', '.'),
 ]
 _missing = [src for src, _dest in _DATAS
             if not _os.path.exists(_os.path.join(_ROOT, src))]

@@ -1539,10 +1539,13 @@ class MLEngine:
                         seasonal_order = params.get('seasonal_order', None)
                         if algo == 'sarima' and seasonal_order is None:
                             seasonal_order = (1, 0, 0, params.get('period', 12))
+                        # Imported before use: the import used to sit only in the `else` branch, so
+                        # 'arima' raised UnboundLocalError, which the handler below swallowed - the
+                        # request silently ran on the scratch implementation instead of statsmodels.
+                        from statsmodels.tsa.arima.model import ARIMA as StatsARIMA
                         if algo == 'arima':
                             model = StatsARIMA(data, order=order).fit()
                         else:
-                            from statsmodels.tsa.arima.model import ARIMA as StatsARIMA
                             model = StatsARIMA(data, order=order, seasonal_order=seasonal_order).fit()
                         forecast = model.forecast(forecast_steps).tolist()
                         return {
