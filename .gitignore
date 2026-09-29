@@ -63,3 +63,12 @@ Thumbs.db
 _audit/
 PRD.md
 *_PRD.md
+<<<<<<< HEAD
+=======
+demo/sandbox/
+demo/.demo_env
+content_drafts/
+.freebuff/
+google-credentials.json
+google-credentials_token.json
+>>>>>>> origin/main
