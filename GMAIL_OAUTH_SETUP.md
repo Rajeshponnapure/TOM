@@ -59,6 +59,13 @@ python tools\generate_gmail_token.py
 * While the OAuth consent screen is in **Testing**, add your Gmail address under *Audience -> Test users*, otherwise Google
   shows "access denied". Google also expires refresh tokens after **7 days** for external apps in Testing; publish the
   consent screen ("In production") for a token that keeps working, or simply re-run this script weekly.
+* **"This site can't be reached - localhost refused to connect"** after you click Allow: your sign-in worked, the
+  browser just couldn't reach the script's local listener (the script now uses `127.0.0.1`, which avoids the usual
+  IPv4/IPv6 `localhost` mix-up, but a VPN, proxy, antivirus or firewall can still block it). Go back to the terminal,
+  press **Ctrl+C**, and paste the *whole address-bar URL* of that error page when asked. You can also run
+  `python tools\generate_gmail_token.py --manual` to do it that way from the start.
+* If your TOM folder is inside OneDrive/Dropbox, the token file gets synced to the cloud. Prefer a location outside it:
+  `GMAIL_TOKEN_FILE=C:\Users\<you>\.tom\gmail_token.json` in `.env`.
 * The token is a password-equivalent. `*token*.json` is already in `.gitignore` - never commit or share it.
 
 ---

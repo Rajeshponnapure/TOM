@@ -7,7 +7,12 @@ token it writes is a password-equivalent: keep it out of git (*token*.json is al
     python tools/generate_gmail_token.py
     python tools/generate_gmail_token.py --credentials C:\\path\\google-credentials.json
     python tools/generate_gmail_token.py --no-browser      # prints a URL to open instead
+    python tools/generate_gmail_token.py --manual          # paste the final browser URL yourself
     python tools/generate_gmail_token.py --skip-verify     # don't test the token against Gmail
+
+If the browser ends on "This site can't be reached ... localhost refused to connect", nothing is
+wrong with your sign-in: the page just couldn't reach the script. Press Ctrl+C (or wait) and the
+script asks you to paste that page's address-bar URL, which contains everything it needs.
 
 It uses the same settings as TOM (.env: GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, EMAIL_ADDRESS,
 IMAP_HOST) and the same scope, so the token it writes is exactly the file TOM looks for.
@@ -98,11 +103,59 @@ def verify_token(token_path: Path, email_address: str, imap_host: str = "imap.gm
     return ""
 
 
+LOOPBACK = "127.0.0.1"      # not "localhost": that can resolve to IPv6 (::1) while the script listens on IPv4
+
+
+def exchange_pasted_response(flow, pasted: str):
+    """Finish the sign-in from what the user pasted: the full redirected URL (or just the code)."""
+    pasted = (pasted or "").strip().strip('"').strip("'")
+    if not pasted:
+        raise ValueError("Nothing was pasted.")
+    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")     # the redirect is http://127.0.0.1 by design
+    if pasted.lower().startswith("http"):
+        flow.fetch_token(authorization_response="https" + pasted[pasted.index(":"):])   # oauthlib insists on https
+    else:
+        flow.fetch_token(code=pasted)
+    return flow.credentials
+
+
+def manual_sign_in(flow, input_fn=None):
+    """Sign in without the script's local web server: open the URL, sign in, paste the final URL back."""
+    if not flow.redirect_uri:
+        flow.redirect_uri = f"http://{LOOPBACK}:8080/"
+        url, _ = flow.authorization_url(access_type="offline", prompt="consent")
+        print("\nOpen this address in your browser and sign in:\n\n" + url + "\n")
+    else:
+        print("\nUse the sign-in address printed above (open it again if you closed it).")
+    print("After you click Allow, the browser may show 'This site can't be reached' - that is expected.\n"
+          "Copy the WHOLE address from the browser's address bar (it starts with "
+          f"http://{LOOPBACK}:... and contains code=...) and paste it here.\n")
+    return exchange_pasted_response(flow, (input_fn or input)("Paste the URL here: "))
+
+
+def sign_in(flow, *, manual: bool = False, open_browser: bool = True, timeout: int = 180, input_fn=None):
+    """Google sign-in via a local listener, with a paste-the-URL fallback if that can't work."""
+    if manual:
+        return manual_sign_in(flow, input_fn)
+    try:
+        # access_type=offline + prompt=consent make Google return a refresh token every time.
+        return flow.run_local_server(host=LOOPBACK, bind_addr=LOOPBACK, port=0, open_browser=open_browser,
+                                     timeout_seconds=timeout, access_type="offline", prompt="consent")
+    except KeyboardInterrupt:
+        print("\nStopped waiting for the browser.")
+    except Exception as exc:                                     # timeout, port in use, blocked loopback ...
+        print(f"\nThe browser never reached this script ({exc.__class__.__name__}).")
+    return manual_sign_in(flow, input_fn)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Generate TOM's Gmail OAuth token (google-credentials_token.json).")
     parser.add_argument("--credentials", help="path to the OAuth client JSON (default: .env GMAIL_CREDENTIALS_FILE)")
     parser.add_argument("--token", help="where to write the token (default: <credentials>_token.json)")
     parser.add_argument("--no-browser", action="store_true", help="print the sign-in URL instead of opening a browser")
+    parser.add_argument("--manual", action="store_true",
+                        help="skip the local listener: open the URL yourself and paste the final address back")
+    parser.add_argument("--timeout", type=int, default=180, help="seconds to wait for the browser (default 180)")
     parser.add_argument("--skip-verify", action="store_true", help="don't test the new token against Gmail")
     parser.add_argument("--force", action="store_true", help="replace an existing token without asking")
     args = parser.parse_args(argv)
@@ -126,11 +179,18 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     print(f"Client file : {cred_path}\nToken file  : {token_path}\n")
     print("A browser window will open. Sign in with the Gmail account TOM should use and click Allow.")
+    print("If the page then says 'This site can't be reached', come back here and press Ctrl+C - I'll ask for that page's URL.")
     print("(If Google says the app isn't verified: Advanced > Go to <app> (unsafe) - it's your own client.)\n")
     flow = InstalledAppFlow.from_client_secrets_file(str(cred_path), scopes=SCOPES)
-    # access_type=offline + prompt=consent make Google return a refresh token every time.
-    creds = flow.run_local_server(port=0, open_browser=not args.no_browser,
-                                  access_type="offline", prompt="consent")
+    try:
+        creds = sign_in(flow, manual=args.manual, open_browser=not args.no_browser, timeout=args.timeout)
+    except (KeyboardInterrupt, EOFError):
+        print("\nCancelled. No token was written.")
+        return 1
+    except Exception as exc:
+        print(f"\nSign-in failed: {exc.__class__.__name__}: {exc}\n"
+              f"If it mentions access_denied, add your Gmail address under Google Cloud > Audience > Test users.")
+        return 1
     if not creds.refresh_token:
         print("Google did not return a refresh token, so this token would stop working within an hour. "
               "Remove TOM from https://myaccount.google.com/permissions and run this again.")
