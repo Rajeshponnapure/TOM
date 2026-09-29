@@ -25,6 +25,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
+from tools.text_utils import without_addresses
+
 
 def _safe_literal(text: str) -> Optional[Any]:
     """Parse a Python literal (list/number) without eval()."""
@@ -148,7 +150,7 @@ class EngineRouter:
         Conservative on purpose: anything ambiguous returns None so the
         agent's existing routing behaves exactly as before.
         """
-        c = command_lower.strip()
+        c = without_addresses(command_lower).strip()
 
         # Expert prefixes (same vocabulary the GUI dialogs used)
         for prefix, key in (

@@ -393,8 +393,10 @@ CRITICAL RULES:
         text = (command or "").strip()
         if "User request:" in text:
             text = text.rsplit("User request:", 1)[1].strip()
+        # A word inside an email address or URL ("boss@slack.com") is not the app.
+        visible = re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|https?://\S+", " ", text)
         for app in self.CHAT_APPS:
-            if not re.search(rf"\b{app}\b", text, re.IGNORECASE):
+            if not re.search(rf"\b{app}\b", visible, re.IGNORECASE):
                 continue
             clean = re.sub(r"\s+", " ", text).strip().strip(".,")
             clean = re.sub(rf"^(?:open|launch|start)\s+{app}\s+(?:and\s+)?", "", clean, flags=re.IGNORECASE)

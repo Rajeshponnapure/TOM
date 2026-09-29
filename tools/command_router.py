@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
+from tools.text_utils import without_addresses
+
 
 @dataclass(slots=True)
 class RouteDecision:
@@ -31,7 +33,7 @@ class CommandRouter:
         text = (command or "").strip()
         if "User request:" in text:
             text = text.rsplit("User request:", 1)[1].strip()
-        lower = text.lower()
+        lower = without_addresses(text).lower().strip()
 
         if not lower:
             return RouteDecision("chat", "empty", "generate_chat_response", confidence=1.0)

@@ -5,6 +5,11 @@ All notable changes to TOM. Format: [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 
 ### Fixed
+- **Emailing a Gmail address failed with "Unknown tool: gmail_info".** Connector keywords were matched anywhere in the
+  request, including inside the address, so `name@gmail.com` looked like "use the Gmail connector" (and
+  `@slack.com` / `@github.com` addresses reached the Slack / GitHub paths). Routers now ignore email addresses and
+  URLs. The connector fallback no longer calls a tool that does not exist; Gmail requests use the email workflows.
+  Everyday words such as "issue", "commit", "forecast" and "rain" no longer start GitHub or weather lookups.
 - **File requests worked in the wrong folder.** Pointing TOM at an explicit path that merely ended in `Downloads`
   (for example the demo sandbox `...\\sandbox\\Downloads`) organized the user's *real* Downloads folder: the path was
   matched by its last word. Explicit paths are now used exactly as given; only bare names such as "downloads" or

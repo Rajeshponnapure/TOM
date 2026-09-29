@@ -206,3 +206,62 @@ def test_whatsapp_request_shows_recipient_and_text_in_the_approval(chat, monkeyp
     chat.answer = False
     calls.clear()
     assert run(chat, "send Madhu a message on WhatsApp saying hello")["status"] == "cancelled" and calls == []
+
+
+# ── connector keywords must not fire on words inside an email address ────────
+@pytest.mark.parametrize("domain", ["gmail.com", "outlook.com", "slack.com", "github.com", "notion.so", "google.com"])
+def test_an_email_address_never_triggers_a_connector(agent, smtp_server, domain):
+    result = run(agent, f"write an email to gnaneshwari0806@{domain} for sick leave")
+    assert "Unknown tool" not in result.get("message", ""), result
+    assert result["status"] == "success" and result.get("response_type") == "email_draft", result
+    assert result["recipient"] == f"gnaneshwari0806@{domain}"
+    assert smtp_server.messages == []
+
+
+@pytest.mark.parametrize("domain", ["gmail.com", "github.com", "slack.com"])
+def test_sending_to_such_an_address_still_asks_and_sends(agent, smtp_server, domain):
+    result = run(agent, f"send an email to boss@{domain} saying I am on sick leave today and will be back tomorrow")
+    assert result["status"] == "success", result
+    assert len(agent.asked) == 1 and f"boss@{domain}" in agent.asked[0].summary
+    assert "To: boss@" + domain in smtp_server.messages[0]
+
+
+@pytest.mark.parametrize("command", [
+    "write an email to my manager about the issue with the invoice",
+    "draft a note about the commit to the new plan and the rain delay",
+    "email the team about our sales forecast for next quarter",
+])
+def test_everyday_words_do_not_start_a_connector_call(agent, command):
+    called = []
+
+    async def spy(*a, **k):
+        called.append(a)
+        return {"status": "success", "message": "connector", "data": {}}
+    agent.mcp.call = spy
+    run(agent, command)
+    assert called == []
+
+
+def test_check_my_gmail_uses_the_inbox_workflow_not_a_missing_connector_tool(agent):
+    result = run(agent, "check my gmail")
+    assert "Unknown tool" not in result.get("message", ""), result
+    assert result["status"] == "success" and result["emails_reviewed"] == 3
+
+
+def test_real_connector_requests_still_reach_their_connector(agent):
+    calls = []
+
+    async def spy(connector, tool, args):
+        calls.append((connector, tool, args))
+        return {"status": "success", "message": "ok",
+                "data": {"city": "London", "temperature_c": 12, "condition": "Cloudy", "humidity_pct": 70, "wind_kph": 9}}
+    agent.mcp.call = spy
+    result = run(agent, "what is the weather in London?")
+    assert calls and calls[0][:2] == ("weather", "get_current_weather"), calls
+    assert "London" in result["message"]
+
+
+def test_a_connector_without_natural_language_actions_says_so_instead_of_unknown_tool(agent):
+    result = run(agent, "open my notion workspace")
+    assert "Unknown tool" not in result.get("message", ""), result
+    assert "notion" in result["message"].lower()

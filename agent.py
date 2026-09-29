@@ -29,6 +29,7 @@ from tools.chat_memory import ChatMemory
 from tools.scheduler import get_scheduler
 from tools.whatsapp_tools import WhatsAppTools
 from tools.chat_apps import ChatApps
+from tools.text_utils import without_addresses
 from tools.nlp_parser import CommandParser
 from tools.rag_memory import get_rag, RAGMemory
 from tools.self_evolution import get_evolution, SelfEvolution
@@ -1284,27 +1285,35 @@ class TomAgent:
 
     # ── MCP ROUTING ──────────────────────────────────────────────────────
 
+    # Connector triggers. Deliberately specific: everyday words ("issue", "commit", "forecast", "rain")
+    # used to send ordinary sentences to GitHub or the weather service. Gmail is not here: mail is
+    # handled by the email workflows (draft / send / inbox), never by a connector.
     _MCP_KEYWORDS = {
-        "github":    ["github", "repository", "repos", "pull request", "pr", "issue", "commit", "code search"],
-        "gmail":     ["gmail", "google mail"],
+        "github":    ["github", "repository", "repositories", "repos", "pull request", "code search"],
         "slack":     ["slack", "post to slack", "slack channel", "slack message"],
         "notion":    ["notion", "notion page", "notion database"],
         "whatsapp":  ["whatsapp business"],  # regular whatsapp handled by whatsapp_tools
         "instagram": ["instagram api", "instagram insights", "instagram media"],
         "calendar":  ["calendar", "my schedule", "upcoming events", "create event", "add to calendar"],
-        "weather":   ["weather", "temperature", "forecast", "rain", "sunny", "climate"],
+        "weather":   ["weather", "temperature in", "temperature outside", "will it rain", "going to rain",
+                      "is it raining", "weather forecast"],
         "websearch": ["search the web", "look up online", "google ", "find information about"],
     }
+
+    _without_addresses = staticmethod(without_addresses)
 
     def _is_mcp_request(self, command_lower: str, intent: str) -> bool:
         if intent in ("mcp_call", "mcp_status", "mcp_list"):
             return True
+        command_lower = self._without_addresses(command_lower)
         if "mcp" in command_lower and any(k in command_lower for k in ("list", "status", "connect", "tools")):
             return True
         for kws in self._MCP_KEYWORDS.values():
             if any(self._mcp_keyword_matches(command_lower, kw) for kw in kws):
                 return True
-        return False
+        # "commit" / "issue" are only GitHub when an owner/repo is named.
+        return bool(re.search(r"\b(?:commits?|issues?)\b", command_lower)
+                    and re.search(r"\b[\w.-]+/[\w.-]+\b", command_lower))
 
     @staticmethod
     def _mcp_keyword_matches(command_lower: str, keyword: str) -> bool:
@@ -1331,10 +1340,13 @@ class TomAgent:
                 lines.append(f"  Tools: {', '.join(c['tools'][:5])}")
             return {"status": "success", "message": "\n".join(lines)}
 
-        # Map keywords → connector + tool
+        # Map keywords → connector + tool (on the request without email addresses / URLs)
+        matchable = self._without_addresses(command_lower)
         for connector_name, kws in self._MCP_KEYWORDS.items():
-            if any(self._mcp_keyword_matches(command_lower, kw) for kw in kws):
+            if any(self._mcp_keyword_matches(matchable, kw) for kw in kws):
                 return await self._dispatch_mcp(connector_name, command, command_lower, parsed)
+        if re.search(r"\b(?:commits?|issues?)\b", matchable) and re.search(r"\b[\w.-]+/[\w.-]+\b", matchable):
+            return await self._dispatch_mcp("github", command, command_lower, parsed)
 
         return {"status": "unhandled", "message": ""}
 
@@ -1369,8 +1381,15 @@ class TomAgent:
             elif connector == "calendar":
                 return await self._mcp_calendar(command, command_lower, parsed)
             else:
-                res = await self.mcp.call(connector, connector + "_info", {})
-                return {"status": res["status"], "message": res.get("message", str(res.get("data", "")))}
+                # No natural-language actions are wired for this connector. It used to call a tool
+                # named "<connector>_info" that no connector has, always answering "Unknown tool".
+                info = next((c for c in self.mcp.list_connectors() if c["name"] == connector), None)
+                if info is None:
+                    return {"status": "unsupported", "message": f"There is no '{connector}' connector."}
+                state = "connected" if info["connected"] else "not connected (add its credentials to .env)"
+                return {"status": "info", "response_type": "mcp_info",
+                        "message": (f"{connector.title()} — {info['description']}. It is {state}. "
+                                    f"TOM can't act on it from plain language yet.")}
         except Exception as e:
             return {"status": "error", "message": f"MCP {connector} error: {e}"}
 
@@ -1547,10 +1566,11 @@ class TomAgent:
         the request used to fall into a plain 'open the app' and report success,
         silently dropping the message.
         """
-        if not self._CHAT_VERBS.search(command_lower):
+        visible = self._without_addresses(command_lower)
+        if not self._CHAT_VERBS.search(visible):
             return ""
         for app in self._CHAT_APPS:
-            if re.search(rf"\b{app}\b", command_lower):
+            if re.search(rf"\b{app}\b", visible):
                 return app
         return ""
 
