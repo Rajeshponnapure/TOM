@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import subprocess
@@ -31,6 +32,18 @@ def _decode_mime_header(value: str) -> str:
         return str(make_header(decode_header(value))).strip()
     except Exception:
         return value.strip()
+
+
+_AUTOMATED_LOCALPARTS = ("noreply", "no-reply", "no_reply", "donotreply", "do-not-reply", "mailer-daemon",
+                         "postmaster", "notifications", "notification", "bounce", "bounces", "newsletter",
+                         "alerts", "automated", "support-noreply")
+
+
+def is_automated_sender(address: str) -> bool:
+    """Bots, mailing lists and bounce addresses: never auto-reply to these (reply loops)."""
+    local = (address or "").lower().split("@", 1)[0]
+    return not local or any(local == p or local.startswith(p + "+") or local.startswith(p + ".")
+                            for p in _AUTOMATED_LOCALPARTS)
 
 
 def classify_email_item(email_item: Dict[str, Any]) -> Dict[str, Any]:
@@ -96,8 +109,81 @@ def classify_email_item(email_item: Dict[str, Any]) -> Dict[str, Any]:
         "summary": f"{subject_prefix} - {body_preview}",
         "reply_subject": reply_subject,
         "reply_body": reply_body,
-        "auto_send": priority == "low",
+        # Was `priority == "low"`, which can never coincide with needs_reply (low
+        # priority never needs one), so EMAIL_AUTO_REPLY_ENABLED did nothing.
+        "auto_send": bool(need_reply and sender_address and not is_automated_sender(sender_address)),
     }
+
+
+class AutoReplyLedger:
+    """Remembers what TOM already auto-replied to, so a re-run or the 5-minute daemon
+    never answers the same message (or the same person) twice."""
+
+    def __init__(self, path: Optional[str] = None, per_sender_seconds: int = 24 * 3600):
+        state_dir = os.environ.get("EMAIL_AGENT_STATE_DIR") or project_path_str("tom_logs")
+        self.path = path or os.path.join(state_dir, "auto_replied.json")
+        self.per_sender_seconds = per_sender_seconds
+
+    def _load(self) -> Dict[str, Any]:
+        try:
+            with open(self.path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def can_reply(self, key: str, sender: str) -> bool:
+        import time
+        data = self._load()
+        if key in data.get("messages", {}):
+            return False
+        last = data.get("senders", {}).get(sender.lower())
+        return not (last and time.time() - float(last) < self.per_sender_seconds)
+
+    def record(self, key: str, sender: str) -> None:
+        import time
+        data = self._load()
+        now = time.time()
+        messages = data.setdefault("messages", {})
+        messages[key] = now
+        senders = data.setdefault("senders", {})
+        senders[sender.lower()] = now
+        for name in ("messages", "senders"):        # keep the file small
+            items = sorted(data[name].items(), key=lambda kv: kv[1])[-500:]
+            data[name] = dict(items)
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            temp = self.path + ".tmp"
+            with open(temp, "w", encoding="utf-8") as handle:
+                json.dump(data, handle)
+            os.replace(temp, self.path)
+        except OSError:
+            pass
+
+
+AUTO_REPLY_FOOTER = "\n\n-- Sent automatically by TOM on behalf of the mailbox owner."
+
+
+async def auto_reply_if_allowed(email_tools: "EmailTools", analysis: Dict[str, Any], ledger: AutoReplyLedger,
+                                body: str, sent_so_far: int = 0) -> Optional[Dict[str, Any]]:
+    """Send an opt-in automatic reply when it is safe; return what was sent, else None.
+
+    Skips: automated senders, our own address, anything already answered, a second
+    mail from the same sender within 24 h, and more than EMAIL_AUTO_REPLY_MAX_PER_RUN per run.
+    """
+    limit = int(os.environ.get("EMAIL_AUTO_REPLY_MAX_PER_RUN", "5") or 5)
+    sender = analysis.get("sender", "")
+    if (sent_so_far >= limit or not analysis.get("auto_send") or not is_valid_address(sender)
+            or sender.lower() == (email_tools.email_address or "").lower()):
+        return None
+    key = f"{analysis.get('id', '')}|{sender.lower()}|{analysis.get('subject', '')}"
+    if not ledger.can_reply(key, sender):
+        return None
+    result = await email_tools.send_email_direct(sender, analysis["reply_subject"], body + AUTO_REPLY_FOOTER)
+    if result.get("status") != "success":
+        return None
+    ledger.record(key, sender)
+    return {"to": sender, "subject": analysis["reply_subject"]}
 
 
 _ADDRESS_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
@@ -123,6 +209,7 @@ class EmailTools:
 
         self.imap_host = os.environ.get("IMAP_HOST", "imap.gmail.com")
         self.imap_port = int(os.environ.get("IMAP_PORT", 993))
+        self.imap_ssl = os.environ.get("IMAP_SSL", "true").strip().lower() not in ("0", "false", "no", "off")
 
         self.connection_pool: Dict[str, Any] = {}
 
@@ -199,7 +286,7 @@ class EmailTools:
 
     async def _connect_imap_generic(self, provider: str) -> Dict[str, Any]:
         try:
-            mail = await asyncio.to_thread(lambda: IMAPClient(host=self.imap_host, port=self.imap_port))
+            mail = await asyncio.to_thread(lambda: IMAPClient(host=self.imap_host, port=self.imap_port, ssl=self.imap_ssl))
             if hasattr(mail, 'login'):
                 await asyncio.to_thread(mail.login, self.email_address, self.email_password)
             self.connection_pool["imap"] = mail
@@ -233,7 +320,8 @@ class EmailTools:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    async def fetch_imap_emails(self, account_type: str = "inbox", max_count: int = 10) -> Dict[str, Any]:
+    async def fetch_imap_emails(self, account_type: str = "inbox", max_count: int = 10,
+                                unread_only: bool = False) -> Dict[str, Any]:
         try:
             mail = await self._get_active_mail_connection()
             if mail is None:
@@ -241,7 +329,8 @@ class EmailTools:
             folder_name = account_type.lower().replace(" ", "")
             await asyncio.to_thread(mail.select_folder, folder_name)
             messages = []
-            seq_nums = await asyncio.to_thread(mail.search, "ALL")
+            # BODY.PEEK below never sets \\Seen, so triage does not mark mail as read.
+            seq_nums = await asyncio.to_thread(mail.search, "UNSEEN" if unread_only else "ALL")
             for seq_num in seq_nums[-max_count:]:
                 msg = await asyncio.to_thread(
                     mail.fetch, [seq_num],

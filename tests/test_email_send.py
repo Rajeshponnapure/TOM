@@ -3,79 +3,11 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncio
-import base64
 import socket
-import socketserver
-import threading
 
 import pytest
 
 from tools.email_tools import EmailTools, is_valid_address
-
-
-class _Handler(socketserver.StreamRequestHandler):
-    def _send(self, line):
-        self.wfile.write((line + "\r\n").encode())
-
-    def handle(self):
-        srv = self.server
-        srv.connections += 1
-        self._send("220 fake ESMTP")
-        while True:
-            raw = self.rfile.readline()
-            if not raw:
-                return
-            line = raw.decode("utf-8", "replace").strip()
-            cmd = line.upper()
-            if cmd.startswith("EHLO"):
-                self.wfile.write(b"250-fake\r\n250 AUTH PLAIN\r\n")
-            elif cmd.startswith("AUTH PLAIN"):
-                token = line.split(None, 2)[2]
-                _, user, pwd = base64.b64decode(token).decode().split("\x00")
-                srv.logins.append((user, pwd))
-                self._send("235 ok" if pwd == srv.password else "535 bad credentials")
-            elif cmd.startswith(("MAIL FROM", "RCPT TO")):
-                self._send("250 ok")
-            elif cmd == "DATA":
-                self._send("354 go")
-                body = []
-                while True:
-                    row = self.rfile.readline().decode("utf-8", "replace")
-                    if row.strip() == ".":
-                        break
-                    body.append(row)
-                srv.messages.append("".join(body))
-                self._send("250 queued")
-            elif cmd == "QUIT":
-                self._send("221 bye")
-                return
-            else:
-                self._send("250 ok")
-
-
-@pytest.fixture
-def smtp_server():
-    class Server(socketserver.ThreadingTCPServer):
-        allow_reuse_address = True
-        daemon_threads = True
-    srv = Server(("127.0.0.1", 0), _Handler)
-    srv.messages, srv.logins, srv.connections, srv.password = [], [], 0, "app-pass"
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    yield srv
-    srv.shutdown()
-    srv.server_close()
-
-
-@pytest.fixture
-def tools(smtp_server, monkeypatch):
-    for key in ("GMAIL_CREDENTIALS_FILE", "GMAIL_TOKEN_FILE"):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("EMAIL_ADDRESS", "tom@example.com")
-    monkeypatch.setenv("EMAIL_PASSWORD", "app-pass")
-    monkeypatch.setenv("SMTP_SERVER", "127.0.0.1")
-    monkeypatch.setenv("SMTP_PORT", str(smtp_server.server_address[1]))
-    monkeypatch.setenv("SMTP_STARTTLS", "false")
-    return EmailTools()
 
 
 def test_address_validation():
@@ -132,3 +64,34 @@ def test_unconfigured_email_says_what_to_set(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     result = asyncio.run(EmailTools().send_email_direct("john@example.com", "Hi", "x"))
     assert result["status"] == "error" and "EMAIL_PASSWORD" in result["message"]
+
+
+# ── inbox: real IMAP conversation against the fake server ───────────────────
+def test_fetch_returns_parsed_headers_and_body(inbox_tools):
+    result = asyncio.run(inbox_tools.fetch_imap_emails("inbox", max_count=10))
+    assert result["status"] == "success" and result["emails_count"] == 3, result
+    first = result["emails"][0]
+    assert first["subject"] == "Urgent: contract deadline"
+    assert "boss@corp.com" in first["from"]
+    assert first["body_preview"].startswith("Please confirm")
+
+
+def test_unread_only_asks_the_server_for_unseen_mail(inbox_tools, imap_server):
+    result = asyncio.run(inbox_tools.fetch_imap_emails("inbox", max_count=10, unread_only=True))
+    assert [e["subject"] for e in result["emails"]] == ["Lunch?"]
+    assert any("UNSEEN" in c.upper() for c in imap_server.commands)
+
+
+def test_fetch_never_marks_mail_as_read(inbox_tools, imap_server):
+    asyncio.run(inbox_tools.fetch_imap_emails("inbox"))
+    fetches = [c for c in imap_server.commands if c.upper().startswith("UID FETCH")]
+    assert fetches and all("BODY.PEEK[" in c.upper() for c in fetches)
+    assert not any("BODY[TEXT]" in c.upper().replace("BODY.PEEK", "") for c in fetches)
+
+
+def test_inbox_triage_classifies_real_fetched_mail(inbox_tools):
+    from tools.email_tools import classify_email_item
+    emails = asyncio.run(inbox_tools.fetch_imap_emails("inbox"))["emails"]
+    priority = {e["subject"]: classify_email_item(e)["priority"] for e in emails}
+    assert priority["Urgent: contract deadline"] == "important"
+    assert priority["Weekly newsletter"] == "low"

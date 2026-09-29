@@ -12,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from langchain_core.prompts import ChatPromptTemplate
 from tools import llm_factory
-from tools.email_tools import EmailTools, classify_email_item as _classify_email_item_fn
+from tools.email_tools import (EmailTools, AutoReplyLedger, auto_reply_if_allowed,
+                               classify_email_item as _classify_email_item_fn)
 from tools.instruction_loader import compose_system_prompt
 
 
@@ -43,6 +44,7 @@ class EmailAgentService:
             self.llm = None
 
         self.email_tools = EmailTools()
+        self.reply_ledger = AutoReplyLedger()
 
         root_dir = Path(__file__).resolve().parents[2]
         log_dir = Path(os.environ.get("EMAIL_AGENT_STATE_DIR", str(root_dir / "tom_logs")))
@@ -345,6 +347,15 @@ class EmailAgentService:
                     if approval_key in opened_important_keys:
                         continue
                     reply_body = await self._draft_reply_body(analysis)
+                    if self.auto_reply_enabled:
+                        # Opt-in (EMAIL_AUTO_REPLY_ENABLED=true): reply for real, once per
+                        # message/sender, never to bots. Otherwise fall through to a draft.
+                        sent = await auto_reply_if_allowed(self.email_tools, analysis, self.reply_ledger,
+                                                           reply_body, len(auto_replied))
+                        if sent:
+                            auto_replied.append(sent)
+                            opened_important_keys.add(approval_key)
+                            continue
                     if analysis["sender"]:
                         draft_result = await self.email_tools.draft_email(
                             analysis["sender"],

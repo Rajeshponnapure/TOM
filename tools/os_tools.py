@@ -1,5 +1,9 @@
+import asyncio
 import subprocess
 import os
+import shutil
+import sys
+import time
 import glob as _glob
 import re as _re
 import logging
@@ -56,6 +60,12 @@ class OSTools:
         if q in self._app_cache:
             return self._app_cache[q]
 
+        if os.name != "nt":
+            result = self._find_application_posix(q)
+            if result:
+                self._app_cache[q] = result
+            return result
+
         result = (
             self._search_start_menu(q)
             or self._search_uwp_apps(q)
@@ -67,6 +77,89 @@ class OSTools:
         if result:
             self._app_cache[q] = result
         return result
+
+    # ── Linux / macOS discovery ──────────────────────────────────────────────
+
+    @staticmethod
+    def _desktop_dirs() -> List[str]:
+        home = os.path.expanduser("~")
+        return [
+            "/usr/share/applications", "/usr/local/share/applications",
+            os.path.join(home, ".local/share/applications"),
+            "/var/lib/flatpak/exports/share/applications",
+            os.path.join(home, ".local/share/flatpak/exports/share/applications"),
+            "/var/lib/snapd/desktop/applications",
+        ]
+
+    @staticmethod
+    def _desktop_name(path: str) -> str:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                in_entry = False
+                for line in handle:
+                    line = line.strip()
+                    if line.startswith("["):
+                        in_entry = line == "[Desktop Entry]"
+                    elif in_entry and line.startswith("Name="):
+                        return line[5:].strip()
+        except OSError:
+            pass
+        return ""
+
+    def _find_application_posix(self, query: str) -> Optional[str]:
+        """macOS: an .app bundle. Linux: an executable on PATH, else a .desktop entry.
+
+        Returns 'mac:<bundle>', 'desktop:<file>' or a plain executable path.
+        """
+        if sys.platform == "darwin":
+            for base in ("/Applications", "/System/Applications", os.path.expanduser("~/Applications")):
+                if os.path.isdir(base):
+                    for name in sorted(os.listdir(base)):
+                        if name.lower().endswith(".app") and query in name[:-4].lower():
+                            return "mac:" + os.path.join(base, name)
+            return shutil.which(query.replace(" ", "-")) or shutil.which(query)
+        on_path = shutil.which(query) or shutil.which(query.replace(" ", "-"))
+        if on_path:
+            return on_path
+        for base in self._desktop_dirs():
+            if not os.path.isdir(base):
+                continue
+            for name in sorted(os.listdir(base)):
+                if not name.endswith(".desktop"):
+                    continue
+                path = os.path.join(base, name)
+                if query in name[:-8].lower() or query in self._desktop_name(path).lower():
+                    return "desktop:" + path
+        return None
+
+    @staticmethod
+    def _launch(cmd: List[str]) -> Optional[str]:
+        """Start a program; return None on success or the reason it failed.
+
+        Popen succeeding only means the process was created, so also look for an
+        immediate non-zero exit (bad path, missing runtime) before claiming success.
+        """
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as exc:
+            return str(exc)
+        time.sleep(0.6)
+        code = proc.poll()
+        if code not in (None, 0):
+            return f"exited immediately with code {code}"
+        return None
+
+    def _launch_posix(self, target: str) -> Optional[str]:
+        if target.startswith("mac:"):
+            return self._launch(["open", target[4:]])
+        if target.startswith("desktop:"):
+            path = target[8:]
+            base = os.path.basename(path)[:-8]
+            for tool in (["gtk-launch", base], ["gio", "launch", path]):
+                if shutil.which(tool[0]):
+                    return self._launch(tool)
+            return "no launcher (gtk-launch/gio) is installed to start a desktop entry"
+        return self._launch([target])
 
     def _search_start_menu(self, query: str) -> Optional[str]:
         """Scan Start Menu .lnk files for a matching app."""
@@ -187,7 +280,12 @@ class OSTools:
 
         # Chrome with profile gets special handling
         if "chrome" in app_lower and profile_id:
-            chrome_path = self.find_application("chrome") or "chrome.exe"
+            if os.name == "nt":
+                chrome_path = self.find_application("chrome") or "chrome.exe"
+            else:
+                chrome_path = next((shutil.which(n) for n in ("google-chrome", "google-chrome-stable", "chromium",
+                                                                 "chromium-browser", "chrome") if shutil.which(n)),
+                                   "google-chrome")
             # SECURITY: argument list, no shell — profile_id cannot inject a command.
             # Also constrain profile_id to Chrome's real format (Default / Profile N).
             safe_profile = _re.sub(r"[^A-Za-z0-9 _-]", "", str(profile_id))[:64] or "Default"
@@ -204,7 +302,18 @@ class OSTools:
         # Dynamic discovery for any app
         launch_path = self.find_application(app_lower)
 
-        if launch_path:
+        if launch_path and os.name != "nt":
+            problem = await asyncio.to_thread(self._launch_posix, launch_path)
+            if problem:
+                result["status"] = "error"
+                result["message"] = f"Found {app_name} ({launch_path}) but could not launch it: {problem}"
+            else:
+                result["message"] = f"Opened {app_name} ({launch_path})"
+        elif os.name != "nt":
+            result["status"] = "error"
+            result["message"] = (f"Could not find '{app_name}' on this computer. "
+                                 f"Searched: PATH and installed application entries.")
+        elif launch_path:
             try:
                 if launch_path.startswith("shell:AppsFolder"):
                     subprocess.Popen(

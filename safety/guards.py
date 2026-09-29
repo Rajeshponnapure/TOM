@@ -496,6 +496,12 @@ class SafetyGuards:
             for candidate in (normalized_bs, as_windows):
                 if candidate == unsafe or candidate.startswith(unsafe + "\\"):
                     return False
+        if os.name != "nt":
+            # Linux/macOS system trees. (Home folders, /tmp, /mnt, /media stay usable.)
+            posix_unsafe = ("/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/proc", "/sbin",
+                            "/sys", "/usr", "/system", "/library", "/applications", "/private/etc")
+            if normalized == "/" or any(normalized == u or normalized.startswith(u + "/") for u in posix_unsafe):
+                return False
         posix_view = path.lower().replace("\\", "/")
         if "/sys/" in posix_view or "/proc/" in posix_view:
             return False
