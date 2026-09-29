@@ -120,7 +120,7 @@ def make_memory(bank_id: str, offline: bool):
     from tools.hindsight_memory import HindsightMemory
     if offline:
         sys.path.insert(0, str(ROOT / "tests"))
-        from fake_hindsight import FakeHindsight
+        from fake_hindsight import FakeHindsight  # type: ignore[import-not-found]
         mem = HindsightMemory(client=FakeHindsight(), bank_id=bank_id,
                               state_dir=DEMO_DIR / "sandbox" / "memory_state")
         mem.enabled = True
