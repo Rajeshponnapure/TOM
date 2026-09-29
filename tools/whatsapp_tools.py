@@ -26,6 +26,11 @@ except ImportError:
     _PYAUTOGUI_OK = False
 
 
+def _css_quote(text: str) -> str:
+    """Escape a value for use inside a double-quoted CSS attribute selector."""
+    return str(text).replace("\\", "\\\\").replace('"', '\\"')
+
+
 class WhatsAppTools:
     def __init__(self, browser_tools=None):
         self.browser_tools = browser_tools
@@ -210,7 +215,7 @@ class WhatsAppTools:
             await asyncio.sleep(1.5)
 
             contact = await page.wait_for_selector(
-                f'span[title*="{contact_name}" i]',
+                f'span[title*="{_css_quote(contact_name)}" i]',
                 timeout=8000,
             )
             if not contact:
@@ -324,22 +329,21 @@ class WhatsAppTools:
             await asyncio.sleep(1.5)
 
             contact = await page.wait_for_selector(
-                f'span[title*="{contact_name}" i]', timeout=8000,
+                f'span[title*="{_css_quote(contact_name)}" i]', timeout=8000,
             )
             await contact.click()
             await asyncio.sleep(1)
 
-            messages = await page.evaluate(f"""() => {{
+            messages = await page.evaluate("""([count, who]) => {
                 const msgs = document.querySelectorAll('div.message-in, div.message-out');
                 const result = [];
-                const slice = Array.from(msgs).slice(-{count});
-                for (const m of slice) {{
+                for (const m of Array.from(msgs).slice(-count)) {
                     const text = m.querySelector('span.selectable-text');
                     const isOut = m.classList.contains('message-out');
-                    if (text) result.push({{ from: isOut ? 'You' : '{contact_name}', text: text.innerText }});
-                }}
+                    if (text) result.push({ from: isOut ? 'You' : who, text: text.innerText });
+                }
                 return result;
-            }}""")
+            }""", [int(count), contact_name])
 
             return {
                 "status": "success",

@@ -398,16 +398,24 @@ CRITICAL RULES:
             flags=re.IGNORECASE,
         ).strip()
 
+        wa = r'(?:\s+(?:on|via|through|using)\s+whats\s*app)?'
+        verb = r'(?:send|text|message|tell|write)'
         patterns = [
+            # send Madhu a message on WhatsApp saying hello / text Madhu a message: hi
+            rf'^{verb}\s+(.+?)\s+(?:an?\s+)?(?:message|msg|text){wa}\s*(?:saying|that says|which says|:)\s*(.+)$',
+            # message Madhu on WhatsApp: happy birthday  (a colon marks where the message starts)
+            rf'^{verb}\s+(?:to\s+)?((?:(?!to\b)[A-Za-z][\w.\']*)(?:\s+(?!to\b)[A-Za-z][\w.\']*){{0,2}}){wa}\s*:\s*(.+)$',
             # send hello to Madhu on WhatsApp
             r'^(?:send|text|message|tell|write|say)\s+(.+?)\s+to\s+(.+?)(?:\s+(?:on|via|through|using)\s+whats\s*app)?$',
             # send to Madhu hello
             r'^(?:send|text|message|tell|write|say)\s+to\s+(.+?)\s+(.+?)$',
-            # WhatsApp Madhu saying hello
-            r'^(?:whats\s*app\s+)?(.+?)\s+(?:saying|say|text|message|tell)\s+(.+?)$',
+            # WhatsApp Madhu saying hello (a leading verb means "text Madhu saying hi", handled below)
+            r'^(?!(?:send|text|message|tell|write|say)\b)(?:whats\s*app\s+)?(.+?)\s+(?:saying|say|text|message|tell)\s+(.+?)$',
             # text Madhu hello / open WhatsApp and text Madhu hello
             r'^(?:send|text|message|tell|write|say)\s+([A-Za-z][A-Za-z0-9_. -]{1,60}?)\s+(.+?)$',
         ]
+        # patterns 0-1 and 3-5 read (contact, message); pattern 2 reads (message, contact)
+        message_first = {2}
 
         for idx, pattern in enumerate(patterns):
             match = re.search(pattern, clean, re.IGNORECASE)
@@ -416,13 +424,18 @@ CRITICAL RULES:
 
             first = match.group(1).strip().strip(".,")
             second = match.group(2).strip().strip(".,")
-            if idx == 0:
+            if idx in message_first:
                 message, contact = first, second
             else:
                 contact, message = first, second
 
             contact = re.sub(r'\s+(?:on|via|through|using)\s+whats\s*app$', '', contact, flags=re.IGNORECASE).strip()
             message = re.sub(r'\s+(?:on|via|through|using)\s+whats\s*app$', '', message, flags=re.IGNORECASE).strip()
+            # "text Madhu on whatsapp saying hi" -> the message is just "hi"
+            message = re.sub(r'^(?:(?:on|via|through|using)\s+whats\s*app\s*[:,-]?\s*)?(?:(?:saying|that says|which says)\s+)?',
+                             '', message, flags=re.IGNORECASE).strip()
+            if re.match(r'^tell\b', clean, re.IGNORECASE):
+                message = re.sub(r'^that\s+', '', message, flags=re.IGNORECASE)   # "tell Madhu that we're late"
             if contact and message and contact.lower() not in {"whatsapp", "whats app"}:
                 return {"contact": contact, "message": message}
 
@@ -483,7 +496,8 @@ CRITICAL RULES:
         if any(x in c for x in ("inbox", "triage", "check email", "review email", "summarize email", "unread")):
             return "email_inbox"
 
-        if any(x in c for x in ("send email", "send the email", "email now", "send this email")):
+        if (re.search(r"\bsend\s+(?:(?:an?|the|this|that|my|another|new)\s+)*(?:e-?mail|mail)\b(?!\s+(?:summary|digest|report)\b)", c)
+                or "email now" in c):
             return "send_email"
 
         # "write an email to Ravi …", "email Ravi about the budget", "draft a mail for HR"
@@ -491,7 +505,7 @@ CRITICAL RULES:
         _email_verb = re.match(
             r"^\s*(?:please\s+)?(?:(?:write|draft|compose|prepare)\s+(?:an?\s+|the\s+)?(?:e-?mail|mail)"
             r"|e-?mail\s+(?!inbox\b)[a-z])", c)
-        if _email_verb and not any(x in c for x in ("send email", "send the email", "send this email")):
+        if _email_verb:
             return "write_email"
 
         if any(x in c for x in ("write email", "draft email", "compose email", "email to", "write a mail",

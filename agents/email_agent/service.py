@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama import ChatOllama
+from tools import llm_factory
 from tools.email_tools import EmailTools, classify_email_item as _classify_email_item_fn
 from tools.instruction_loader import compose_system_prompt
 
@@ -37,7 +37,8 @@ class EmailAgentService:
         self.base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
         self.llm = None
         try:
-            self.llm = ChatOllama(model=self.model_name, base_url=self.base_url, temperature=0.1)
+            # Provider-aware (hosted Groq by default, Ollama on opt-in), same as the main app.
+            self.llm = llm_factory.make_chat_model(llm_factory.resolve_model("fast"), temperature=0.1)
         except Exception:
             self.llm = None
 

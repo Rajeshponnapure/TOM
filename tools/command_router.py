@@ -50,16 +50,19 @@ class CommandRouter:
             return RouteDecision("automation", "manage_agent", "manage_agent_daemon", confidence=0.95)
 
         # Communication
+        # Sending is checked before the inbox test: "send an email to Ravi about
+        # the review" contains "email" + "review" and was being read as
+        # "review my inbox" (or, without "send email" verbatim, as a mere draft).
+        if self._is_email_send_request(lower):
+            return RouteDecision(
+                "sensitive", "send_email", "execute_email_send",
+                needs_approval=True, confidence=0.95,
+            )
+
         if self._is_email_inbox_request(lower):
             return RouteDecision(
                 "communication", "email_inbox_workflow", "execute_email_inbox_workflow",
                 confidence=0.94,
-            )
-
-        if any(token in lower for token in ("send email", "send the email", "email now")):
-            return RouteDecision(
-                "sensitive", "send_email", "execute_email_send",
-                needs_approval=True, confidence=0.95,
             )
 
         if any(token in lower for token in ("write email", "draft email", "email to", "mail to")):
@@ -155,6 +158,17 @@ class CommandRouter:
         return any(keyword in lower for keyword in instagram_keywords) and any(
             action in lower for action in ("scroll", "report", "email", "send", "summarize", "extract", "check")
         )
+
+    _SEND_EMAIL = re.compile(
+        r"\bsend\s+(?:(?:an?|the|this|that|my|another|new)\s+)*(?:e-?mail|mail)\b(?!\s+(?:summary|digest|report)\b)"
+        r"|\bemail\s+now\b"
+    )
+
+    def _is_email_send_request(self, lower: str) -> bool:
+        """'send [an/the] email|mail ...' / 'email now' - but not 'send an email summary of my inbox'."""
+        if "inbox" in lower:
+            return False
+        return bool(self._SEND_EMAIL.search(lower))
 
     def _is_email_inbox_request(self, lower: str) -> bool:
         inbox_tokens = (

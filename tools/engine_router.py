@@ -204,6 +204,11 @@ class EngineRouter:
         if re.search(r"\b(revert|undo|roll ?back|restore)\b.*\b(downloads|folder|files|changes|what you (?:have )?done)\b", c) or \
            re.search(r"\b(organi[sz]e|tidy(?: up)?|clean ?up|declutter|sort(?: out)?)\b.*\b(folder|downloads|desktop|documents|files|photos|pictures)\b", c) or \
            re.search(r"\bfind (all |every )?[\w*.]*\s*(files|pdfs|images|photos|documents)\b", c) or \
+           re.search(r"\b(move|put|relocate|transfer)\b.*\b(pdfs?|images?|photos?|pictures|videos?|songs|"
+                     r"spreadsheets?|zips?|archives?|installers?|files)\b.*\b(folder|subfolder|downloads|desktop|"
+                     r"documents|pictures|photos|into|to)\b", c) or \
+           re.search(r"\b(move|put|relocate|transfer)\b.*\b(docs?|documents|music|audio|slides|presentations?)\b"
+                     r".*\b(folder|subfolder|downloads|desktop|pictures)\b", c) or \
            re.search(r"\b(bulk rename|rename all)\b", c) or \
            re.search(r"\b(zip|compress)\b.*\b(folder|directory|downloads|documents)\b", c) or \
            re.search(r"\bconvert\b.*\b(images?|photos?|pngs?|jpe?gs?)\b", c):
@@ -680,18 +685,62 @@ class EngineRouter:
                         f"Code run ({label}):\n{res.get('message', '')[:1500]}", raw=res)
 
     # ── File operations (Phase B2) — destructive steps approval-gated ────
+    _KNOWN_FOLDER_WORDS = ("downloads", "documents", "desktop", "pictures", "photos", "music", "videos")
+    _PATH_TOKEN = (r"[\"']([^\"']+[\\/][^\"']*)[\"']"          # quoted path
+                   r"|((?<![\w])(?:[a-z]:\\[^\s\"]+|~?/[^\s\"]+))")   # C:\x or /x (never "type/year")
+    _MOVE_TYPES = (
+        (r"pdfs?", ("ext", ".pdf")), (r"images?|photos?|pictures", ("group", "Images")),
+        (r"videos?|movies", ("group", "Video")), (r"music|songs?|audio|mp3s?", ("group", "Audio")),
+        (r"spreadsheets?|excel files?|csvs?", ("group", "Spreadsheets")),
+        (r"presentations?|slides|slide decks?", ("group", "Presentations")),
+        (r"zips?|archives?", ("group", "Archives")), (r"installers?", ("group", "Installers")),
+        (r"word docs?|docx", ("ext", ".docx")), (r"text files?|txt", ("ext", ".txt")),
+    )
+
+    @classmethod
+    def _pick_folder(cls, command: str) -> str:
+        """The folder a file command is about.
+
+        An explicit path wins, then the folder named after in/from/inside/of, then the
+        first folder mentioned. ("organize my pdf documents in downloads" is about
+        Downloads - "documents" there describes the files.)
+        """
+        path = re.search(cls._PATH_TOKEN, command, re.IGNORECASE)
+        if path:
+            return path.group(1) or path.group(2)
+        words = "|".join(cls._KNOWN_FOLDER_WORDS)
+        after_prep = re.search(rf"\b(?:in|from|inside|within|of|under)\s+(?:my\s+|the\s+)?({words})\b",
+                               command, re.IGNORECASE)
+        if after_prep:
+            return after_prep.group(1)
+        bare = re.search(rf"\b(?:my\s+)?({words})\b", command, re.IGNORECASE)
+        return bare.group(1) if bare else "downloads"
+
+    @classmethod
+    def _parse_move_request(cls, command: str):
+        """('ext'|'group', value) and a destination subfolder for 'move the pdfs ... into Invoices'."""
+        low = command.lower()
+        spec = next((s for pat, s in cls._MOVE_TYPES if re.search(rf"\b(?:{pat})\b", low)), None)
+        if spec is None:
+            ext = re.search(r"(?<![\w/\\])\.([a-z0-9]{2,5})\b", low)
+            spec = ("ext", "." + ext.group(1)) if ext else None
+        skip = {"the", "a", "an", "my", "new", "folder", "subfolder", "directory", "named", "called"}
+        dest = ""
+        for m in re.finditer(
+                r"\b(?:into|to)\s+(?:(?:an?|the|my|new)\s+)*(?:(?:sub)?folder\s+|directory\s+)?"
+                r"(?:(?:named|called)\s+)?[\"']?([A-Za-z0-9][\w-]*)[\"']?", command, re.IGNORECASE):
+            name = m.group(1)
+            if name.lower() not in skip:
+                dest = name
+        return spec, dest
+
     async def _run_fileops(self, command: str) -> Dict[str, Any]:
         from tools.file_ops import FileOps, resolve_folder
         ops = FileOps()
         c = command.lower()
 
         # Match on the original text so Linux/macOS paths keep their case.
-        folder_m = re.search(
-            r"[\"']([^\"']+[\\/][^\"']*)[\"']"
-            r"|(?:\bin|\bfrom|\bof)?\s*(?:my\s+)?(downloads|documents|desktop|pictures|photos|music|videos"
-            r"|[a-z]:\\[^\s\"]+|~?/[^\s\"]+)",
-            command, re.IGNORECASE)
-        folder = (folder_m.group(1) or folder_m.group(2)) if folder_m else "downloads"
+        folder = self._pick_folder(command)
 
         # Undo is supported only for TOM's own recorded organization actions.
         # It must route here; otherwise an LLM can only describe an undo, not perform one.
@@ -739,6 +788,20 @@ class EngineRouter:
                 return self._ok("engine_fileops",
                                 "Tell me the pattern, e.g.: bulk rename in downloads 'IMG_' to 'Holiday_'")
             plan = ops.plan_bulk_rename(folder, pat_m.group(1), pat_m.group(2))
+        elif re.search(r"\b(move|put|relocate|transfer)\b", c):
+            spec, dest = self._parse_move_request(command)
+            if spec is None:
+                return self._ok("engine_fileops", "Which files should I move? For example: "
+                                "'move the pdfs in downloads into a folder called Invoices'.")
+            if not dest:
+                return self._ok("engine_fileops", "Which folder should they go into? For example: "
+                                "'move the pdfs in downloads into a folder called Invoices'.")
+            if dest.lower() in self._KNOWN_FOLDER_WORDS:
+                return self._ok("engine_fileops", f"I can only move files into a subfolder of the folder "
+                                f"they are in, not into {dest.title()}. Name a subfolder instead.")
+            kind, value = spec
+            plan = (ops.plan_move_by_extension(folder, value, dest) if kind == "ext"
+                    else ops.plan_move_by_group(folder, value, dest))
         elif re.search(r"\bpdfs?\b", c):
             # A request naming PDFs is deliberately narrow: do not turn it into
             # a whole-folder, type-based organization.

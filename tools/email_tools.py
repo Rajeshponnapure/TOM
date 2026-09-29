@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import subprocess
 from email.header import decode_header, make_header
 from email.mime.multipart import MIMEMultipart
@@ -99,6 +100,13 @@ def classify_email_item(email_item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_ADDRESS_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+
+
+def is_valid_address(value: str) -> bool:
+    return bool(value) and bool(_ADDRESS_RE.match(value.strip()))
+
+
 class EmailTools:
     def __init__(self):
         self.gmail_credentials_file = os.environ.get("GMAIL_CREDENTIALS_FILE", "")
@@ -109,7 +117,9 @@ class EmailTools:
 
         self.gsmtp_server = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
         self.gsmtp_port = int(os.environ.get("SMTP_PORT", 587))
-        self.smtp_starttls = True
+        # STARTTLS is on by default (Gmail, Outlook); SMTP_STARTTLS=false is for a
+        # local/relay server without TLS. Port 465 uses implicit TLS instead.
+        self.smtp_starttls = os.environ.get("SMTP_STARTTLS", "true").strip().lower() not in ("0", "false", "no", "off")
 
         self.imap_host = os.environ.get("IMAP_HOST", "imap.gmail.com")
         self.imap_port = int(os.environ.get("IMAP_PORT", 993))
@@ -364,6 +374,9 @@ class EmailTools:
         """
         from safety.guards import SafetyGuards
 
+        if not is_valid_address(recipient):
+            return {"status": "error", "message": f"'{recipient}' is not an email address. Give me the full address (name@example.com)."}
+
         safe_print(f"\nTOM EMAIL SEND CHECK:")
         safe_print(f"To: {recipient}")
         safe_print(f"Subject: {subject}")
@@ -378,11 +391,12 @@ class EmailTools:
             return {"status": "cancelled", "message": "No approval mechanism available."}
 
         try:
-            email_connection = await self._prepare_email_sender()
-            if not email_connection["success"]:
-                return {"status": "error", "message": email_connection.get("message", "Connection failed")}
             message = self._compose_email_message(recipient, subject, body, attachments)
-            await asyncio.to_thread(email_connection["sender"].send_message, message)
+            delivered = await self._deliver(message)
+            if delivered["status"] != "success":
+                SafetyGuards().log_action("EMAIL_SEND_ERROR", target=recipient, status="FAILURE",
+                                          message=delivered.get("message", ""))
+                return delivered
             safety = SafetyGuards()
             safety.log_action("EMAIL_SENT", target=recipient, status="SUCCESS")
             return {"status": "success", "message": "Email sent successfully!", "safety_logged": True}
@@ -394,12 +408,15 @@ class EmailTools:
     async def send_email_direct(self, recipient: str, subject: str, body: str,
                                  attachments: Optional[List[str]] = None) -> Dict[str, Any]:
         from safety.guards import SafetyGuards
+        if not is_valid_address(recipient):
+            return {"status": "error", "message": f"'{recipient}' is not an email address. Give me the full address (name@example.com)."}
         try:
-            email_connection = await self._prepare_email_sender()
-            if not email_connection["success"]:
-                return {"status": "error", "message": email_connection.get("message", "Connection failed")}
             message = self._compose_email_message(recipient, subject, body, attachments)
-            await asyncio.to_thread(email_connection["sender"].send_message, message)
+            delivered = await self._deliver(message)
+            if delivered["status"] != "success":
+                SafetyGuards().log_action("EMAIL_SEND_ERROR", target=recipient, status="FAILURE",
+                                          message=delivered.get("message", ""))
+                return delivered
             safety = SafetyGuards()
             safety.log_action("EMAIL_SENT", target=recipient, status="SUCCESS", message="Automated reply sent")
             return {"status": "success", "message": "Email sent successfully!", "safety_logged": True}
@@ -408,25 +425,76 @@ class EmailTools:
             safety.log_action("EMAIL_SEND_ERROR", target=recipient, status="FAILURE", message=str(e))
             return {"status": "error", "message": f"Failed to send email: {str(e)}"}
 
+    def _open_password_smtp(self) -> smtplib.SMTP:
+        """Blocking: connect + authenticate with EMAIL_ADDRESS / EMAIL_PASSWORD (app password)."""
+        if self.gsmtp_port == 465:
+            server = smtplib.SMTP_SSL(self.gsmtp_server, self.gsmtp_port, timeout=30)
+            server.ehlo()
+        else:
+            server = smtplib.SMTP(self.gsmtp_server, self.gsmtp_port, timeout=30)
+            server.ehlo()
+            if self.smtp_starttls:
+                server.starttls()
+                server.ehlo()
+        if self.email_address and self.email_password:
+            server.login(self.email_address, self.email_password)
+        return server
+
     async def _prepare_email_sender(self) -> Dict[str, Any]:
         try:
-            if "gmail_oauth_smtp" in self.connection_pool:
-                return {"success": True, "sender": self.connection_pool["gmail_oauth_smtp"], "connection_type": "oauth2"}
-            connect_result = await self.connect_email_service()
-            if connect_result.get("status") != "success":
-                return {"success": False, "message": connect_result.get("message", "SMTP connection failed")}
-            if "gmail_oauth_smtp" in self.connection_pool:
-                return {"success": True, "sender": self.connection_pool["gmail_oauth_smtp"], "connection_type": "oauth2"}
-            return {"success": False, "message": "SMTP connection was not established"}
+            for key, kind in (("gmail_oauth_smtp", "oauth2"), ("smtp", "password")):
+                if key in self.connection_pool:
+                    return {"success": True, "sender": self.connection_pool[key], "connection_type": kind}
+
+            if self.gmail_credentials_file:
+                connect_result = await self.connect_email_service()
+                if connect_result.get("status") != "success":
+                    return {"success": False, "message": connect_result.get("message", "SMTP connection failed")}
+                if "gmail_oauth_smtp" in self.connection_pool:
+                    return {"success": True, "sender": self.connection_pool["gmail_oauth_smtp"], "connection_type": "oauth2"}
+                return {"success": False, "message": "SMTP connection was not established"}
+
+            # No OAuth client file: send with the app-password settings from .env.
+            # (Sending previously only worked through Gmail OAuth, although
+            # EMAIL_PASSWORD/SMTP_* are documented in .env.example.)
+            if not self.email_address or not self.email_password:
+                return {"success": False,
+                        "message": "Email is not configured. Set EMAIL_ADDRESS and EMAIL_PASSWORD "
+                                   "(an app password) or GMAIL_CREDENTIALS_FILE in .env."}
+            server = await asyncio.to_thread(self._open_password_smtp)
+            self.connection_pool["smtp"] = server
+            return {"success": True, "sender": server, "connection_type": "password"}
         except Exception as e:
             return {"success": False, "message": f"Failed to prepare sender: {str(e)}"}
+
+    async def _deliver(self, message: MIMEMultipart) -> Dict[str, Any]:
+        """Send a composed message; reconnect once if a pooled connection went stale."""
+        last_error = "Connection failed"
+        for attempt in range(2):
+            connection = await self._prepare_email_sender()
+            if not connection["success"]:
+                return {"status": "error", "message": connection.get("message", "Connection failed")}
+            try:
+                await asyncio.to_thread(connection["sender"].send_message, message)
+                return {"status": "success"}
+            except (smtplib.SMTPServerDisconnected, ConnectionError, TimeoutError, OSError) as exc:
+                last_error = str(exc) or exc.__class__.__name__
+                for key in ("gmail_oauth_smtp", "smtp"):
+                    stale = self.connection_pool.pop(key, None)
+                    if stale is not None:
+                        try:
+                            await asyncio.to_thread(stale.close)
+                        except Exception:
+                            pass
+        return {"status": "error", "message": last_error}
 
     def _compose_email_message(self, recipient: str, subject: str, body: str,
                                 attachments: Optional[List[str]] = None) -> MIMEMultipart:
         msg = MIMEMultipart()
-        msg['Subject'] = subject
+        # CR/LF in a header value would let text smuggle in extra headers (Bcc:, ...).
+        msg['Subject'] = " ".join(str(subject or "").split())
         msg['From'] = self.email_address if self.email_address else "your-email@gmail.com"
-        msg['To'] = recipient
+        msg['To'] = recipient.strip()
         msg.attach(MIMEText(body, 'plain'))
 
         if attachments:

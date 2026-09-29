@@ -1,4 +1,5 @@
 import os
+import ntpath
 import datetime
 import json
 import re
@@ -482,6 +483,9 @@ class SafetyGuards:
         except (OSError, ValueError):
             return False
         normalized_bs = normalized.replace("/", "\\")
+        # Also judge the path as written as a Windows path (ntpath is platform
+        # independent), so "C:/Windows/.." style input is caught on any host.
+        as_windows = ntpath.normpath(path.replace("/", "\\")).lower()
         unsafe_prefixes = (
             "c:\\windows",
             "c:\\program files",
@@ -489,8 +493,9 @@ class SafetyGuards:
             "c:\\programdata",
         )
         for unsafe in unsafe_prefixes:
-            if normalized_bs == unsafe or normalized_bs.startswith(unsafe + "\\"):
-                return False
+            for candidate in (normalized_bs, as_windows):
+                if candidate == unsafe or candidate.startswith(unsafe + "\\"):
+                    return False
         posix_view = path.lower().replace("\\", "/")
         if "/sys/" in posix_view or "/proc/" in posix_view:
             return False

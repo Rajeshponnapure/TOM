@@ -820,11 +820,21 @@ class TomAgent:
                 # category "communication" but still flagged). Skip when the
                 # safety gate above already collected approval for this command.
                 if route.needs_approval and not already_approved:
+                    approval_summary = f"Approve: {command}"
+                    approval_details = dict(route.metadata)
+                    if route.intent == "whatsapp_message":
+                        # Show the parsed recipient and text, not just the raw command,
+                        # so a mis-parse is caught before anything is sent.
+                        wa = self.nlp_parser._extract_whatsapp_details(command)
+                        if wa:
+                            approval_summary = (f"Send WhatsApp message to {wa['contact']}: "
+                                                f"\"{wa['message'][:300]}\"")
+                            approval_details.update({"to": wa["contact"], "message": wa["message"]})
                     approved = await asyncio.to_thread(
                         self.approval_manager.request_approval,
                         ApprovalRequest(
-                            action=route.intent, summary=f"Approve: {command}",
-                            details=route.metadata, risk_level="high",
+                            action=route.intent, summary=approval_summary,
+                            details=approval_details, risk_level="high",
                         ),
                     )
                     if not approved:
@@ -1426,6 +1436,16 @@ class TomAgent:
                     profile_query = match.group(1).strip()
             return await asyncio.to_thread(self.chrome_profiles.launch_profile, profile_query)
 
+        chat_app = self._unsupported_chat_app(command_lower)
+        if chat_app:
+            opened = await self.os_tools.open_application(chat_app)
+            opened_note = (f"I opened {chat_app.title()}, but " if opened.get("status") == "success"
+                           else f"I could not open {chat_app.title()}, and ")
+            return {"status": "unsupported", "response_type": "chat_app_unsupported",
+                    "message": (opened_note + "I can't type or send messages in it yet, so nothing was sent. "
+                                "TOM can send messages through WhatsApp, and email."),
+                    "open_result": opened}
+
         app_name = (parsed or {}).get("app_name") or self._extract_app_name(command)
         if not app_name:
             app_name = command_lower.replace("open ", "").replace("launch ", "").replace("start ", "").strip()
@@ -1434,6 +1454,23 @@ class TomAgent:
 
         safe_print(f"\n[SEARCH] Looking for '{app_name}'...")
         return await self.os_tools.open_application(app_name)
+
+    _CHAT_APPS = ("telegram", "discord", "slack", "signal", "messenger", "skype", "viber", "teams", "sms")
+    _CHAT_VERBS = re.compile(r"\b(?:text|message|msg|dm|say|tell|reply|chat with|send)\b")
+
+    def _unsupported_chat_app(self, command_lower: str) -> str:
+        """A 'message X on <app>' request for a chat app other than WhatsApp.
+
+        Only WhatsApp (and email) can be driven end to end. For any other chat app
+        the request used to fall into a plain 'open the app' and report success,
+        silently dropping the message.
+        """
+        if not self._CHAT_VERBS.search(command_lower):
+            return ""
+        for app in self._CHAT_APPS:
+            if re.search(rf"\b{app}\b", command_lower):
+                return app
+        return ""
 
     def _extract_app_name(self, command: str) -> str:
         c = command.lower().strip()
@@ -1970,16 +2007,18 @@ class TomAgent:
 
     async def execute_email_send_flow(self, command: str, parsed: Dict) -> Dict[str, Any]:
         """Send an email with LLM-generated content and async approval."""
-        recipient = parsed.get("email_address") or parsed.get("recipient_name") or ""
         parsed_subject = parsed.get("subject") or ""
         parsed_body = parsed.get("message_body") or ""
 
+        # Only a real address can be sent to. A bare name ("email Ravi") used to be
+        # passed straight to SMTP and failed there with an opaque server error.
+        match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', command)
+        recipient = parsed.get("email_address") or (match.group(1) if match else "")
         if not recipient:
-            match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', command)
-            if match:
-                recipient = match.group(1)
-        if not recipient:
-            return {"status": "error", "message": "Could not extract email address."}
+            who = CommandParser._clean_name(parsed.get("recipient_name") or parsed.get("person_name") or "")
+            return {"status": "error",
+                    "message": (f"I need {who}'s email address to send this (e.g. name@example.com)."
+                                if who else "I need the recipient's email address (e.g. name@example.com).")}
 
         # If we don't have a real body, use LLM to write the whole email
         if not parsed_body or len(parsed_body.strip()) < 20:
@@ -2020,11 +2059,16 @@ class TomAgent:
         safe_print(f"\n[EMAIL] To: {recipient} | Subject: {subject}")
 
         # Approval callback for non-blocking send
+        # The user must approve the actual message. The earlier gate only saw the
+        # command text; the subject/body (often LLM-written) exist only now.
         async def approve_send(rec, subj, bdy):
-            safe_print(f"\nAPPROVAL NEEDED: Send email to {rec}")
-            safe_print(f"Subject: {subj}")
-            safe_print(f"Body: {bdy[:200]}...")
-            return True  # Approval handled by ApprovalManager upstream
+            request = ApprovalRequest(
+                action="send_email",
+                summary=f"Send this email to {rec}?\nSubject: {subj}\n\n{bdy[:800]}",
+                details={"to": rec, "subject": subj},
+                risk_level="high",
+            )
+            return await asyncio.to_thread(self.approval_manager.request_approval, request)
 
         result = await self.email_tools.send_email(recipient, subject, body, approval_callback=approve_send)
         return result
