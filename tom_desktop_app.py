@@ -2707,8 +2707,10 @@ class TomDesktopApp:
             self.memory_status_var.set("TOM is still initializing — open this view again in a few seconds.")
             return
         st = mem.status()
+        total = st.get('total_memories', 0)
+        total_str = f" ({total} total in Hindsight)" if total >= 0 else " (total unknown)"
         self.memory_status_var.set(
-            f"{mem.status_line()}   ·   this session: {st['retained']} stored, "
+            f"{mem.status_line()}{total_str}   ·   this session: {st['retained']} stored, "
             f"{st['failed']} failed, {st['recalled']} recalls, {st['reflected']} reflections")
         lines = []
         for item in mem.recent_journal(limit=30):

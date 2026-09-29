@@ -466,6 +466,23 @@ class HindsightMemory:
             self.last_error = f"list_memories: {describe_error(exc)}"
             return []
 
+    def get_total_count(self) -> int:
+        """Get total number of memories stored in Hindsight bank."""
+        if not self.available:
+            return 0
+        try:
+            resp = self._call(self.client.list_memories, bank_id=self.bank_id, limit=1)
+            # Some Hindsight API versions return total count in response
+            total = getattr(resp, "total", None)
+            if total is not None:
+                return int(total)
+            # Fallback: if no total, we can't easily get exact count without pagination
+            # Return -1 to indicate unknown
+            return -1
+        except Exception as exc:
+            self.last_error = f"get_total_count: {describe_error(exc)}"
+            return -1
+
     # ── status ───────────────────────────────────────────────────────────
     def status(self) -> Dict[str, Any]:
         return {
@@ -474,6 +491,7 @@ class HindsightMemory:
             "base_url": self.base_url,
             "bank_id": self.bank_id,
             "pending": self.pending_count(),
+            "total_memories": self.get_total_count(),
             "last_error": self.last_error,
             **self.stats,
         }
