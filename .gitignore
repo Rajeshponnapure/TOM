@@ -56,3 +56,5 @@ demo/sandbox/
 demo/.demo_env
 content_drafts/
 .freebuff/
+google-credentials.json
+google-credentials_token.json
