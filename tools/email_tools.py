@@ -1,5 +1,7 @@
 import asyncio
+import json
 import os
+import re
 import subprocess
 from email.header import decode_header, make_header
 from email.mime.multipart import MIMEMultipart
@@ -30,6 +32,18 @@ def _decode_mime_header(value: str) -> str:
         return str(make_header(decode_header(value))).strip()
     except Exception:
         return value.strip()
+
+
+_AUTOMATED_LOCALPARTS = ("noreply", "no-reply", "no_reply", "donotreply", "do-not-reply", "mailer-daemon",
+                         "postmaster", "notifications", "notification", "bounce", "bounces", "newsletter",
+                         "alerts", "automated", "support-noreply")
+
+
+def is_automated_sender(address: str) -> bool:
+    """Bots, mailing lists and bounce addresses: never auto-reply to these (reply loops)."""
+    local = (address or "").lower().split("@", 1)[0]
+    return not local or any(local == p or local.startswith(p + "+") or local.startswith(p + ".")
+                            for p in _AUTOMATED_LOCALPARTS)
 
 
 def classify_email_item(email_item: Dict[str, Any]) -> Dict[str, Any]:
@@ -95,8 +109,88 @@ def classify_email_item(email_item: Dict[str, Any]) -> Dict[str, Any]:
         "summary": f"{subject_prefix} - {body_preview}",
         "reply_subject": reply_subject,
         "reply_body": reply_body,
-        "auto_send": priority == "low",
+        # Was `priority == "low"`, which can never coincide with needs_reply (low
+        # priority never needs one), so EMAIL_AUTO_REPLY_ENABLED did nothing.
+        "auto_send": bool(need_reply and sender_address and not is_automated_sender(sender_address)),
     }
+
+
+class AutoReplyLedger:
+    """Remembers what TOM already auto-replied to, so a re-run or the 5-minute daemon
+    never answers the same message (or the same person) twice."""
+
+    def __init__(self, path: Optional[str] = None, per_sender_seconds: int = 24 * 3600):
+        state_dir = os.environ.get("EMAIL_AGENT_STATE_DIR") or project_path_str("tom_logs")
+        self.path = path or os.path.join(state_dir, "auto_replied.json")
+        self.per_sender_seconds = per_sender_seconds
+
+    def _load(self) -> Dict[str, Any]:
+        try:
+            with open(self.path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def can_reply(self, key: str, sender: str) -> bool:
+        import time
+        data = self._load()
+        if key in data.get("messages", {}):
+            return False
+        last = data.get("senders", {}).get(sender.lower())
+        return not (last and time.time() - float(last) < self.per_sender_seconds)
+
+    def record(self, key: str, sender: str) -> None:
+        import time
+        data = self._load()
+        now = time.time()
+        messages = data.setdefault("messages", {})
+        messages[key] = now
+        senders = data.setdefault("senders", {})
+        senders[sender.lower()] = now
+        for name in ("messages", "senders"):        # keep the file small
+            items = sorted(data[name].items(), key=lambda kv: kv[1])[-500:]
+            data[name] = dict(items)
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            temp = self.path + ".tmp"
+            with open(temp, "w", encoding="utf-8") as handle:
+                json.dump(data, handle)
+            os.replace(temp, self.path)
+        except OSError:
+            pass
+
+
+AUTO_REPLY_FOOTER = "\n\n-- Sent automatically by TOM on behalf of the mailbox owner."
+
+
+async def auto_reply_if_allowed(email_tools: "EmailTools", analysis: Dict[str, Any], ledger: AutoReplyLedger,
+                                body: str, sent_so_far: int = 0) -> Optional[Dict[str, Any]]:
+    """Send an opt-in automatic reply when it is safe; return what was sent, else None.
+
+    Skips: automated senders, our own address, anything already answered, a second
+    mail from the same sender within 24 h, and more than EMAIL_AUTO_REPLY_MAX_PER_RUN per run.
+    """
+    limit = int(os.environ.get("EMAIL_AUTO_REPLY_MAX_PER_RUN", "5") or 5)
+    sender = analysis.get("sender", "")
+    if (sent_so_far >= limit or not analysis.get("auto_send") or not is_valid_address(sender)
+            or sender.lower() == (email_tools.email_address or "").lower()):
+        return None
+    key = f"{analysis.get('id', '')}|{sender.lower()}|{analysis.get('subject', '')}"
+    if not ledger.can_reply(key, sender):
+        return None
+    result = await email_tools.send_email_direct(sender, analysis["reply_subject"], body + AUTO_REPLY_FOOTER)
+    if result.get("status") != "success":
+        return None
+    ledger.record(key, sender)
+    return {"to": sender, "subject": analysis["reply_subject"]}
+
+
+_ADDRESS_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+
+
+def is_valid_address(value: str) -> bool:
+    return bool(value) and bool(_ADDRESS_RE.match(value.strip()))
 
 
 class EmailTools:
@@ -109,10 +203,13 @@ class EmailTools:
 
         self.gsmtp_server = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
         self.gsmtp_port = int(os.environ.get("SMTP_PORT", 587))
-        self.smtp_starttls = True
+        # STARTTLS is on by default (Gmail, Outlook); SMTP_STARTTLS=false is for a
+        # local/relay server without TLS. Port 465 uses implicit TLS instead.
+        self.smtp_starttls = os.environ.get("SMTP_STARTTLS", "true").strip().lower() not in ("0", "false", "no", "off")
 
         self.imap_host = os.environ.get("IMAP_HOST", "imap.gmail.com")
         self.imap_port = int(os.environ.get("IMAP_PORT", 993))
+        self.imap_ssl = os.environ.get("IMAP_SSL", "true").strip().lower() not in ("0", "false", "no", "off")
 
         self.connection_pool: Dict[str, Any] = {}
 
@@ -189,7 +286,7 @@ class EmailTools:
 
     async def _connect_imap_generic(self, provider: str) -> Dict[str, Any]:
         try:
-            mail = await asyncio.to_thread(lambda: IMAPClient(host=self.imap_host, port=self.imap_port))
+            mail = await asyncio.to_thread(lambda: IMAPClient(host=self.imap_host, port=self.imap_port, ssl=self.imap_ssl))
             if hasattr(mail, 'login'):
                 await asyncio.to_thread(mail.login, self.email_address, self.email_password)
             self.connection_pool["imap"] = mail
@@ -223,7 +320,8 @@ class EmailTools:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    async def fetch_imap_emails(self, account_type: str = "inbox", max_count: int = 10) -> Dict[str, Any]:
+    async def fetch_imap_emails(self, account_type: str = "inbox", max_count: int = 10,
+                                unread_only: bool = False) -> Dict[str, Any]:
         try:
             mail = await self._get_active_mail_connection()
             if mail is None:
@@ -231,7 +329,8 @@ class EmailTools:
             folder_name = account_type.lower().replace(" ", "")
             await asyncio.to_thread(mail.select_folder, folder_name)
             messages = []
-            seq_nums = await asyncio.to_thread(mail.search, "ALL")
+            # BODY.PEEK below never sets \\Seen, so triage does not mark mail as read.
+            seq_nums = await asyncio.to_thread(mail.search, "UNSEEN" if unread_only else "ALL")
             for seq_num in seq_nums[-max_count:]:
                 msg = await asyncio.to_thread(
                     mail.fetch, [seq_num],
@@ -364,6 +463,9 @@ class EmailTools:
         """
         from safety.guards import SafetyGuards
 
+        if not is_valid_address(recipient):
+            return {"status": "error", "message": f"'{recipient}' is not an email address. Give me the full address (name@example.com)."}
+
         safe_print(f"\nTOM EMAIL SEND CHECK:")
         safe_print(f"To: {recipient}")
         safe_print(f"Subject: {subject}")
@@ -378,11 +480,12 @@ class EmailTools:
             return {"status": "cancelled", "message": "No approval mechanism available."}
 
         try:
-            email_connection = await self._prepare_email_sender()
-            if not email_connection["success"]:
-                return {"status": "error", "message": email_connection.get("message", "Connection failed")}
             message = self._compose_email_message(recipient, subject, body, attachments)
-            await asyncio.to_thread(email_connection["sender"].send_message, message)
+            delivered = await self._deliver(message)
+            if delivered["status"] != "success":
+                SafetyGuards().log_action("EMAIL_SEND_ERROR", target=recipient, status="FAILURE",
+                                          message=delivered.get("message", ""))
+                return delivered
             safety = SafetyGuards()
             safety.log_action("EMAIL_SENT", target=recipient, status="SUCCESS")
             return {"status": "success", "message": "Email sent successfully!", "safety_logged": True}
@@ -394,12 +497,15 @@ class EmailTools:
     async def send_email_direct(self, recipient: str, subject: str, body: str,
                                  attachments: Optional[List[str]] = None) -> Dict[str, Any]:
         from safety.guards import SafetyGuards
+        if not is_valid_address(recipient):
+            return {"status": "error", "message": f"'{recipient}' is not an email address. Give me the full address (name@example.com)."}
         try:
-            email_connection = await self._prepare_email_sender()
-            if not email_connection["success"]:
-                return {"status": "error", "message": email_connection.get("message", "Connection failed")}
             message = self._compose_email_message(recipient, subject, body, attachments)
-            await asyncio.to_thread(email_connection["sender"].send_message, message)
+            delivered = await self._deliver(message)
+            if delivered["status"] != "success":
+                SafetyGuards().log_action("EMAIL_SEND_ERROR", target=recipient, status="FAILURE",
+                                          message=delivered.get("message", ""))
+                return delivered
             safety = SafetyGuards()
             safety.log_action("EMAIL_SENT", target=recipient, status="SUCCESS", message="Automated reply sent")
             return {"status": "success", "message": "Email sent successfully!", "safety_logged": True}
@@ -408,25 +514,76 @@ class EmailTools:
             safety.log_action("EMAIL_SEND_ERROR", target=recipient, status="FAILURE", message=str(e))
             return {"status": "error", "message": f"Failed to send email: {str(e)}"}
 
+    def _open_password_smtp(self) -> smtplib.SMTP:
+        """Blocking: connect + authenticate with EMAIL_ADDRESS / EMAIL_PASSWORD (app password)."""
+        if self.gsmtp_port == 465:
+            server = smtplib.SMTP_SSL(self.gsmtp_server, self.gsmtp_port, timeout=30)
+            server.ehlo()
+        else:
+            server = smtplib.SMTP(self.gsmtp_server, self.gsmtp_port, timeout=30)
+            server.ehlo()
+            if self.smtp_starttls:
+                server.starttls()
+                server.ehlo()
+        if self.email_address and self.email_password:
+            server.login(self.email_address, self.email_password)
+        return server
+
     async def _prepare_email_sender(self) -> Dict[str, Any]:
         try:
-            if "gmail_oauth_smtp" in self.connection_pool:
-                return {"success": True, "sender": self.connection_pool["gmail_oauth_smtp"], "connection_type": "oauth2"}
-            connect_result = await self.connect_email_service()
-            if connect_result.get("status") != "success":
-                return {"success": False, "message": connect_result.get("message", "SMTP connection failed")}
-            if "gmail_oauth_smtp" in self.connection_pool:
-                return {"success": True, "sender": self.connection_pool["gmail_oauth_smtp"], "connection_type": "oauth2"}
-            return {"success": False, "message": "SMTP connection was not established"}
+            for key, kind in (("gmail_oauth_smtp", "oauth2"), ("smtp", "password")):
+                if key in self.connection_pool:
+                    return {"success": True, "sender": self.connection_pool[key], "connection_type": kind}
+
+            if self.gmail_credentials_file:
+                connect_result = await self.connect_email_service()
+                if connect_result.get("status") != "success":
+                    return {"success": False, "message": connect_result.get("message", "SMTP connection failed")}
+                if "gmail_oauth_smtp" in self.connection_pool:
+                    return {"success": True, "sender": self.connection_pool["gmail_oauth_smtp"], "connection_type": "oauth2"}
+                return {"success": False, "message": "SMTP connection was not established"}
+
+            # No OAuth client file: send with the app-password settings from .env.
+            # (Sending previously only worked through Gmail OAuth, although
+            # EMAIL_PASSWORD/SMTP_* are documented in .env.example.)
+            if not self.email_address or not self.email_password:
+                return {"success": False,
+                        "message": "Email is not configured. Set EMAIL_ADDRESS and EMAIL_PASSWORD "
+                                   "(an app password) or GMAIL_CREDENTIALS_FILE in .env."}
+            server = await asyncio.to_thread(self._open_password_smtp)
+            self.connection_pool["smtp"] = server
+            return {"success": True, "sender": server, "connection_type": "password"}
         except Exception as e:
             return {"success": False, "message": f"Failed to prepare sender: {str(e)}"}
+
+    async def _deliver(self, message: MIMEMultipart) -> Dict[str, Any]:
+        """Send a composed message; reconnect once if a pooled connection went stale."""
+        last_error = "Connection failed"
+        for attempt in range(2):
+            connection = await self._prepare_email_sender()
+            if not connection["success"]:
+                return {"status": "error", "message": connection.get("message", "Connection failed")}
+            try:
+                await asyncio.to_thread(connection["sender"].send_message, message)
+                return {"status": "success"}
+            except (smtplib.SMTPServerDisconnected, ConnectionError, TimeoutError, OSError) as exc:
+                last_error = str(exc) or exc.__class__.__name__
+                for key in ("gmail_oauth_smtp", "smtp"):
+                    stale = self.connection_pool.pop(key, None)
+                    if stale is not None:
+                        try:
+                            await asyncio.to_thread(stale.close)
+                        except Exception:
+                            pass
+        return {"status": "error", "message": last_error}
 
     def _compose_email_message(self, recipient: str, subject: str, body: str,
                                 attachments: Optional[List[str]] = None) -> MIMEMultipart:
         msg = MIMEMultipart()
-        msg['Subject'] = subject
+        # CR/LF in a header value would let text smuggle in extra headers (Bcc:, ...).
+        msg['Subject'] = " ".join(str(subject or "").split())
         msg['From'] = self.email_address if self.email_address else "your-email@gmail.com"
-        msg['To'] = recipient
+        msg['To'] = recipient.strip()
         msg.attach(MIMEText(body, 'plain'))
 
         if attachments:

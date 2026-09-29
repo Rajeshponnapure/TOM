@@ -112,7 +112,8 @@ class InstagramAINNewsAgent:
         self.base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
         self.llm = None
         try:
-            self.llm = ChatOllama(model=self.model_name, base_url=self.base_url, temperature=0.2)
+            from tools import llm_factory
+            self.llm = llm_factory.make_chat_model(llm_factory.resolve_model("fast"), temperature=0.2)
         except Exception:
             self.llm = None
 

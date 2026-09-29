@@ -58,6 +58,20 @@ def resolve_folder(text: str) -> Optional[str]:
     return t if os.path.isdir(t) else None
 
 
+def _protected(path: str) -> bool:
+    """True for system locations (C:\\Windows, Program Files, ...) TOM must never reorganize."""
+    try:
+        from safety.guards import SafetyGuards
+        return not SafetyGuards().check_file_path_safe(path)
+    except Exception:
+        return False
+
+
+def _protected_error(folder: str) -> Dict[str, Any]:
+    return {"status": "error",
+            "message": f"I won't reorganize {folder}: it is a protected system location."}
+
+
 def _group_for(ext: str) -> str:
     for group, exts in TYPE_GROUPS.items():
         if ext.lower() in exts:
@@ -103,28 +117,41 @@ class FileOps:
 
     def plan_move_by_extension(self, folder: str, extension: str, destination: str) -> Dict[str, Any]:
         """Plan a narrow move, e.g. only PDFs into a user-named subfolder."""
+        extension = "." + extension.lower().lstrip(".")
+        return self._plan_move(folder, lambda name: Path(name).suffix.lower() == extension,
+                               extension, destination)
+
+    def plan_move_by_group(self, folder: str, group: str, destination: str) -> Dict[str, Any]:
+        """Plan a move of one file type group (Images, Video, Audio, ...) into a subfolder."""
+        return self._plan_move(folder, lambda name: _group_for(Path(name).suffix) == group,
+                               group.lower(), destination)
+
+    def _plan_move(self, folder: str, matches, what: str, destination: str) -> Dict[str, Any]:
         folder = resolve_folder(folder) or folder
         if not os.path.isdir(folder):
             return {"status": "error", "message": f"Folder not found: {folder}"}
-        extension = "." + extension.lower().lstrip(".")
+        if _protected(folder):
+            return _protected_error(folder)
         destination = destination.strip().replace("\\", "/")
         parts = [part for part in destination.split("/") if part and part != "."]
         if not parts or any(part == ".." for part in parts):
             return {"status": "error", "message": "Choose a folder name inside the selected folder."}
         moves = []
         for entry in os.scandir(folder):
-            if entry.is_file() and Path(entry.name).suffix.lower() == extension:
+            if entry.is_file() and matches(entry.name):
                 moves.append((entry.path, os.path.join(folder, *parts, entry.name)))
         label = "/".join(parts)
         return {"status": "plan", "folder": folder, "moves": moves,
                 "summary": {label: len(moves)} if moves else {}, "kept": [],
                 "applied_rules": [],
-                "message": f"Plan: move {len(moves)} {extension} file(s) in {folder} into {label}/."}
+                "message": f"Plan: move {len(moves)} {what} file(s) in {folder} into {label}/."}
 
     def _plan_organize(self, folder: str, mode: str, rules: Optional[List[Any]] = None) -> Dict[str, Any]:
         folder = resolve_folder(folder) or folder
         if not os.path.isdir(folder):
             return {"status": "error", "message": f"Folder not found: {folder}"}
+        if _protected(folder):
+            return _protected_error(folder)
         rules = list(rules or [])
         moves: List[Tuple[str, str]] = []
         kept: List[str] = []
@@ -173,6 +200,8 @@ class FileOps:
         folder = resolve_folder(folder) or folder
         if not os.path.isdir(folder):
             return {"status": "error", "message": f"Folder not found: {folder}"}
+        if _protected(folder):
+            return _protected_error(folder)
         try:
             rx = re.compile(find)
         except re.error as e:

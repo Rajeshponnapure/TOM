@@ -15,6 +15,7 @@ langchain-groq==1.1.2
 
 # UI Automation
 pyautogui==0.9.54
+pyperclip>=1.8
 playwright==1.59.0
 webdriver-manager==4.0.2
 

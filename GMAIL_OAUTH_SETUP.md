@@ -43,6 +43,26 @@ Step 4: Token Refresh (Automatic)
 
 ---
 
+## Fastest way to create the token: `tools/generate_gmail_token.py`
+
+Instead of waiting for TOM's first run, create `google-credentials_token.json` yourself, **on your own computer**
+(it opens your browser so you can sign in - nobody else can do that step for you):
+
+```bat
+python tools\generate_gmail_token.py
+```
+
+* It reads `GMAIL_CREDENTIALS_FILE` / `GMAIL_TOKEN_FILE` / `EMAIL_ADDRESS` from `.env` (defaults: `google-credentials.json`
+  -> `google-credentials_token.json`, in the TOM folder), checks the client file is a **Desktop app** client,
+  asks for the same scope TOM uses, saves the token, then logs in to Gmail with it as a test.
+* Options: `--credentials PATH`, `--token PATH`, `--no-browser` (prints a URL), `--skip-verify`, `--force`.
+* While the OAuth consent screen is in **Testing**, add your Gmail address under *Audience -> Test users*, otherwise Google
+  shows "access denied". Google also expires refresh tokens after **7 days** for external apps in Testing; publish the
+  consent screen ("In production") for a token that keeps working, or simply re-run this script weekly.
+* The token is a password-equivalent. `*token*.json` is already in `.gitignore` - never commit or share it.
+
+---
+
 ## Step 1: Set Up Google Cloud Console
 
 ### 1.1 Create a Google Cloud Project

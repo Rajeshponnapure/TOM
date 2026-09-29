@@ -11,8 +11,9 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama import ChatOllama
-from tools.email_tools import EmailTools, classify_email_item as _classify_email_item_fn
+from tools import llm_factory
+from tools.email_tools import (EmailTools, AutoReplyLedger, auto_reply_if_allowed,
+                               classify_email_item as _classify_email_item_fn)
 from tools.instruction_loader import compose_system_prompt
 
 
@@ -37,11 +38,13 @@ class EmailAgentService:
         self.base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
         self.llm = None
         try:
-            self.llm = ChatOllama(model=self.model_name, base_url=self.base_url, temperature=0.1)
+            # Provider-aware (hosted Groq by default, Ollama on opt-in), same as the main app.
+            self.llm = llm_factory.make_chat_model(llm_factory.resolve_model("fast"), temperature=0.1)
         except Exception:
             self.llm = None
 
         self.email_tools = EmailTools()
+        self.reply_ledger = AutoReplyLedger()
 
         root_dir = Path(__file__).resolve().parents[2]
         log_dir = Path(os.environ.get("EMAIL_AGENT_STATE_DIR", str(root_dir / "tom_logs")))
@@ -344,6 +347,15 @@ class EmailAgentService:
                     if approval_key in opened_important_keys:
                         continue
                     reply_body = await self._draft_reply_body(analysis)
+                    if self.auto_reply_enabled:
+                        # Opt-in (EMAIL_AUTO_REPLY_ENABLED=true): reply for real, once per
+                        # message/sender, never to bots. Otherwise fall through to a draft.
+                        sent = await auto_reply_if_allowed(self.email_tools, analysis, self.reply_ledger,
+                                                           reply_body, len(auto_replied))
+                        if sent:
+                            auto_replied.append(sent)
+                            opened_important_keys.add(approval_key)
+                            continue
                     if analysis["sender"]:
                         draft_result = await self.email_tools.draft_email(
                             analysis["sender"],
