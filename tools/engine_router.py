@@ -25,6 +25,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
+from tools.text_utils import without_addresses
+
 
 def _safe_literal(text: str) -> Optional[Any]:
     """Parse a Python literal (list/number) without eval()."""
@@ -148,7 +150,7 @@ class EngineRouter:
         Conservative on purpose: anything ambiguous returns None so the
         agent's existing routing behaves exactly as before.
         """
-        c = command_lower.strip()
+        c = without_addresses(command_lower).strip()
 
         # Expert prefixes (same vocabulary the GUI dialogs used)
         for prefix, key in (
@@ -204,10 +206,10 @@ class EngineRouter:
         if re.search(r"\b(revert|undo|roll ?back|restore)\b.*\b(downloads|folder|files|changes|what you (?:have )?done)\b", c) or \
            re.search(r"\b(organi[sz]e|tidy(?: up)?|clean ?up|declutter|sort(?: out)?)\b.*\b(folder|downloads|desktop|documents|files|photos|pictures)\b", c) or \
            re.search(r"\bfind (all |every )?[\w*.]*\s*(files|pdfs|images|photos|documents)\b", c) or \
-           re.search(r"\b(move|put|relocate|transfer)\b.*\b(pdfs?|images?|photos?|pictures|videos?|songs|"
+           re.search(r"\b(move|put|relocate|transfer|gather|collect|shift)\b.*\b(pdfs?|images?|photos?|pictures|videos?|songs|"
                      r"spreadsheets?|zips?|archives?|installers?|files)\b.*\b(folder|subfolder|downloads|desktop|"
                      r"documents|pictures|photos|into|to)\b", c) or \
-           re.search(r"\b(move|put|relocate|transfer)\b.*\b(docs?|documents|music|audio|slides|presentations?)\b"
+           re.search(r"\b(move|put|relocate|transfer|gather|collect|shift)\b.*\b(docs?|documents|music|audio|slides?|slide decks?|decks?|presentations?)\b"
                      r".*\b(folder|subfolder|downloads|desktop|pictures)\b", c) or \
            re.search(r"\b(bulk rename|rename all)\b", c) or \
            re.search(r"\b(zip|compress)\b.*\b(folder|directory|downloads|documents)\b", c) or \
@@ -685,67 +687,64 @@ class EngineRouter:
                         f"Code run ({label}):\n{res.get('message', '')[:1500]}", raw=res)
 
     # ── File operations (Phase B2) — destructive steps approval-gated ────
-    _KNOWN_FOLDER_WORDS = ("downloads", "documents", "desktop", "pictures", "photos", "music", "videos")
-    _PATH_TOKEN = (r"[\"']([^\"']+[\\/][^\"']*)[\"']"          # quoted path
-                   r"|((?<![\w])(?:[a-z]:\\[^\s\"]+|~?/[^\s\"]+))")   # C:\x or /x (never "type/year")
-    _MOVE_TYPES = (
-        (r"pdfs?", ("ext", ".pdf")), (r"images?|photos?|pictures", ("group", "Images")),
-        (r"videos?|movies", ("group", "Video")), (r"music|songs?|audio|mp3s?", ("group", "Audio")),
-        (r"spreadsheets?|excel files?|csvs?", ("group", "Spreadsheets")),
-        (r"presentations?|slides|slide decks?", ("group", "Presentations")),
-        (r"zips?|archives?", ("group", "Archives")), (r"installers?", ("group", "Installers")),
-        (r"word docs?|docx", ("ext", ".docx")), (r"text files?|txt", ("ext", ".txt")),
-    )
+    # The sentence is read by tools/file_intent.py (rules + an optional, validated LLM pass).
+    @staticmethod
+    def _pick_folder(command: str) -> str:
+        from tools.file_intent import pick_folder
+        return pick_folder(command)
 
-    @classmethod
-    def _pick_folder(cls, command: str) -> str:
-        """The folder a file command is about.
-
-        An explicit path wins, then the folder named after in/from/inside/of, then the
-        first folder mentioned. ("organize my pdf documents in downloads" is about
-        Downloads - "documents" there describes the files.)
-        """
-        path = re.search(cls._PATH_TOKEN, command, re.IGNORECASE)
-        if path:
-            return path.group(1) or path.group(2)
-        words = "|".join(cls._KNOWN_FOLDER_WORDS)
-        after_prep = re.search(rf"\b(?:in|from|inside|within|of|under)\s+(?:my\s+|the\s+)?({words})\b",
-                               command, re.IGNORECASE)
-        if after_prep:
-            return after_prep.group(1)
-        bare = re.search(rf"\b(?:my\s+)?({words})\b", command, re.IGNORECASE)
-        return bare.group(1) if bare else "downloads"
-
-    @classmethod
-    def _parse_move_request(cls, command: str):
-        """('ext'|'group', value) and a destination subfolder for 'move the pdfs ... into Invoices'."""
-        low = command.lower()
-        spec = next((s for pat, s in cls._MOVE_TYPES if re.search(rf"\b(?:{pat})\b", low)), None)
-        if spec is None:
-            ext = re.search(r"(?<![\w/\\])\.([a-z0-9]{2,5})\b", low)
-            spec = ("ext", "." + ext.group(1)) if ext else None
-        skip = {"the", "a", "an", "my", "new", "folder", "subfolder", "directory", "named", "called"}
-        dest = ""
-        for m in re.finditer(
-                r"\b(?:into|to)\s+(?:(?:an?|the|my|new)\s+)*(?:(?:sub)?folder\s+|directory\s+)?"
-                r"(?:(?:named|called)\s+)?[\"']?([A-Za-z0-9][\w-]*)[\"']?", command, re.IGNORECASE):
-            name = m.group(1)
-            if name.lower() not in skip:
-                dest = name
-        return spec, dest
+    async def _confirm_and_apply(self, plan: Dict[str, Any], op_label: str = "organize") -> Dict[str, Any]:
+        """Show the plan (with the exact folder), ask, then execute and record it for undo."""
+        if plan.get("status") != "plan":
+            return self._ok("engine_fileops", plan.get("message", "Could not build a plan."))
+        extras = self._memory_extras(plan)
+        preface = extras.pop("memory_preface", "")
+        if not plan["moves"]:
+            return self._ok("engine_fileops", preface + "Nothing to do — " + plan["message"], **extras)
+        agent = self._agent
+        if agent is None or not getattr(agent, "approval_manager", None):
+            return self._ok("engine_fileops",
+                            preface + "[DRY RUN — approval system unavailable]\n" + plan["message"], **extras)
+        import asyncio as _aio
+        from tools.approval import ApprovalRequest
+        approved = await _aio.to_thread(
+            agent.approval_manager.request_approval,
+            ApprovalRequest(action="file_ops", summary=preface + plan["message"],
+                            details={"folder": plan.get("folder", ""), "count": len(plan["moves"]),
+                                     "remembered_rules": [r["rule"] for r in plan.get("applied_rules", [])]},
+                            risk_level="medium"))
+        if not approved:
+            return {"status": "cancelled", "response_type": "engine_fileops",
+                    "message": "File operation cancelled. (Plan was: " + plan["message"][:200] + ")", **extras}
+        from tools.file_ops import FileOps
+        ops = FileOps()
+        res = ops.execute_plan(plan)
+        ops.record_organization(plan, res)
+        summary = ", ".join(f"{k} ({v})" for k, v in sorted(plan.get("summary", {}).items()))
+        detail = f"{res['message']}\nNow in: {summary}" if summary else res["message"]
+        if plan.get("kept"):
+            detail += f"\nLeft in place: {', '.join(plan['kept'][:8])}"
+        extras["completed_moves"] = res.get("completed_moves") or []
+        return self._ok("engine_fileops", preface + detail, **extras)
 
     async def _run_fileops(self, command: str) -> Dict[str, Any]:
-        from tools.file_ops import FileOps, resolve_folder
+        from tools.file_intent import understand
+        from tools.file_ops import FileOps
         ops = FileOps()
-        c = command.lower()
+        agent = self._agent
+        llm = (getattr(agent, "fast_llm", None) or getattr(agent, "llm", None)) if agent is not None else None
+        intent = await understand(command, llm)
+        op, folder = intent.operation, intent.folder
 
-        # Match on the original text so Linux/macOS paths keep their case.
-        folder = self._pick_folder(command)
+        if op == "unknown":
+            return self._ok("engine_fileops",
+                            "I can organize, move, rename, zip, convert or find files. Tell me which, and the folder "
+                            "(for example: 'organize my downloads by type').")
 
-        # Undo is supported only for TOM's own recorded organization actions.
-        # It must route here; otherwise an LLM can only describe an undo, not perform one.
-        if re.search(r"\b(revert|undo|roll ?back|restore)\b", c):
-            plan = ops.plan_undo_last_organization(folder)
+        # Undo is supported only for TOM's own recorded organization actions. With no folder named
+        # ("revert what you just did") it reverts the most recent one, wherever it happened.
+        if op == "undo":
+            plan = ops.plan_undo_last_organization(folder or None)
             if plan.get("status") != "plan":
                 return self._ok("engine_fileops", plan["message"])
             agent = self._agent
@@ -765,100 +764,53 @@ class EngineRouter:
             return self._ok("engine_fileops", undone["message"],
                             completed_moves=undone.get("completed_moves") or [])
 
-        if re.search(r"\bfind\b", c):
-            ext_m = re.search(r"\b(pdfs?|images?|photos?|docs?|documents|videos?|\*?\.[a-z0-9]{2,4})\b", c)
-            token = ext_m.group(1) if ext_m else "*"
-            pattern = {"pdf": "*.pdf", "pdfs": "*.pdf", "image": "*.jpg", "images": "*.*",
-                       "photo": "*.jpg", "photos": "*.*", "doc": "*.doc*", "docs": "*.doc*",
-                       "documents": "*.*", "video": "*.mp4", "videos": "*.*"}.get(token, token if "." in token else "*")
-            return self._ok("engine_fileops", ops.find_files(folder, pattern)["message"])
-
-        if re.search(r"\bzip|compress\b", c):
-            return self._ok("engine_fileops", ops.zip_folder(folder)["message"])
-
-        if re.search(r"\bconvert\b", c):
-            to_m = re.search(r"\bto\s+\.?([a-z]{3,4})\b", c)
+        if not folder:
+            # Used to default silently to the Downloads folder, whatever the request said.
             return self._ok("engine_fileops",
-                            ops.convert_images(folder, to_m.group(1) if to_m else "png")["message"])
+                            "Which folder should I work in? Name it (for example Downloads or Desktop) or give the full path.")
 
-        # organize / bulk rename → PLAN then APPROVAL then EXECUTE
-        if re.search(r"\b(bulk rename|rename all)\b", c):
-            pat_m = re.search(r"['\"]([^'\"]+)['\"]\s*(?:to|->|→)\s*['\"]([^'\"]*)['\"]", command)
-            if not pat_m:
+        if op == "find":
+            return self._ok("engine_fileops", ops.find_files(folder, intent.find_pattern)["message"])
+        if op == "zip":
+            return self._ok("engine_fileops", ops.zip_folder(folder)["message"])
+        if op == "convert":
+            return self._ok("engine_fileops", ops.convert_images(folder, intent.convert_to)["message"])
+
+        if op == "rename":
+            if not intent.rename_from:
                 return self._ok("engine_fileops",
                                 "Tell me the pattern, e.g.: bulk rename in downloads 'IMG_' to 'Holiday_'")
-            plan = ops.plan_bulk_rename(folder, pat_m.group(1), pat_m.group(2))
-        elif re.search(r"\b(move|put|relocate|transfer)\b", c):
-            spec, dest = self._parse_move_request(command)
-            if spec is None:
+            plan = ops.plan_bulk_rename(folder, intent.rename_from, intent.rename_to)
+        elif op == "move":
+            from tools.file_intent import KNOWN_FOLDER_WORDS
+            if intent.move_type is None:
                 return self._ok("engine_fileops", "Which files should I move? For example: "
                                 "'move the pdfs in downloads into a folder called Invoices'.")
-            if not dest:
+            if not intent.destination:
                 return self._ok("engine_fileops", "Which folder should they go into? For example: "
                                 "'move the pdfs in downloads into a folder called Invoices'.")
-            if dest.lower() in self._KNOWN_FOLDER_WORDS:
+            if intent.destination.lower() in KNOWN_FOLDER_WORDS:
                 return self._ok("engine_fileops", f"I can only move files into a subfolder of the folder "
-                                f"they are in, not into {dest.title()}. Name a subfolder instead.")
-            kind, value = spec
-            plan = (ops.plan_move_by_extension(folder, value, dest) if kind == "ext"
-                    else ops.plan_move_by_group(folder, value, dest))
-        elif re.search(r"\bpdfs?\b", c):
-            # A request naming PDFs is deliberately narrow: do not turn it into
-            # a whole-folder, type-based organization.
-            destinations = re.findall(
-                r"\b(?:folder|subfolder)\s+(?:named|called)\s+['\"]?([a-z0-9_-]+)",
-                command, re.IGNORECASE)
-            destination = destinations[-1] if destinations else "PDFs"
-            plan = ops.plan_move_by_extension(folder, ".pdf", destination)
+                                f"they are in, not into {intent.destination.title()}. Name a subfolder instead.")
+            kind, value = intent.move_type
+            plan = (ops.plan_move_by_extension(folder, value, intent.destination) if kind == "ext"
+                    else ops.plan_move_by_group(folder, value, intent.destination))
         else:
             # Long-term memory: the user's remembered folder rules override defaults.
             rules, memory_note = [], ""
-            agent_ref = self._agent
-            if agent_ref is not None and hasattr(agent_ref, "remembered_folder_rules"):
+            if agent is not None and hasattr(agent, "remembered_folder_rules"):
                 try:
-                    rules, memory_note = await agent_ref.remembered_folder_rules(command)
+                    rules, memory_note = await agent.remembered_folder_rules(command)
                 except Exception as exc:
                     memory_note = f"(memory unavailable: {str(exc)[:80]})"
-            if "year" in c:
+            if intent.organize_by == "year":
                 plan = ops.plan_organize_by_year(folder, rules=rules)
             else:
                 plan = ops.plan_organize_by_type(folder, rules=rules)
             if plan.get("status") == "plan":
                 plan["memory_note"] = memory_note
                 plan["rules_available"] = [r.describe() for r in rules]
-
-        if plan.get("status") != "plan":
-            return self._ok("engine_fileops", plan.get("message", "Could not build a plan."))
-        if not plan["moves"]:
-            extras = self._memory_extras(plan)
-            preface = extras.pop("memory_preface", "")
-            return self._ok("engine_fileops", preface + "Nothing to do — " + plan["message"], **extras)
-
-        extras = self._memory_extras(plan)
-        preface = extras.pop("memory_preface", "")
-        agent = self._agent
-        if agent is None or not getattr(agent, "approval_manager", None):
-            return self._ok("engine_fileops",
-                            preface + "[DRY RUN — approval system unavailable]\n" + plan["message"], **extras)
-        import asyncio as _aio
-        from tools.approval import ApprovalRequest
-        approved = await _aio.to_thread(
-            agent.approval_manager.request_approval,
-            ApprovalRequest(action="file_ops", summary=preface + plan["message"],
-                            details={"count": len(plan["moves"]),
-                                     "remembered_rules": [r["rule"] for r in plan.get("applied_rules", [])]},
-                            risk_level="medium"))
-        if not approved:
-            return {"status": "cancelled", "response_type": "engine_fileops",
-                    "message": "File operation cancelled. (Plan was: " + plan["message"][:200] + ")", **extras}
-        res = ops.execute_plan(plan)
-        ops.record_organization(plan, res)
-        summary = ", ".join(f"{k} ({v})" for k, v in sorted(plan.get("summary", {}).items()))
-        detail = f"{res['message']}\nNow in: {summary}" if summary else res["message"]
-        if plan.get("kept"):
-            detail += f"\nLeft in place: {', '.join(plan['kept'][:8])}"
-        extras["completed_moves"] = res.get("completed_moves") or []
-        return self._ok("engine_fileops", preface + detail, **extras)
+        return await self._confirm_and_apply(plan)
 
     @staticmethod
     def _memory_extras(plan: Dict[str, Any]) -> Dict[str, Any]:

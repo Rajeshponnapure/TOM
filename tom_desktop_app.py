@@ -2659,7 +2659,7 @@ class TomDesktopApp:
         st = mem.status()
         self.memory_status_var.set(
             f"{mem.status_line()}   ·   this session: {st['retained']} stored, "
-            f"{st['recalled']} recalls, {st['reflected']} reflections")
+            f"{st['failed']} failed, {st['recalled']} recalls, {st['reflected']} reflections")
         lines = []
         for item in mem.recent_journal(limit=30):
             tags = item.get("tags") or []

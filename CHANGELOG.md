@@ -4,6 +4,32 @@ All notable changes to TOM. Format: [Keep a Changelog](https://keepachangelog.co
 
 ## [Unreleased]
 
+### Fixed
+- **Emailing a Gmail address failed with "Unknown tool: gmail_info".** Connector keywords were matched anywhere in the
+  request, including inside the address, so `name@gmail.com` looked like "use the Gmail connector" (and
+  `@slack.com` / `@github.com` addresses reached the Slack / GitHub paths). Routers now ignore email addresses and
+  URLs. The connector fallback no longer calls a tool that does not exist; Gmail requests use the email workflows.
+  Everyday words such as "issue", "commit", "forecast" and "rain" no longer start GitHub or weather lookups.
+- **File requests worked in the wrong folder.** Pointing TOM at an explicit path that merely ended in `Downloads`
+  (for example the demo sandbox `...\\sandbox\\Downloads`) organized the user's *real* Downloads folder: the path was
+  matched by its last word. Explicit paths are now used exactly as given; only bare names such as "downloads" or
+  "my desktop" mean the profile folders. A path or folder that does not exist is reported, never replaced by a
+  default, and a request that names no folder now asks instead of assuming Downloads.
+- **Nothing was being saved to Hindsight.** The Hindsight client binds its HTTP session to the thread that first used it,
+  and TOM called it from several threads, so background saves failed with "Timeout context manager should be used
+  inside a task" and piled up in the offline queue (the Memory screen showed "0 stored"). All Hindsight calls now run
+  on one dedicated thread, and queued memories are sent automatically on the next start.
+- TOM said "Saved to long-term memory" whenever memory was merely configured. It now says so only after Hindsight
+  accepted the memory; otherwise it says it is *not* saved yet and why. The Memory screen and status line show the
+  number of waiting memories, failed saves and a readable reason (for example `HTTP 401 ... check HINDSIGHT_API_KEY`).
+- "Revert what you just did" reverts the most recent organization wherever it happened (it used to assume Downloads).
+
+### Changed
+- File requests are read as whole sentences (`tools/file_intent.py`): keyword rules always run, and when the agent has a
+  model it also reads the sentence to fill in the folder, file types and destination. The model's answer is validated
+  against the user's own words (a folder must be quoted from the request or be a well-known name), it can never turn a
+  find/undo/zip/convert into moves, and a path the user typed always wins. Model failures fall back to the rules.
+
 ### Added
 - **Slack, Discord and Telegram messaging** through their official APIs (`tools/chat_apps.py`): the exact target and
   text are approved first, and "sent" is reported only when the service returns a message id.

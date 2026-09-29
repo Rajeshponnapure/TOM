@@ -158,3 +158,28 @@ def test_plain_open_still_just_opens(command):
     agent.os_tools = _OS()
     result = asyncio.run(agent.execute_open_command(command))
     assert result["status"] == "success"
+
+
+# ── words inside an address are not requests ─────────────────────────────────
+@pytest.mark.parametrize("domain", ["gmail.com", "slack.com", "teams.com", "excel.io", "canva.com", "whatsapp.com",
+                                    "instagram.com", "vlc.org", "zoom.us"])
+def test_router_ignores_words_inside_email_addresses(domain):
+    route = ROUTER.route(f"write an email to sam@{domain} about the meeting")
+    assert route.handler == "execute_email_task", (domain, route.handler)
+    send = ROUTER.route(f"send an email to sam@{domain} saying hello")
+    assert send.handler == "execute_email_send", (domain, send.handler)
+
+
+def test_engine_detection_ignores_addresses_and_urls():
+    from tools.engine_router import EngineRouter
+    engine = EngineRouter()
+    assert engine.detect("email sales@forecast.io the arduino report".lower()) is None
+    assert engine.detect("write to bob@verilog.dev about lunch") is None
+    assert engine.detect("open https://blender.org/download please") is None
+
+
+def test_the_shared_helper_keeps_everything_else():
+    from tools.text_utils import without_addresses
+    assert without_addresses("write to a.b+c@gmail.com now") .split() == ["write", "to", "now"]
+    assert without_addresses("see https://x.io/a?b=c today").split() == ["see", "today"]
+    assert without_addresses("no address here") == "no address here"

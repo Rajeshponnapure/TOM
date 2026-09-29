@@ -41,21 +41,46 @@ KNOWN_FOLDERS = {"downloads": "Downloads", "documents": "Documents",
                  "photos": "Pictures", "music": "Music", "videos": "Videos"}
 
 
+def _known_key(text: str) -> Optional[str]:
+    """'downloads' / 'my downloads' / 'the Downloads folder' -> 'downloads'; anything else -> None."""
+    low = re.sub(r"^(?:(?:my|the)\s+)+", "", (text or "").strip().lower())
+    low = re.sub(r"\s+(?:folder|directory)$", "", low)
+    return low if low in KNOWN_FOLDERS else None
+
+
 def resolve_folder(text: str) -> Optional[str]:
-    """'downloads' → C:\\Users\\me\\Downloads; absolute paths pass through."""
-    t = (text or "").strip().strip('"').rstrip("/\\")
+    """The folder a user's words refer to, or None if it does not exist.
+
+    * A well-known NAME ('downloads', 'my desktop', 'the documents folder') means that folder in the
+      user's profile (or TOM_<NAME>_DIR if set, e.g. a sandbox copy).
+    * Anything else is a PATH and is used exactly as given. A path that merely ends in "Downloads"
+      is NOT the Downloads folder: it used to be matched by name, so pointing TOM at
+      ...\\demo\\sandbox\\Downloads organized the user's real Downloads instead.
+    """
+    t = (text or "").strip().strip('"').strip("'").rstrip("/\\")
     if not t:
         return None
-    low = t.lower()
-    for key, real in KNOWN_FOLDERS.items():
-        if low == key or low == f"my {key}" or low.endswith(os.sep + key):
-            # TOM_<NAME>_DIR (e.g. TOM_DOWNLOADS_DIR) redirects a known folder —
-            # handy for a sandbox copy or a non-standard profile location.
-            override = os.environ.get(f"TOM_{real.upper()}_DIR", "").strip()
-            cand = Path(os.path.expandvars(os.path.expanduser(override))) if override else Path.home() / real
-            return str(cand) if cand.is_dir() else None
-    t = os.path.expandvars(os.path.expanduser(t))
-    return t if os.path.isdir(t) else None
+    key = _known_key(t)
+    if key:
+        real = KNOWN_FOLDERS[key]
+        # TOM_<NAME>_DIR (e.g. TOM_DOWNLOADS_DIR) redirects a known folder —
+        # handy for a sandbox copy or a non-standard profile location.
+        override = os.environ.get(f"TOM_{real.upper()}_DIR", "").strip()
+        cand = Path(os.path.expandvars(os.path.expanduser(override))) if override else Path.home() / real
+        return str(cand) if cand.is_dir() else None
+    expanded = os.path.expandvars(os.path.expanduser(t))
+    if not (os.path.isabs(expanded) or "/" in t or "\\" in t or t.startswith("~")):
+        return None                  # a bare word that is not a known folder is not a path: never guess from the cwd
+    return expanded if os.path.isdir(expanded) else None
+
+
+def _locate(text: str) -> str:
+    """resolve_folder, as a plain string: '' when the folder does not exist."""
+    return resolve_folder(text) or ""
+
+
+def _not_found(text: str) -> Dict[str, Any]:
+    return {"status": "error", "message": f"Folder not found: {text}"}
 
 
 def _protected(path: str) -> bool:
@@ -93,9 +118,10 @@ def _safe_walk(root: str):
 class FileOps:
     # ── Search ───────────────────────────────────────────────────────────
     def find_files(self, root: str, pattern: str = "*", limit: int = 200) -> Dict[str, Any]:
-        root = resolve_folder(root) or root
-        if not os.path.isdir(root):
-            return {"status": "error", "message": f"Folder not found: {root}"}
+        located = _locate(root)
+        if not located:
+            return _not_found(root)
+        root = located
         hits: List[str] = []
         for path in _safe_walk(root):
             if fnmatch.fnmatch(os.path.basename(path).lower(), pattern.lower()):
@@ -127,9 +153,10 @@ class FileOps:
                                group.lower(), destination)
 
     def _plan_move(self, folder: str, matches, what: str, destination: str) -> Dict[str, Any]:
-        folder = resolve_folder(folder) or folder
-        if not os.path.isdir(folder):
-            return {"status": "error", "message": f"Folder not found: {folder}"}
+        located = _locate(folder)
+        if not located:
+            return _not_found(folder)
+        folder = located
         if _protected(folder):
             return _protected_error(folder)
         destination = destination.strip().replace("\\", "/")
@@ -147,9 +174,10 @@ class FileOps:
                 "message": f"Plan: move {len(moves)} {what} file(s) in {folder} into {label}/."}
 
     def _plan_organize(self, folder: str, mode: str, rules: Optional[List[Any]] = None) -> Dict[str, Any]:
-        folder = resolve_folder(folder) or folder
-        if not os.path.isdir(folder):
-            return {"status": "error", "message": f"Folder not found: {folder}"}
+        located = _locate(folder)
+        if not located:
+            return _not_found(folder)
+        folder = located
         if _protected(folder):
             return _protected_error(folder)
         rules = list(rules or [])
@@ -197,9 +225,10 @@ class FileOps:
                 "message": message}
 
     def plan_bulk_rename(self, folder: str, find: str, replace: str) -> Dict[str, Any]:
-        folder = resolve_folder(folder) or folder
-        if not os.path.isdir(folder):
-            return {"status": "error", "message": f"Folder not found: {folder}"}
+        located = _locate(folder)
+        if not located:
+            return _not_found(folder)
+        folder = located
         if _protected(folder):
             return _protected_error(folder)
         try:
@@ -274,12 +303,20 @@ class FileOps:
                         "moves": [[source, dest] for source, dest in completed]})
         self._save_journal(entries)
 
-    def plan_undo_last_organization(self, folder: str) -> Dict[str, Any]:
-        """Build a verified reverse-move plan for this folder's latest organization."""
-        root = os.path.abspath(resolve_folder(folder) or folder)
+    def plan_undo_last_organization(self, folder: Optional[str] = None) -> Dict[str, Any]:
+        """Build a verified reverse-move plan for the latest organization.
+
+        With a folder: that folder's latest organization. Without one ("revert what you just did"):
+        the most recent organization anywhere - it used to fall back to Downloads, whichever folder
+        had actually been organized.
+        """
+        root = ""
+        if folder:
+            root = os.path.abspath(_locate(folder) or folder)
         for entry in reversed(self._load_journal()):
-            if entry.get("kind") != "organize" or entry.get("folder") != root:
+            if entry.get("kind") != "organize" or (root and entry.get("folder") != root):
                 continue
+            root = entry.get("folder", root)
             moves = []
             missing = 0
             for original, current in entry.get("moves", []):
@@ -293,7 +330,9 @@ class FileOps:
                     "missing": missing,
                     "message": f"Plan: restore {len(moves)} file(s) to {root}"
                                + (f"; {missing} file(s) were changed or removed and will be left alone." if missing else ".")}
-        return {"status": "error", "message": "There is no recorded TOM organization to undo for this folder."}
+        return {"status": "error",
+                "message": ("There is no recorded TOM organization to undo for this folder." if folder
+                            else "There is no recorded TOM organization to undo.")}
 
     def execute_undo_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
         """Reverse a verified journal entry and remove empty TOM-created folders."""
@@ -317,9 +356,10 @@ class FileOps:
 
     # ── Zip ──────────────────────────────────────────────────────────────
     def zip_folder(self, folder: str, dest: str = None) -> Dict[str, Any]:
-        folder = resolve_folder(folder) or folder
-        if not os.path.isdir(folder):
-            return {"status": "error", "message": f"Folder not found: {folder}"}
+        located = _locate(folder)
+        if not located:
+            return _not_found(folder)
+        folder = located
         dest = dest or folder.rstrip("/\\") + ".zip"
         count = 0
         with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -342,7 +382,7 @@ class FileOps:
         to_ext = to_ext.lower().lstrip(".")
         if to_ext == "jpg":
             to_ext = "jpeg"
-        src = resolve_folder(source) or source
+        src = _locate(source) or (source if os.path.isfile(source) else "")
         files: List[str] = []
         if os.path.isfile(src):
             files = [src]

@@ -844,6 +844,8 @@ Not yet — a FastAPI service is on the roadmap. Today TOM is a local Tkinter de
 | Chrome profile launch fails | Confirm Chrome installed + profile exists; optionally set `CHROME_PROFILE_PATH`. |
 | Screen reading does nothing | Install Tesseract OCR; set `TESSERACT_CMD` if not on PATH. |
 | EXE ignores edits / `.env` | Rebuild with `build.bat`; run from source for `.env`. |
+| Memory screen says "CONNECTED but N memories are waiting to be saved" | Hindsight rejected or could not be reached; the reason is shown next to it (wrong/expired `HINDSIGHT_API_KEY`, no credits, offline). Nothing is lost: waiting memories are kept on disk and sent automatically on the next successful call or the next start. |
+| TOM organized a different folder than the one I named | Give the full path (in quotes if it has spaces). Names like "downloads" mean your profile's folder; `TOM_DOWNLOADS_DIR` redirects that name (used by the demo sandbox). |
 | pytest permission errors in temp | Don't override `--basetemp`; it's pinned to `.pytest_tmp` in `pyproject.toml`. |
 
 Deeper setup + new-machine checklist → [SETUP.md](docs/SETUP.md).

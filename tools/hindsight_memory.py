@@ -11,6 +11,11 @@ the outcome of every task — and brings the relevant ones back before TOM acts.
                 turn recalled facts into structured rules (e.g. folder rules)
 
 Design rules
+  * One thread talks to Hindsight. The hindsight-client is a sync wrapper around an async HTTP
+    session bound to the event loop of the thread that first used it; calling it from TOM's many
+    threads (retain worker, asyncio thread pool, UI) made later calls fail with "Timeout context
+    manager should be used inside a task", so every retain sat in the offline queue and nothing was
+    stored. All client calls now run on a single dedicated thread (see _call).
   * Never block or crash a task. Every call is time-boxed; failures degrade to
     "no memory" and are reported in status(), not raised.
   * Retains are fire-and-forget on a background thread. If Hindsight is
@@ -35,6 +40,8 @@ import queue
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -96,6 +103,24 @@ class MemoryHit:
                 "id": self.id, "when": self.when}
 
 
+def describe_error(exc: BaseException) -> str:
+    """A short, readable reason for a failed Hindsight call (the raw client errors are walls of headers)."""
+    status = getattr(exc, "status", None)
+    reason = getattr(exc, "reason", None)
+    body = getattr(exc, "body", None)
+    if status:
+        detail = ""
+        try:
+            data = json.loads(body) if isinstance(body, (str, bytes)) and body else {}
+            detail = str(data.get("detail") or data.get("message") or data.get("error") or "") if isinstance(data, dict) else ""
+        except ValueError:
+            detail = str(body)[:120] if body else ""
+        hint = {401: " (check HINDSIGHT_API_KEY)", 403: " (the key may lack access, or credits ran out)",
+                404: " (check HINDSIGHT_BASE_URL)", 429: " (rate limited)"}.get(int(status), "")
+        return f"HTTP {status} {reason or ''}{': ' + detail if detail else ''}{hint}".replace("  ", " ").strip()[:220]
+    return (str(exc).strip().splitlines() or [exc.__class__.__name__])[0][:220]
+
+
 def _default_bank_id() -> str:
     """Stable per-installation bank id, persisted so memory survives restarts."""
     try:
@@ -128,15 +153,20 @@ class HindsightMemory:
         self.last_recall_query: str = ""
         self._bank_ready = False
         self._lock = threading.Lock()
+        self._io_lock = threading.Lock()      # guards creation of the I/O thread only (never held during a call)
         self._retain_q: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
         self._inflight = 0
         self.stats = {"retained": 0, "recalled": 0, "reflected": 0, "failed": 0, "queued": 0}
 
+        self._io: Optional[ThreadPoolExecutor] = None
         self.client = client
         self.enabled = os.environ.get("HINDSIGHT_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
         if self.client is None and self.enabled:
             self.client = self._build_client()
+        if self.available and self.pending_count():
+            # Memories saved while Hindsight was unreachable (or failing) are sent on the next start.
+            threading.Thread(target=self.flush_pending, name="hindsight-flush", daemon=True).start()
 
     # ── setup ────────────────────────────────────────────────────────────
     def _build_client(self) -> Any:
@@ -157,6 +187,19 @@ class HindsightMemory:
             self.last_error = f"Could not create Hindsight client: {exc}"
             return None
 
+    def _call(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        """Run one Hindsight client call on the dedicated I/O thread and wait for its result."""
+        if threading.current_thread().name.startswith("hindsight-io"):
+            return fn(*args, **kwargs)
+        with self._io_lock:
+            if self._io is None:
+                self._io = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hindsight-io")
+            io = self._io
+        try:
+            return io.submit(fn, *args, **kwargs).result(timeout=self.timeout + 8)
+        except FutureTimeout:
+            raise TimeoutError(f"Hindsight did not answer within {self.timeout + 8:.0f}s") from None
+
     @property
     def available(self) -> bool:
         return bool(self.enabled and self.client is not None)
@@ -168,14 +211,14 @@ class HindsightMemory:
             if self._bank_ready:
                 return
             try:
-                self.client.create_bank(bank_id=self.bank_id, name="TOM — personal workflow memory",
-                                        mission=BANK_MISSION)
+                self._call(self.client.create_bank, bank_id=self.bank_id, name="TOM — personal workflow memory",
+                           mission=BANK_MISSION)
             except Exception as exc:
                 # Already-exists (409) is fine; anything else is surfaced but not fatal —
                 # Hindsight also creates banks implicitly on first retain.
                 msg = str(exc)
                 if "409" not in msg and "exist" not in msg.lower():
-                    self.last_error = f"create_bank: {msg[:200]}"
+                    self.last_error = f"create_bank: {describe_error(exc)}"
             self._bank_ready = True
 
     # ── retain ───────────────────────────────────────────────────────────
@@ -226,7 +269,8 @@ class HindsightMemory:
     def _send_retain(self, item: Dict[str, Any]) -> bool:
         self._ensure_bank()
         try:
-            self.client.retain(
+            self._call(
+                self.client.retain,
                 bank_id=self.bank_id,
                 content=item["content"],
                 context=item.get("context") or None,
@@ -240,7 +284,7 @@ class HindsightMemory:
             return True
         except Exception as exc:
             self.stats["failed"] += 1
-            self.last_error = f"retain: {str(exc)[:200]}"
+            self.last_error = f"retain: {describe_error(exc)}"
             self._queue_pending(item)
             return False
 
@@ -353,9 +397,8 @@ class HindsightMemory:
             return []
         self._ensure_bank()
         try:
-            resp = self.client.recall(bank_id=self.bank_id, query=query[:800], budget=budget,
-                                      max_tokens=max_tokens, tags=tags or None,
-                                      tags_match="any")
+            resp = self._call(self.client.recall, bank_id=self.bank_id, query=query[:800], budget=budget,
+                              max_tokens=max_tokens, tags=tags or None, tags_match="any")
             hits = [self._to_hit(r) for r in (getattr(resp, "results", None) or [])]
             hits = [h for h in hits if h.text][:limit]
             self.stats["recalled"] += 1
@@ -365,7 +408,7 @@ class HindsightMemory:
             return hits
         except Exception as exc:
             self.stats["failed"] += 1
-            self.last_error = f"recall: {str(exc)[:200]}"
+            self.last_error = f"recall: {describe_error(exc)}"
             self.last_recall = []
             return []
 
@@ -394,14 +437,14 @@ class HindsightMemory:
             return {"ok": False, "text": "", "structured": None, "error": self.last_error}
         self._ensure_bank()
         try:
-            resp = self.client.reflect(bank_id=self.bank_id, query=query, budget=budget,
-                                       context=context or None, response_schema=response_schema)
+            resp = self._call(self.client.reflect, bank_id=self.bank_id, query=query, budget=budget,
+                              context=context or None, response_schema=response_schema)
             self.stats["reflected"] += 1
             return {"ok": True, "text": (getattr(resp, "text", "") or "").strip(),
                     "structured": getattr(resp, "structured_output", None)}
         except Exception as exc:
             self.stats["failed"] += 1
-            self.last_error = f"reflect: {str(exc)[:200]}"
+            self.last_error = f"reflect: {describe_error(exc)}"
             return {"ok": False, "text": "", "structured": None, "error": self.last_error}
 
     async def areflect(self, query: str, timeout: float = 45.0, **kwargs: Any) -> Dict[str, Any]:
@@ -417,10 +460,10 @@ class HindsightMemory:
         if not self.available:
             return []
         try:
-            resp = self.client.list_memories(bank_id=self.bank_id, limit=limit)
+            resp = self._call(self.client.list_memories, bank_id=self.bank_id, limit=limit)
             return [self._to_hit(i) for i in (getattr(resp, "items", None) or [])]
         except Exception as exc:
-            self.last_error = f"list_memories: {str(exc)[:200]}"
+            self.last_error = f"list_memories: {describe_error(exc)}"
             return []
 
     # ── status ───────────────────────────────────────────────────────────
@@ -441,8 +484,14 @@ class HindsightMemory:
         if not self.available:
             return f"Long-term memory: OFFLINE — {self.last_error or 'not configured'}"
         where = "Hindsight Cloud" if self.base_url.startswith(CLOUD_URL) else f"Hindsight @ {self.base_url}"
-        extra = f", {self.pending_count()} queued" if self.pending_count() else ""
-        return f"Long-term memory: ONLINE — {where}, bank '{self.bank_id}'{extra}"
+        pending = self.pending_count()
+        if pending:
+            # "ONLINE" alone hid the fact that nothing was being stored.
+            why = f" — last error: {self.last_error}" if self.last_error else ""
+            waiting = "1 memory is" if pending == 1 else f"{pending} memories are"
+            return (f"Long-term memory: CONNECTED but {waiting} waiting to be saved "
+                    f"({where}, bank '{self.bank_id}'){why}")
+        return f"Long-term memory: ONLINE — {where}, bank '{self.bank_id}'"
 
 
 _instance: Optional[HindsightMemory] = None
