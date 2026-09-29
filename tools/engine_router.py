@@ -21,6 +21,7 @@ Design contract (production-safety):
 """
 
 import ast
+import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -200,7 +201,8 @@ class EngineRouter:
         if re.search(r"\b(verify|check)\b.*\b(localhost|web ?app|webapp)\b", c) or \
            c.startswith("verify website"):
             return "webauto"
-        if re.search(r"\b(organi[sz]e|tidy(?: up)?|clean ?up|declutter|sort(?: out)?)\b.*\b(folder|downloads|desktop|documents|files|photos|pictures)\b", c) or \
+        if re.search(r"\b(revert|undo|roll ?back|restore)\b.*\b(downloads|folder|files|changes|what you (?:have )?done)\b", c) or \
+           re.search(r"\b(organi[sz]e|tidy(?: up)?|clean ?up|declutter|sort(?: out)?)\b.*\b(folder|downloads|desktop|documents|files|photos|pictures)\b", c) or \
            re.search(r"\bfind (all |every )?[\w*.]*\s*(files|pdfs|images|photos|documents)\b", c) or \
            re.search(r"\b(bulk rename|rename all)\b", c) or \
            re.search(r"\b(zip|compress)\b.*\b(folder|directory|downloads|documents)\b", c) or \
@@ -226,22 +228,25 @@ class EngineRouter:
             return {"status": "unhandled", "message": ""}
         try:
             if key == "orchestrator":
-                return await self._run_orchestrator(c)
-            if key == "autonomous":
-                return await self._run_autonomous(c)
-            if key == "webauto":
-                return await self._run_webauto(c)
-            if key == "coderun":
-                return await self._run_coderun(c)
-            if key == "fileops":
-                return await self._run_fileops(c)
-            if key == "schedule":
-                return self._run_schedule(c)
-            handler = getattr(self, f"_run_{key}")
-            return handler(c)
+                result: Any = await self._run_orchestrator(c)
+            elif key == "autonomous":
+                result = await self._run_autonomous(c)
+            elif key == "webauto":
+                result = await self._run_webauto(c)
+            elif key == "coderun":
+                result = await self._run_coderun(c)
+            elif key == "fileops":
+                result = await self._run_fileops(c)
+            elif key == "schedule":
+                result = self._run_schedule(c)
+            else:
+                result = getattr(self, f"_run_{key}")(c)
         except Exception as exc:
             return {"status": "error", "response_type": f"engine_{key}",
                     "message": f"[{key.upper()} engine] failed: {exc}"}
+        # Every engine result passes the same independent check before TOM is
+        # allowed to report it as done.
+        return self._apply_verification(key, c, result)
 
     @staticmethod
     def _unavailable(name: str, hint: str, engine_key: str = "") -> Dict[str, Any]:
@@ -262,6 +267,91 @@ class EngineRouter:
         out = {"status": "success", "response_type": rtype, "message": message}
         out.update(extra)
         return out
+
+    # ── Verification ─────────────────────────────────────────────────────
+    # "No task is successful from text alone": after an engine claims success,
+    # TOM re-checks the filesystem for what the engine says it produced. Only a
+    # failure found here can change an outcome (a success is never invented).
+    _ARTIFACT_KEYS = ("path", "paths", "zip", "artifact", "artifacts",
+                      "created", "created_paths", "output", "outputs")
+
+    @staticmethod
+    def _looks_like_path(value: str) -> bool:
+        """True only for strings that are plausibly filesystem paths, not prose."""
+        if not value or len(value) > 400:
+            return False
+        if os.path.exists(value):
+            return True
+        return "\\" in value or "/" in value
+
+    @classmethod
+    def _declared_artifacts(cls, result: Dict[str, Any]) -> List[tuple]:
+        """(path, exists) for each file/dir the engine says it produced."""
+        out: List[tuple] = []
+        for key in cls._ARTIFACT_KEYS:
+            value = result.get(key)
+            values = value if isinstance(value, (list, tuple, set)) else [value]
+            for item in values:
+                if not isinstance(item, str) or not cls._looks_like_path(item.strip()):
+                    continue
+                target = item.strip()
+                if not os.path.isabs(target):
+                    target = os.path.abspath(target)
+                out.append((target, os.path.exists(target)))
+        return out
+
+    def verify(self, key: str, command: str, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Re-check an engine's claim against the real filesystem.
+
+        checked=False means the engine declared nothing that can be re-checked,
+        so the result stands exactly as the engine reported it.
+        """
+        evidence: List[str] = []
+        ok = True
+        moves = result.get("completed_moves") or []
+        for move in moves:
+            try:
+                source, destination = move
+            except (TypeError, ValueError):
+                continue
+            if os.path.exists(destination):
+                evidence.append(f"{os.path.basename(str(destination))} is in place")
+            else:
+                ok = False
+                evidence.append(f"{destination} is missing")
+            if os.path.exists(source):
+                ok = False
+                evidence.append(f"{source} was never moved")
+        if moves and ok:
+            evidence.append(f"{len(moves)} move(s) confirmed on disk")
+        artifacts = self._declared_artifacts(result)
+        for path, exists in artifacts:
+            evidence.append(f"{path} exists" if exists
+                            else f"{path} was not created")
+            if not exists:
+                ok = False
+        if not moves and not artifacts:
+            return {"checked": False, "ok": True,
+                    "evidence": f"[{key}] no filesystem artifact declared to re-check"}
+        return {"checked": True, "ok": ok, "evidence": "; ".join(evidence[:12])}
+
+    def _apply_verification(self, key: str, command: str, result: Any) -> Any:
+        """Attach the evidence, and refuse to report an unconfirmed success."""
+        if not isinstance(result, dict):
+            return result
+        if str(result.get("status", "")).lower() != "success":
+            return result
+        verification = self.verify(key, command, result)
+        checked_result = dict(result)
+        checked_result["verification"] = verification
+        if verification["checked"] and not verification["ok"]:
+            checked_result["status"] = "error"
+            checked_result["response_type"] = (checked_result.get("response_type")
+                                               or f"engine_{key}")
+            checked_result["message"] = (
+                "I could not confirm that this was actually done, so I am not reporting it as "
+                f"complete. {verification['evidence']}\n\n{result.get('message', '')}")
+        return checked_result
 
     # ── ML ───────────────────────────────────────────────────────────────
     def _run_ml(self, command: str) -> Dict[str, Any]:
@@ -603,6 +693,29 @@ class EngineRouter:
             command, re.IGNORECASE)
         folder = (folder_m.group(1) or folder_m.group(2)) if folder_m else "downloads"
 
+        # Undo is supported only for TOM's own recorded organization actions.
+        # It must route here; otherwise an LLM can only describe an undo, not perform one.
+        if re.search(r"\b(revert|undo|roll ?back|restore)\b", c):
+            plan = ops.plan_undo_last_organization(folder)
+            if plan.get("status") != "plan":
+                return self._ok("engine_fileops", plan["message"])
+            agent = self._agent
+            if agent is None or not getattr(agent, "approval_manager", None):
+                return self._ok("engine_fileops", "[DRY RUN — approval system unavailable]\n" + plan["message"])
+            import asyncio as _aio
+            from tools.approval import ApprovalRequest
+            approved = await _aio.to_thread(
+                agent.approval_manager.request_approval,
+                ApprovalRequest(action="file_ops", summary=plan["message"],
+                                details={"count": len(plan["moves"]), "operation": "undo"},
+                                risk_level="medium"))
+            if not approved:
+                return {"status": "cancelled", "response_type": "engine_fileops",
+                        "message": "Undo cancelled. (Plan was: " + plan["message"] + ")"}
+            undone = ops.execute_undo_plan(plan)
+            return self._ok("engine_fileops", undone["message"],
+                            completed_moves=undone.get("completed_moves") or [])
+
         if re.search(r"\bfind\b", c):
             ext_m = re.search(r"\b(pdfs?|images?|photos?|docs?|documents|videos?|\*?\.[a-z0-9]{2,4})\b", c)
             token = ext_m.group(1) if ext_m else "*"
@@ -626,6 +739,14 @@ class EngineRouter:
                 return self._ok("engine_fileops",
                                 "Tell me the pattern, e.g.: bulk rename in downloads 'IMG_' to 'Holiday_'")
             plan = ops.plan_bulk_rename(folder, pat_m.group(1), pat_m.group(2))
+        elif re.search(r"\bpdfs?\b", c):
+            # A request naming PDFs is deliberately narrow: do not turn it into
+            # a whole-folder, type-based organization.
+            destinations = re.findall(
+                r"\b(?:folder|subfolder)\s+(?:named|called)\s+['\"]?([a-z0-9_-]+)",
+                command, re.IGNORECASE)
+            destination = destinations[-1] if destinations else "PDFs"
+            plan = ops.plan_move_by_extension(folder, ".pdf", destination)
         else:
             # Long-term memory: the user's remembered folder rules override defaults.
             rules, memory_note = [], ""
@@ -668,10 +789,12 @@ class EngineRouter:
             return {"status": "cancelled", "response_type": "engine_fileops",
                     "message": "File operation cancelled. (Plan was: " + plan["message"][:200] + ")", **extras}
         res = ops.execute_plan(plan)
+        ops.record_organization(plan, res)
         summary = ", ".join(f"{k} ({v})" for k, v in sorted(plan.get("summary", {}).items()))
         detail = f"{res['message']}\nNow in: {summary}" if summary else res["message"]
         if plan.get("kept"):
             detail += f"\nLeft in place: {', '.join(plan['kept'][:8])}"
+        extras["completed_moves"] = res.get("completed_moves") or []
         return self._ok("engine_fileops", preface + detail, **extras)
 
     @staticmethod

@@ -9,6 +9,7 @@ Safety contract:
 """
 
 import fnmatch
+import json
 import os
 import re
 import shutil
@@ -21,6 +22,7 @@ SKIP_DIRS = {"windows", "program files", "program files (x86)", "$recycle.bin",
              "appdata", "node_modules", "__pycache__", ".git", "venv",
              "system volume information"}
 MAX_FILES = 5000
+JOURNAL_PATH = Path(__file__).resolve().parents[1] / "data" / "file_ops_journal.json"
 
 TYPE_GROUPS = {
     "Images":      {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".heic"},
@@ -99,6 +101,26 @@ class FileOps:
     def plan_organize_by_year(self, folder: str, rules: Optional[List[Any]] = None) -> Dict[str, Any]:
         return self._plan_organize(folder, mode="year", rules=rules)
 
+    def plan_move_by_extension(self, folder: str, extension: str, destination: str) -> Dict[str, Any]:
+        """Plan a narrow move, e.g. only PDFs into a user-named subfolder."""
+        folder = resolve_folder(folder) or folder
+        if not os.path.isdir(folder):
+            return {"status": "error", "message": f"Folder not found: {folder}"}
+        extension = "." + extension.lower().lstrip(".")
+        destination = destination.strip().replace("\\", "/")
+        parts = [part for part in destination.split("/") if part and part != "."]
+        if not parts or any(part == ".." for part in parts):
+            return {"status": "error", "message": "Choose a folder name inside the selected folder."}
+        moves = []
+        for entry in os.scandir(folder):
+            if entry.is_file() and Path(entry.name).suffix.lower() == extension:
+                moves.append((entry.path, os.path.join(folder, *parts, entry.name)))
+        label = "/".join(parts)
+        return {"status": "plan", "folder": folder, "moves": moves,
+                "summary": {label: len(moves)} if moves else {}, "kept": [],
+                "applied_rules": [],
+                "message": f"Plan: move {len(moves)} {extension} file(s) in {folder} into {label}/."}
+
     def _plan_organize(self, folder: str, mode: str, rules: Optional[List[Any]] = None) -> Dict[str, Any]:
         folder = resolve_folder(folder) or folder
         if not os.path.isdir(folder):
@@ -172,6 +194,7 @@ class FileOps:
         """Apply a previously built plan (collision-safe)."""
         moves = plan.get("moves", [])
         done, skipped = 0, 0
+        completed_moves: List[Tuple[str, str]] = []
         for src, dst in moves:
             try:
                 if not os.path.isfile(src):
@@ -186,11 +209,82 @@ class FileOps:
                 os.makedirs(os.path.dirname(final), exist_ok=True)
                 shutil.move(src, final)
                 done += 1
+                completed_moves.append((src, final))
             except OSError:
                 skipped += 1
         return {"status": "success", "moved": done, "skipped": skipped,
+                "completed_moves": completed_moves,
                 "message": f"Done: {done} file(s) processed"
                            + (f", {skipped} skipped." if skipped else ".")}
+
+    # ── Undo the latest organization ────────────────────────────────────
+    @staticmethod
+    def _load_journal() -> List[Dict[str, Any]]:
+        try:
+            with JOURNAL_PATH.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, list) else []
+        except (OSError, json.JSONDecodeError):
+            return []
+
+    @staticmethod
+    def _save_journal(entries: List[Dict[str, Any]]) -> None:
+        JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = JOURNAL_PATH.with_suffix(".tmp")
+        with temp_path.open("w", encoding="utf-8") as handle:
+            json.dump(entries[-50:], handle, indent=2)
+        os.replace(temp_path, JOURNAL_PATH)
+
+    def record_organization(self, plan: Dict[str, Any], result: Dict[str, Any]) -> None:
+        """Persist only moves that actually completed, so a later undo is exact."""
+        completed = result.get("completed_moves") or []
+        if not completed:
+            return
+        entries = self._load_journal()
+        entries.append({"kind": "organize", "folder": os.path.abspath(plan["folder"]),
+                        "moves": [[source, dest] for source, dest in completed]})
+        self._save_journal(entries)
+
+    def plan_undo_last_organization(self, folder: str) -> Dict[str, Any]:
+        """Build a verified reverse-move plan for this folder's latest organization."""
+        root = os.path.abspath(resolve_folder(folder) or folder)
+        for entry in reversed(self._load_journal()):
+            if entry.get("kind") != "organize" or entry.get("folder") != root:
+                continue
+            moves = []
+            missing = 0
+            for original, current in entry.get("moves", []):
+                if os.path.isfile(current):
+                    moves.append((current, original))
+                else:
+                    missing += 1
+            if not moves:
+                return {"status": "error", "message": "The latest organization can no longer be undone: its moved files are no longer where TOM placed them."}
+            return {"status": "plan", "folder": root, "moves": moves, "journal_entry": entry,
+                    "missing": missing,
+                    "message": f"Plan: restore {len(moves)} file(s) to {root}"
+                               + (f"; {missing} file(s) were changed or removed and will be left alone." if missing else ".")}
+        return {"status": "error", "message": "There is no recorded TOM organization to undo for this folder."}
+
+    def execute_undo_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        """Reverse a verified journal entry and remove empty TOM-created folders."""
+        result = self.execute_plan(plan)
+        restored = result["moved"]
+        root = plan["folder"]
+        if result["skipped"] == 0 and plan.get("missing", 0) == 0:
+            entries = self._load_journal()
+            target = plan.get("journal_entry")
+            self._save_journal([entry for entry in entries if entry != target])
+        for current, _original in plan.get("moves", []):
+            parent = os.path.dirname(current)
+            while os.path.abspath(parent).startswith(root + os.sep):
+                try:
+                    os.rmdir(parent)
+                except OSError:
+                    break
+                parent = os.path.dirname(parent)
+        return {**result, "message": f"Restored {restored} file(s) to {root}"
+                + (f", {result['skipped']} skipped." if result["skipped"] else ".")}
 
     # ── Zip ──────────────────────────────────────────────────────────────
     def zip_folder(self, folder: str, dest: str = None) -> Dict[str, Any]:

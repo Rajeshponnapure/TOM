@@ -57,12 +57,82 @@ def test_unreachable_server_keeps_configured_name(ollama):
     assert llm_factory.resolve_model("unknown-slot") == "gemma4:latest"
 
 
+def test_provider_defaults_to_hosted_groq_when_a_key_is_configured(monkeypatch):
+    """A configured Groq key means Groq, even with TOM_LLM_PROVIDER unset."""
+    monkeypatch.delenv("TOM_LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    assert llm_factory.provider() == "groq"
+    assert llm_factory.resolve_model("primary") == llm_factory.groq_model("primary")
+
+
+def test_local_provider_requires_an_explicit_opt_in(monkeypatch):
+    """TOM never drifts back to local while a Groq key is present."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    for value in ("ollama", "OLLAMA", "local", "local-llm"):
+        monkeypatch.setenv("TOM_LLM_PROVIDER", value)
+        assert llm_factory.provider() == "ollama"
+    monkeypatch.setenv("TOM_LLM_PROVIDER", "groq")
+    assert llm_factory.provider() == "groq"
+
+
+def test_provider_without_a_groq_key_stays_local(monkeypatch):
+    monkeypatch.delenv("TOM_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    assert llm_factory.provider() == "ollama"
+
+
+def test_a_shell_variable_that_overrides_env_is_reported(monkeypatch):
+    """An exported value still wins (tests rely on it) — it just isn't silent."""
+    monkeypatch.setattr(llm_factory, "_env_file_value", lambda key: "groq")
+    monkeypatch.setenv("TOM_LLM_PROVIDER", "ollama")
+    message = llm_factory.provider_env_conflict()
+    assert "TOM_LLM_PROVIDER=ollama" in message
+    assert ".env (groq)" in message
+    assert "Ollama" in message                      # names what it is actually running
+
+    monkeypatch.setenv("TOM_LLM_PROVIDER", "groq")  # agrees with .env → nothing to say
+    assert llm_factory.provider_env_conflict() == ""
+
+    monkeypatch.delenv("TOM_LLM_PROVIDER", raising=False)
+    assert llm_factory.provider_env_conflict() == ""
+
+
+def test_hosted_vision_model_is_opt_in(monkeypatch):
+    monkeypatch.delenv("GROQ_VISION_MODEL", raising=False)
+    assert llm_factory.groq_vision_model() == ""
+    monkeypatch.setenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+    assert llm_factory.groq_vision_model() == "meta-llama/llama-4-scout-17b-16e-instruct"
+
+
+def test_hosted_provider_uses_ocr_instead_of_a_local_vision_model(monkeypatch):
+    """On Groq with no vision model, TOM must explain and use OCR — never Ollama."""
+    import asyncio
+    import agent as agent_mod
+    monkeypatch.setenv("TOM_LLM_PROVIDER", "groq")
+    monkeypatch.delenv("GROQ_VISION_MODEL", raising=False)
+    seen = {}
+
+    async def fake_ocr(self, image_path, user_question, note=""):
+        seen["note"] = note
+        return {"status": "success", "message": "from OCR",
+                "response_type": "image_analysis_ocr"}
+
+    monkeypatch.setattr(agent_mod.TomAgent, "_analyze_image_with_ocr", fake_ocr)
+    tom = agent_mod.TomAgent.__new__(agent_mod.TomAgent)
+    result = asyncio.run(
+        agent_mod.TomAgent._analyze_image_with_vision(tom, "screen.png", "what is this?"))
+    assert result["response_type"] == "image_analysis_ocr"
+    assert "GROQ_VISION_MODEL" in seen["note"]
+    assert "TOM_LLM_PROVIDER=ollama" in seen["note"]   # how to switch to local on purpose
+
+
 def test_groq_provider_slots(monkeypatch):
     monkeypatch.setenv("TOM_LLM_PROVIDER", "groq")
     monkeypatch.setenv("GROQ_MODEL", "groq-main")
     monkeypatch.delenv("OLLAMA_EMBED_MODEL", raising=False)
     assert llm_factory.resolve_model("primary") == "groq-main"
-    # Embeddings still come from Ollama, never a Groq chat model.
+    # Embeddings still come from the local encoder, never a Groq chat model
+    # (Groq has no embeddings endpoint) — that is not a chat fallback.
     assert llm_factory.resolve_model("embed") == "nomic-embed-text:latest"
 
 

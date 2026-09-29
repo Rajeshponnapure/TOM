@@ -2,9 +2,15 @@
 LLM factory — one place that builds every chat model TOM uses.
 
 Providers (TOM_LLM_PROVIDER):
-  * "ollama" (default) — fully local via langchain-ollama.
-  * "groq"            — hosted, OpenAI-compatible models via langchain-groq.
-                        Useful on machines that cannot run a large local model.
+  * "groq"   — hosted, OpenAI-compatible models via langchain-groq. Active by
+               default whenever GROQ_API_KEY is set in .env.
+  * "ollama" — fully local via langchain-ollama, plus the aliases "local" /
+               "local-llm". Selected ONLY when the user asks for it explicitly.
+
+TOM never silently swaps to a local model: while a Groq key is configured the
+hosted provider stays in charge until TOM_LLM_PROVIDER=ollama says otherwise.
+The one thing that is always local is the RAG embedding encoder — Groq has no
+embeddings endpoint (see resolve_model("embed")), which is not a chat fallback.
 
 Every caller gets a LangChain chat model with the same `.ainvoke()` surface,
 so the rest of TOM never needs to know which provider is active.
@@ -13,17 +19,67 @@ so the rest of TOM never needs to know which provider is active.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 # Reasoning models spend part of the token budget on hidden reasoning; a tiny
 # max_tokens (TOM's chat slot uses 256) can leave the visible answer empty.
 _GROQ_MIN_TOKENS = 1024
+# Groq accounts differ in which multimodal models they can reach, so there is
+# no hard-coded default: empty means "this account has no hosted vision model".
+_LOCAL_PROVIDER_ALIASES = ("ollama", "local", "local-llm", "local_llm")
 
 
 def provider() -> str:
-    value = (os.environ.get("TOM_LLM_PROVIDER") or "ollama").strip().lower()
-    return value if value in ("ollama", "groq") else "ollama"
+    """Active provider: "groq" (hosted) or "ollama" (local, opt-in only)."""
+    value = (os.environ.get("TOM_LLM_PROVIDER") or "").strip().lower()
+    if value in _LOCAL_PROVIDER_ALIASES:
+        return "ollama"
+    if value == "groq":
+        return "groq"
+    # Unset or unrecognised: hosted when it can actually run, local otherwise.
+    return "groq" if (os.environ.get("GROQ_API_KEY") or "").strip() else "ollama"
+
+
+def groq_vision_model() -> str:
+    """Hosted vision model id for image analysis; "" when none is configured."""
+    return (os.environ.get("GROQ_VISION_MODEL") or "").strip()
+
+
+def _env_file_value(key: str) -> str:
+    """Value for `key` as written in the project's .env ("" when absent)."""
+    path = Path(__file__).resolve().parents[1] / ".env"
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, _, value = line.partition("=")
+            if name.strip() == key:
+                return value.strip().strip('"').strip("'")
+    except OSError:
+        return ""
+    return ""
+
+
+def provider_env_conflict() -> str:
+    """Message for a shell variable that overrides TOM_LLM_PROVIDER in .env.
+
+    An exported variable normally wins over .env (tests and headless scripts
+    depend on that), but a stale `TOM_LLM_PROVIDER=ollama` left in an old
+    terminal silently sends TOM back to the local model. Returns "" when there
+    is nothing to report.
+    """
+    process_value = (os.environ.get("TOM_LLM_PROVIDER") or "").strip()
+    if not process_value:
+        return ""
+    file_value = _env_file_value("TOM_LLM_PROVIDER")
+    if file_value and file_value.lower() == process_value.lower():
+        return ""
+    return (f"Heads-up: TOM_LLM_PROVIDER={process_value} is set in this shell and overrides "
+            f".env ({file_value or 'not set'}). TOM is running on {describe()}. "
+            "Unset it (Remove-Item Env:TOM_LLM_PROVIDER) if .env should decide.")
 
 
 def groq_model(slot: str = "primary") -> str:

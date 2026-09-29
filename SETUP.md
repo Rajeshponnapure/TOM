@@ -30,6 +30,9 @@ copy .env.example .env         # then edit values you actually need
 
 # Run:
 launch_tom_ui.bat
+
+# Or put a double-clickable TOM icon on your Desktop:
+create_desktop_shortcut.bat
 ```
 
 If anything fails, read the matching section below.
@@ -213,8 +216,35 @@ The launcher finds Python 3.11, checks that core dependencies import, then start
   crashes or behaves oddly.
 - `launch_tom_debug.bat` — console visible for full tracebacks.
 - `launch_tom_ui.vbs` — runs via `pythonw` with no console window (development).
+- `create_desktop_shortcut.bat` — creates/refreshes the **TOM** shortcut on your
+  Desktop. It opens `dist\tom_desktop_app.exe` when that build exists, otherwise it
+  runs `launch_tom_ui.vbs` so the source app starts with no console window. Re-run it
+  any time; it overwrites the existing shortcut.
 
 **CLI mode:** `python main.py` runs the agent without the GUI.
+
+### Which model is TOM using?
+
+`TOM_LLM_PROVIDER` in `.env` decides:
+
+- **Groq (hosted)** — the default whenever `GROQ_API_KEY` is set. All chat slots run on
+  `GROQ_MODEL` (default `openai/gpt-oss-120b`).
+- **Ollama (local)** — only when you ask for it explicitly with
+  `TOM_LLM_PROVIDER=ollama` (also accepts `local`). TOM never drifts back to a local
+  model by itself.
+
+Two deliberate exceptions, both reported in the chat window:
+
+- **Embeddings** (RAG memory indexing) always run locally — Groq has no embeddings
+  endpoint. This encoder does not answer prompts.
+- **Image analysis** needs a vision model. If your Groq account has none, set
+  `GROQ_VISION_MODEL` to a multimodal model, or run with `TOM_LLM_PROVIDER=ollama` for
+  local vision. Otherwise TOM uses local OCR and says so.
+
+A variable already exported in your shell wins over `.env` (standard dotenv behaviour, and what
+headless scripts rely on). If a stale `TOM_LLM_PROVIDER` is left in an old terminal, TOM prints
+a heads-up in the chat window rather than switching providers quietly — clear it with
+`Remove-Item Env:TOM_LLM_PROVIDER` (PowerShell) and relaunch.
 
 ---
 
@@ -321,7 +351,8 @@ sending anything.
 - [ ] *(Optional)* drop `tom_icon.png` / `tom_icon.ico` into `resources\`.
 - [ ] Run `.venv311\Scripts\python.exe tools\verify_tom_system.py`.
 - [ ] Launch with `launch_tom_ui.bat` (or `launch_tom_safe.bat` if it crashes).
-- [ ] *(Optional)* `build.bat` for the EXE + Desktop shortcut.
+- [ ] *(Optional)* `create_desktop_shortcut.bat` for the **TOM** Desktop shortcut.
+- [ ] *(Optional)* `build.bat` for the EXE build.
 
 ---
 

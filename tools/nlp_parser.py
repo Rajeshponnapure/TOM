@@ -162,7 +162,7 @@ INTENTS = [
     "open_whatsapp", "create_word_doc", "create_excel", "create_presentation",
     "create_pdf", "create_file", "read_file", "data_analysis", "analyze_file",
     "web_search", "screen_read", "voice_mode", "instagram_workflow",
-    "email_inbox", "build_agent", "schedule_task", "skill_task", "chat", "compound",
+    "email_inbox", "build_agent", "schedule_task", "skill_task", "file_operation", "chat", "compound",
 ]
 
 class CommandParser:
@@ -202,7 +202,7 @@ Given a natural language command, extract structured data with MAXIMUM ACCURACY.
 Return ONLY a valid JSON object (no markdown):
 
 {
-  "intent": "<one of: open_app|write_email|send_email|whatsapp_message|open_whatsapp|create_word_doc|create_excel|create_presentation|create_pdf|create_file|read_file|data_analysis|web_search|screen_read|voice_mode|instagram_workflow|email_inbox|build_agent|schedule_task|skill_task|chat|compound>",
+  "intent": "<one of: open_app|write_email|send_email|whatsapp_message|open_whatsapp|create_word_doc|create_excel|create_presentation|create_pdf|create_file|read_file|data_analysis|web_search|screen_read|voice_mode|instagram_workflow|email_inbox|build_agent|schedule_task|skill_task|file_operation|chat|compound>",
   "app_name": "<app to open/use>",
   "app_action": "<what to do in the app: open|text|message|create|edit|delete|send|read|play|close>",
   "person_name": "<full name of any person mentioned>",
@@ -276,6 +276,7 @@ CRITICAL RULES:
             "skill_domain": skill_domain,
             "requires_skill": bool(skill_domain),
             "requires_tool": intent not in ("chat", "skill_task") or bool(skill_domain),
+            "execution_mode": "chat" if intent == "chat" else "task",
             "confidence": self._confidence(command, intent, skill_domain),
             "compound_tasks": self._extract_compound_tasks(command),
         }
@@ -364,6 +365,12 @@ CRITICAL RULES:
                 if key not in parsed or parsed.get(key) in (None, "", "null"):
                     parsed[key] = fallback.get(key)
 
+            # Local, explicit action detection is authoritative. The LLM is
+            # useful for details, but must not turn a filesystem command into chat.
+            if fallback.get("intent") == "file_operation":
+                parsed["intent"] = "file_operation"
+            parsed["execution_mode"] = "chat" if parsed.get("intent") == "chat" else "task"
+
             if not parsed.get("compound_tasks"):
                 parsed["compound_tasks"] = fallback.get("compound_tasks", [])
 
@@ -423,6 +430,13 @@ CRITICAL RULES:
 
     def _detect_intent(self, command: str) -> str:
         c = command.lower()
+
+        # File operations are evaluated before generic PDF/document creation:
+        # mentioning a PDF does not automatically mean creating one.
+        file_action = r"\b(?:organize|organise|tidy|clean\s*up|sort|move|rename|zip|compress|convert|undo|revert|restore)\b"
+        file_target = r"\b(?:downloads?|documents?|desktop|folder|folders|files?|pdfs?|images?|photos?|archives?)\b"
+        if re.search(file_action, c) and re.search(file_target, c):
+            return "file_operation"
 
         compound_delimiters = [
             r'\b(?:and\s+then|and\s+also|then\s+also)\b',

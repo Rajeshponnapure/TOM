@@ -499,9 +499,11 @@ push-to-talk window. Shortcuts: `Ctrl+D` Dashboard · `Ctrl+C` Chat.
 
 > Ollama offline → UI still starts, but reasoning, planning, and RAG memory are limited.
 
-**No local model?** Set `TOM_LLM_PROVIDER=groq` and `GROQ_API_KEY` in `.env` — every slot then runs
-on Groq (`GROQ_MODEL`, default `openai/gpt-oss-120b`) through the same interface
-([`tools/llm_factory.py`](tools/llm_factory.py)).
+**Hosted by default:** set `GROQ_API_KEY` in `.env` and every chat slot runs on Groq
+(`GROQ_MODEL`, default `openai/gpt-oss-120b`) through the same interface
+([`tools/llm_factory.py`](tools/llm_factory.py)) — no `TOM_LLM_PROVIDER` needed. To force the
+local model instead, set `TOM_LLM_PROVIDER=ollama`; TOM never falls back to local on its
+own. The embedding slot stays local either way (Groq has no embeddings endpoint).
 
 ---
 
@@ -525,7 +527,8 @@ flowchart LR
 setup_python311_env.bat
 
 # 2️⃣  Start Ollama and pull the models
-#     (or skip: set TOM_LLM_PROVIDER=groq + GROQ_API_KEY in .env)
+#     (or set GROQ_API_KEY in .env and skip this — Groq is used automatically;
+#      only the embedding model below is still needed locally)
 ollama serve
 ollama pull gemma4:latest
 ollama pull qwen2.5-coder:7b-instruct
@@ -544,8 +547,9 @@ launch_tom_ui.bat
 | `launch_tom_ui.bat` | Normal launch (auto-finds Python 3.11, checks deps) |
 | `launch_tom_safe.bat` | Voice disabled, console visible — **use first if it crashes** |
 | `launch_tom_debug.bat` | Console visible for full tracebacks |
+| `create_desktop_shortcut.bat` | Puts a double-clickable **TOM** icon on your Desktop |
 | `python main.py` | CLI mode (no GUI) |
-| Desktop **TOM** shortcut | Runs built `dist\tom_desktop_app.exe` (after `build.bat`) |
+| Desktop **TOM** shortcut | Built `dist\tom_desktop_app.exe`, or the source app via `launch_tom_ui.vbs` if there is no build |
 
 ---
 
@@ -559,8 +563,10 @@ Settings live in `.env` (copy from [.env.example](.env.example)). Nothing is req
 
 - **Long-term memory:** `HINDSIGHT_API_KEY` (Hindsight Cloud) or `HINDSIGHT_BASE_URL`
   (self-hosted), `HINDSIGHT_BANK_ID`, `HINDSIGHT_TIMEOUT_SECONDS`, `HINDSIGHT_ENABLED`.
-- **LLM provider:** `TOM_LLM_PROVIDER` (`ollama` | `groq`), `GROQ_API_KEY`, `GROQ_MODEL`,
-  `GROQ_FAST_MODEL`, `NLP_PARSE_TIMEOUT_SECONDS`.
+- **LLM provider:** `GROQ_API_KEY` (hosted Groq is the default the moment this is set),
+  `TOM_LLM_PROVIDER` (`ollama` forces local; also accepts `local`), `GROQ_MODEL`,
+  `GROQ_FAST_MODEL`, `GROQ_CODE_MODEL`, `GROQ_VISION_MODEL`, `NLP_PARSE_TIMEOUT_SECONDS`.
+  A variable already exported in your shell wins over `.env`; TOM reports the conflict in chat.
 - **Core (LLM):** `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_FAST_MODEL`,
   `OLLAMA_CODE_MODEL`, `OLLAMA_EMBED_MODEL`, `OLLAMA_TIMEOUT_SECONDS`, `TASK_TIMEOUT_SECONDS`.
 - **Email** (Gmail/inbox): `EMAIL_ADDRESS`, `EMAIL_PASSWORD`, `GMAIL_CREDENTIALS_FILE`,

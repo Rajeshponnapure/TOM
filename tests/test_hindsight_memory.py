@@ -234,3 +234,28 @@ def test_memory_commands(tom):
     assert "Long-term memory: ONLINE" in status["message"]
     recall = asyncio.run(a.execute_task("what do you remember about PDFs"))
     assert "Invoices" in recall["message"]
+
+
+def test_memory_writes_carry_the_chat_session(tom, tmp_path):
+    """Every retain is tagged with the chat session it happened in.
+
+    Hindsight groups memories by `document_id` and filters by tag, so a stable
+    session id keeps one conversation together and separable from the next.
+    """
+    from tools.chat_memory import ChatMemory
+    a, _ = tom
+    a.chat_memory = ChatMemory(str(tmp_path / "chats.json"))
+    first = a.chat_memory.new_session()
+    asyncio.run(a.execute_task("remember that my manager is Priya"))
+    a.memory.flush()
+
+    tagged = [it for it in a.memory.client.items if f"session:{first}" in it["tags"]]
+    assert tagged, "the preference was retained without its chat session tag"
+    assert all(it["document_id"] == f"session-{first}" for it in tagged)
+    assert all(it["metadata"].get("session_id") == first for it in tagged)
+
+    second = a.chat_memory.new_session()
+    asyncio.run(a.execute_task("remember that my manager is Priya"))
+    a.memory.flush()
+    assert [it for it in a.memory.client.items if f"session:{second}" in it["tags"]]
+    assert first != second

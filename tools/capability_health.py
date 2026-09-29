@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from collections import Counter
 from typing import Any, Dict
@@ -18,6 +19,9 @@ OPTIONAL_IMPORTS = {
     "numpy": "ML/data arrays",
     "pandas": "data analysis",
     "sklearn": "machine learning",
+    "spacy": "natural-language parsing",
+    "hindsight_client": "long-term memory",
+    "langchain_groq": "hosted Groq LLM provider",
 }
 
 
@@ -26,6 +30,22 @@ def _import_present(module: str) -> bool:
         return importlib.util.find_spec(module) is not None
     except (ImportError, ValueError):
         return False
+
+
+def _configured(name: str) -> bool:
+    """Return configuration presence without ever exposing a secret value."""
+    return bool(os.environ.get(name, "").strip())
+
+
+def _nlp_status() -> Dict[str, Any]:
+    if not _import_present("spacy"):
+        return {"package": False, "english_model": False}
+    try:
+        import spacy
+        spacy.load("en_core_web_sm")
+        return {"package": True, "english_model": True}
+    except Exception:
+        return {"package": True, "english_model": False}
 
 
 def build_capability_health() -> Dict[str, Any]:
@@ -38,6 +58,7 @@ def build_capability_health() -> Dict[str, Any]:
         for name, purpose in OPTIONAL_IMPORTS.items()
     }
     missing_imports = [name for name, info in imports.items() if not info["present"]]
+    provider = (os.environ.get("TOM_LLM_PROVIDER") or "ollama").strip().lower()
     return {
         "python": {
             "executable": sys.executable,
@@ -53,6 +74,18 @@ def build_capability_health() -> Dict[str, Any]:
         "knowledge": knowledge,
         "imports": imports,
         "missing_imports": missing_imports,
+        "nlp": _nlp_status(),
+        "services": {
+            "hindsight": {
+                "enabled": os.environ.get("HINDSIGHT_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off"),
+                "configured": _configured("HINDSIGHT_API_KEY") or _configured("HINDSIGHT_BASE_URL"),
+            },
+            "groq": {
+                "selected": provider == "groq",
+                "configured": _configured("GROQ_API_KEY"),
+                "package": _import_present("langchain_groq"),
+            },
+        },
     }
 
 
@@ -62,11 +95,14 @@ def format_capability_health() -> str:
     reg = report["capability_registry"]
     skills = report["skills"]
     knowledge = report["knowledge"]
+    nlp = report["nlp"]
+    services = report["services"]
     lines = [
         "TOM capability health",
         "",
         f"Python: {py['version']} at {py['executable']}",
         f"Python 3.11 compatible: {'yes' if py['compatible'] else 'no'}",
+        f"spaCy English NLP model: {'ready' if nlp['english_model'] else 'missing'}",
         "",
         "Capability registry:",
         f"- Registered: {reg['total']}",
@@ -98,6 +134,14 @@ def format_capability_health() -> str:
     )
     for name, info in report["imports"].items():
         lines.append(f"- {name}: {'present' if info['present'] else 'missing'} ({info['purpose']})")
+    lines.extend([
+        "",
+        "Configured services (values hidden):",
+        f"- Hindsight: {'configured' if services['hindsight']['configured'] else 'not configured'}; "
+        f"{'enabled' if services['hindsight']['enabled'] else 'disabled'}",
+        f"- Groq: {'configured' if services['groq']['configured'] else 'not configured'}; "
+        f"{'active provider' if services['groq']['selected'] else 'available but not selected'}",
+    ])
     if reg["missing"]:
         lines.extend(["", "Broken capability mappings:"])
         lines.extend(f"- {item}" for item in reg["missing"])

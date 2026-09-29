@@ -39,6 +39,7 @@ output/
 outputs/
 memories/
 reports/
+data/file_ops_journal.json
 *.log
 .claude/
 .sixth/

@@ -2,7 +2,9 @@ import json
 import os
 import re
 import time
-from typing import Dict, List
+import threading
+import uuid
+from typing import Dict, List, Optional
 from tools.project_paths import project_path_str
 
 
@@ -18,35 +20,108 @@ class ChatMemory:
     def __init__(self, file_path: str = "memories/lifetime_chat.json"):
         self.file_path = file_path if os.path.isabs(file_path) else project_path_str(file_path)
         os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
+        self._lock = threading.RLock()
+        self.sessions: List[Dict[str, object]] = []
+        self.active_session_id = ""
         self.messages: List[Dict[str, str]] = []
         self._load()
 
     def _load(self):
         if not os.path.exists(self.file_path):
-            self.messages = []
+            self._create_session("New chat")
             return
         try:
             with open(self.file_path, "r", encoding="utf-8") as f:
-                self.messages = json.load(f)
+                data = json.load(f)
+            if isinstance(data, list):
+                # Preserve legacy lifetime history as a single readable chat.
+                self._create_session("Previous chat", messages=data)
+            elif isinstance(data, dict) and isinstance(data.get("sessions"), list):
+                self.sessions = data["sessions"]
+                self.active_session_id = str(data.get("active_session_id") or "")
+                if not self.sessions:
+                    self._create_session("New chat")
+                elif not any(s.get("id") == self.active_session_id for s in self.sessions):
+                    self.active_session_id = str(self.sessions[-1].get("id", ""))
+                self.messages = self._active_session()["messages"]  # type: ignore[assignment]
+            else:
+                self._create_session("New chat")
         except Exception:
-            self.messages = []
+            self.sessions = []
+            self._create_session("New chat")
+
+    def _create_session(self, title: str, messages: Optional[List[Dict[str, str]]] = None) -> str:
+        now = str(int(time.time()))
+        session_id = uuid.uuid4().hex
+        session = {"id": session_id, "title": title, "created_at": now,
+                   "updated_at": now, "messages": list(messages or [])}
+        self.sessions.append(session)
+        self.active_session_id = session_id
+        self.messages = session["messages"]  # type: ignore[assignment]
+        return session_id
+
+    def _active_session(self) -> Dict[str, object]:
+        for session in self.sessions:
+            if session.get("id") == self.active_session_id:
+                return session
+        self._create_session("New chat")
+        return self.sessions[-1]
 
     def _persist(self):
-        with open(self.file_path, "w", encoding="utf-8") as f:
-            json.dump(self.messages, f, ensure_ascii=False, indent=2)
+        temp_path = self.file_path + ".tmp"
+        payload = {"version": 2, "active_session_id": self.active_session_id,
+                   "sessions": self.sessions}
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(temp_path, self.file_path)
+
+    def list_sessions(self) -> List[Dict[str, str]]:
+        """Return session metadata, newest first, without message content."""
+        with self._lock:
+            return [{"id": str(s.get("id", "")), "title": str(s.get("title", "New chat")),
+                     "updated_at": str(s.get("updated_at", ""))}
+                    for s in reversed(self.sessions)]
+
+    def active_session_info(self) -> Dict[str, str]:
+        """Id + title of the chat the user is in right now.
+
+        The id is stable for the life of the session, so it can be attached to
+        long-term memory writes (Hindsight tags / document_id) and still point
+        at the same conversation later.
+        """
+        with self._lock:
+            session = self._active_session()
+            return {"id": str(session.get("id", "")), "title": str(session.get("title", "New chat"))}
+
+    def new_session(self) -> str:
+        with self._lock:
+            session_id = self._create_session("New chat")
+            self._persist()
+            return session_id
+
+    def select_session(self, session_id: str) -> bool:
+        with self._lock:
+            for session in self.sessions:
+                if session.get("id") == session_id:
+                    self.active_session_id = session_id
+                    self.messages = session["messages"]  # type: ignore[assignment]
+                    self._persist()
+                    return True
+        return False
 
     def append(self, role: str, text: str):
-        self.messages.append(
-            {
-                "ts": str(int(time.time())),
-                "role": role,
-                "text": text,
-            }
-        )
-        # Evict oldest messages if over limit
-        if len(self.messages) > self.MAX_MESSAGES:
-            self.messages = self.messages[-self.MAX_MESSAGES:]
-        self._persist()
+        with self._lock:
+            session = self._active_session()
+            messages = session["messages"]  # type: ignore[assignment]
+            messages.append({"ts": str(int(time.time())), "role": role, "text": text})
+            if len(messages) > self.MAX_MESSAGES:
+                session["messages"] = messages[-self.MAX_MESSAGES:]
+                messages = session["messages"]  # type: ignore[assignment]
+            self.messages = messages
+            if len(messages) == 1 and role == "user":
+                session["title"] = re.sub(r"\s+", " ", text).strip()[:48] or "New chat"
+            session["updated_at"] = str(int(time.time()))
+            self._persist()
 
     def recent(self, n: int = 20) -> List[Dict[str, str]]:
         if n <= 0:

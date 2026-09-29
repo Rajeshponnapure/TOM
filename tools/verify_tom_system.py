@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 # an old hard-coded model set from a previous setup.
 load_dotenv(ROOT / ".env")
 
+from tools import llm_factory
 from tools.command_router import CommandRouter
 from tools.nlp_parser import CommandParser
 from tools.plugin_manager import PluginManager
@@ -34,6 +35,11 @@ def _ok(name: str, detail: str = "") -> Dict[str, object]:
 
 def _fail(name: str, detail: str) -> Dict[str, object]:
     return {"name": name, "status": "FAIL", "detail": detail}
+
+
+def _warn(name: str, detail: str) -> Dict[str, object]:
+    """Degraded but functional: TOM works, one optional capability does not."""
+    return {"name": name, "status": "WARN", "detail": detail}
 
 
 def _run(cmd: List[str], timeout: int = 120) -> subprocess.CompletedProcess:
@@ -88,24 +94,88 @@ def check_imports() -> Dict[str, object]:
     return _ok("imports", f"{len(modules)} modules imported")
 
 
-def check_ollama_models() -> Dict[str, object]:
-    required = {
-        os.environ.get("OLLAMA_MODEL", "gemma4:latest"),
-        os.environ.get("OLLAMA_FAST_MODEL", "qwen2.5-coder:7b-instruct"),
-        os.environ.get("OLLAMA_CODE_MODEL", "qwen2.5-coder:7b-instruct"),
-        os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text:latest"),
-    }
+def check_nlp_runtime() -> Dict[str, object]:
+    """Verify the installed linguistic model and deterministic chat/task routing."""
     try:
-        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=10) as resp:
+        import spacy
+        nlp = spacy.load("en_core_web_sm")
+        doc = nlp("Move the PDF files from Downloads into PDFs.")
+    except Exception as exc:
+        return _fail("nlp_runtime", f"spaCy English model unavailable: {exc}")
+    if not any(token.lemma_.lower() == "move" for token in doc):
+        return _fail("nlp_runtime", "spaCy returned no expected action lemma")
+    parser = CommandParser()
+    task = parser.parse("organise all PDFs in my downloads into a PDFs folder")
+    chat = parser.parse("Hi TOM, how are you today?")
+    if task.get("intent") != "file_operation" or task.get("execution_mode") != "task":
+        return _fail("nlp_runtime", f"File task misclassified: {task.get('intent')}")
+    if chat.get("intent") != "chat" or chat.get("execution_mode") != "chat":
+        return _fail("nlp_runtime", f"Chat misclassified: {chat.get('intent')}")
+    return _ok("nlp_runtime", "spaCy English model and chat/task classifier ready")
+
+
+def check_service_configuration() -> Dict[str, object]:
+    """Report setup state without exposing API keys."""
+    hindsight = bool(os.environ.get("HINDSIGHT_API_KEY") or os.environ.get("HINDSIGHT_BASE_URL"))
+    groq = bool((os.environ.get("GROQ_API_KEY") or "").strip())
+    # Ask the factory instead of re-deriving the rule here. An unset
+    # TOM_LLM_PROVIDER now means "Groq once a key is configured", so a local
+    # copy of the old default would report "ollama" while TOM really runs Groq.
+    provider = llm_factory.provider()
+    if provider == "groq" and not groq:
+        return _fail("service_configuration", "Groq is active but GROQ_API_KEY is missing")
+    detail = (
+        f"Hindsight={'configured' if hindsight else 'not configured'}; "
+        f"Groq={'configured' if groq else 'not configured'}; provider={provider}"
+    )
+    conflict = llm_factory.provider_env_conflict()
+    if conflict:
+        return _warn("service_configuration", f"{detail} — {conflict}")
+    return _ok("service_configuration", detail)
+
+
+def check_ollama_models() -> Dict[str, object]:
+    """Verify the local Ollama models this installation actually needs.
+
+    Ollama does two different jobs. It is the chat provider only when the user
+    asks for it, but it is always the encoder behind RAG memory. On Groq the
+    chat slots are served by the hosted provider, so demanding the local chat
+    models would report a broken install on a machine that is working fine.
+    """
+    local_provider = llm_factory.provider() != "groq"
+    embed_model = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
+    required = {embed_model}
+    if local_provider:
+        required |= {
+            os.environ.get("OLLAMA_MODEL", "gemma4:latest"),
+            os.environ.get("OLLAMA_FAST_MODEL", "qwen2.5-coder:7b-instruct"),
+            os.environ.get("OLLAMA_CODE_MODEL", "qwen2.5-coder:7b-instruct"),
+        }
+    rag_note = f"only the embedding model ({embed_model}) is local, for RAG memory"
+    base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=10) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:
-        return _fail("ollama_models", f"Ollama unreachable: {exc}")
+        if local_provider:
+            return _fail("ollama_models", f"Ollama is the active chat provider but unreachable: {exc}")
+        return _warn(
+            "ollama_models",
+            f"Ollama unreachable ({exc}). Chat is unaffected because Groq serves it, but "
+            f"{rag_note}, so semantic recall is off until Ollama is running.",
+        )
 
     installed = {item.get("name") for item in payload.get("models", [])}
     missing = sorted(required - installed)
     if missing:
-        return _fail("ollama_models", f"Missing: {', '.join(missing)}")
-    return _ok("ollama_models", f"Installed required models: {', '.join(sorted(required))}")
+        if local_provider:
+            return _fail("ollama_models", f"Missing: {', '.join(missing)}")
+        return _warn(
+            "ollama_models",
+            f"Missing local models: {', '.join(missing)}. Chat is unaffected because Groq "
+            f"serves it, but {rag_note}, so semantic recall is off until they are pulled.",
+        )
+    return _ok("ollama_models", f"Installed required local models: {', '.join(sorted(required))}")
 
 
 def check_skills() -> Dict[str, object]:
@@ -277,6 +347,8 @@ def main() -> int:
         check_project_root,
         check_requirements_parse,
         check_imports,
+        check_nlp_runtime,
+        check_service_configuration,
         check_ollama_models,
         check_skills,
         check_skill_integrity,
@@ -297,9 +369,11 @@ def main() -> int:
         results.append(result)
         print(f"[{result['status']}] {result['name']}: {result['detail']}")
 
-    failed = [r for r in results if r["status"] != "PASS"]
-    print("\nSUMMARY:", "PASS" if not failed else "FAIL")
-    print(json.dumps({"failed": failed, "total": len(results)}, indent=2))
+    failed = [r for r in results if r["status"] == "FAIL"]
+    warnings = [r for r in results if r["status"] == "WARN"]
+    print("\nSUMMARY:", "PASS" if not failed else "FAIL",
+          f"({len(warnings)} warning(s))" if warnings else "")
+    print(json.dumps({"failed": failed, "warnings": warnings, "total": len(results)}, indent=2))
     return 0 if not failed else 1
 
 

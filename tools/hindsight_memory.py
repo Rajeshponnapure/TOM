@@ -61,6 +61,23 @@ TAG_PREFERENCE = "preference"
 TAG_CORRECTION = "correction"
 TAG_TASK = "task"
 
+# Session-scoped tag, per Hindsight's tag naming conventions
+# (https://hindsight — tags: `session:<id>` so one conversation's memories can
+# be filtered or audited later). The same id is sent as `document_id`, which is
+# how Hindsight groups a session's turns into one document instead of creating
+# a duplicate document on every retain.
+SESSION_TAG_PREFIX = "session:"
+
+
+def session_tag(session_id: str) -> str:
+    """Filter tag for one chat session; "" for an unknown session."""
+    return f"{SESSION_TAG_PREFIX}{session_id}" if (session_id or "").strip() else ""
+
+
+def session_document_id(session_id: str) -> str:
+    """Stable Hindsight document id for a chat session."""
+    return f"session-{session_id}" if (session_id or "").strip() else ""
+
 
 @dataclass
 class MemoryHit:
@@ -164,12 +181,16 @@ class HindsightMemory:
     # ── retain ───────────────────────────────────────────────────────────
     def retain(self, content: str, *, context: str = "", tags: Optional[List[str]] = None,
                metadata: Optional[Dict[str, str]] = None, wait: bool = False,
-               timestamp: Optional[datetime] = None, index_now: bool = False) -> bool:
+               timestamp: Optional[datetime] = None, index_now: bool = False,
+               session_id: str = "") -> bool:
         """Store a memory. Non-blocking by default (background thread + disk queue).
 
         index_now — ask Hindsight to finish fact extraction before returning
         (used for corrections, so they are recallable on the very next request).
         timestamp — when it happened (defaults to now; seeding uses past dates).
+        session_id — the chat session this happened in. Adds a `session:<id>`
+        tag for filtering/audit and sends it as the stable `document_id`, so a
+        conversation's memories group together instead of fragmenting.
         """
         content = (content or "").strip()
         if not content:
@@ -177,9 +198,19 @@ class HindsightMemory:
         when = timestamp or datetime.now(timezone.utc)
         if when.tzinfo is None:
             when = when.replace(tzinfo=timezone.utc)
-        item = {"content": content[:4000], "context": context[:200], "tags": list(tags or []),
-                "metadata": {k: str(v)[:200] for k, v in (metadata or {}).items()},
+        tag_list = list(tags or [])
+        tag = session_tag(session_id)
+        if tag and tag not in tag_list:
+            tag_list.append(tag)
+        meta = {k: str(v)[:200] for k, v in (metadata or {}).items()}
+        if tag:
+            meta.setdefault("session_id", str(session_id)[:200])
+        item = {"content": content[:4000], "context": context[:200], "tags": tag_list,
+                "metadata": meta,
                 "timestamp": when.isoformat(timespec="seconds"), "index_now": bool(index_now)}
+        document_id = session_document_id(session_id)
+        if document_id:
+            item["document_id"] = document_id
         self._journal(item)
         if not self.available:
             self._queue_pending(item)
@@ -203,6 +234,7 @@ class HindsightMemory:
                 tags=item.get("tags") or None,
                 metadata=item.get("metadata") or None,
                 retain_async=not item.get("index_now", False),
+                document_id=item.get("document_id") or None,
             )
             self.stats["retained"] += 1
             return True
@@ -264,7 +296,7 @@ class HindsightMemory:
             except OSError:
                 return 0
         sent = 0
-        for line in lines:
+        for i, line in enumerate(lines):
             try:
                 item = json.loads(line)
             except json.JSONDecodeError:
@@ -272,7 +304,20 @@ class HindsightMemory:
             if self._send_retain(item):
                 sent += 1
             else:
-                break  # still offline; _send_retain re-queued this one
+                # Still offline; _send_retain already re-queued this item.
+                # Re-queue the remaining, not-yet-attempted lines too, so
+                # they aren't silently dropped (the file was unlinked above).
+                remaining = lines[i + 1:]
+                if remaining:
+                    try:
+                        self.state_dir.mkdir(parents=True, exist_ok=True)
+                        with self.pending_file.open("a", encoding="utf-8") as fh:
+                            for line_text in remaining:
+                                fh.write(line_text + "\n")
+                        self.stats["queued"] += len(remaining)
+                    except OSError:
+                        pass
+                break
         return sent
 
     def recent_journal(self, limit: int = 20) -> List[Dict[str, Any]]:

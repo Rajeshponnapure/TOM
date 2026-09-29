@@ -2066,14 +2066,32 @@ class TomDesktopApp:
 
         msg_frame = tk.Frame(parent, bg=C["bg"], padx=24)
         msg_frame.grid(row=1, column=0, sticky="nswe")
-        msg_frame.columnconfigure(0, weight=1)
+        msg_frame.columnconfigure(1, weight=1)
         msg_frame.rowconfigure(0, weight=1)
 
+        # Persistent conversation picker: sessions are local and switching one
+        # changes only the short-term prompt context, not durable preferences.
+        history_frame = tk.Frame(msg_frame, bg=C["surface2"], width=210, padx=8, pady=8)
+        history_frame.grid(row=0, column=0, sticky="ns", padx=(0, 8))
+        history_frame.grid_propagate(False)
+        tk.Button(history_frame, text="+  New chat", command=self._new_chat_session,
+            bg=C["blue"], fg="#ffffff", activebackground="#2563eb", activeforeground="#ffffff",
+            relief="flat", bd=0, padx=10, pady=8, font=("Segoe UI", 9, "bold"), cursor="hand2").pack(fill="x")
+        tk.Label(history_frame, text="RECENT CHATS", bg=C["surface2"], fg=C["muted"],
+            font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(14, 5))
+        self.chat_history_list = tk.Listbox(history_frame, bg=C["surface2"], fg=C["text2"],
+            selectbackground=C["border2"], selectforeground=C["text"], relief="flat",
+            highlightthickness=0, bd=0, font=("Segoe UI", 9), activestyle="none")
+        self.chat_history_list.pack(fill="both", expand=True)
+        self.chat_history_list.bind("<<ListboxSelect>>", self._select_chat_session)
+        self._chat_history_ids = []
+        self._rendering_chat_history = False
+
         self.chat_canvas = tk.Canvas(msg_frame, bg=C["surface"], highlightthickness=0)
-        self.chat_canvas.grid(row=0, column=0, sticky="nswe")
+        self.chat_canvas.grid(row=0, column=1, sticky="nswe")
         chat_sb = tk.Scrollbar(msg_frame, orient="vertical", command=self.chat_canvas.yview,
             bg=C["surface"], troughcolor=C["surface2"])
-        chat_sb.grid(row=0, column=1, sticky="ns")
+        chat_sb.grid(row=0, column=2, sticky="ns")
         self.chat_canvas.configure(yscrollcommand=chat_sb.set)
 
         self.chat_inner = tk.Frame(self.chat_canvas, bg=C["surface"])
@@ -2083,6 +2101,7 @@ class TomDesktopApp:
         self.chat_canvas.bind("<MouseWheel>", self._on_chat_scroll)
 
         self._chat_bubbles = []
+        self._refresh_chat_history()
 
         # ── Attachment display area ──────────────────────────────────────
         self.attach_frame = tk.Frame(parent, bg=C["bg"])
@@ -2371,6 +2390,68 @@ class TomDesktopApp:
         self.chat_inner.update_idletasks()
         self.chat_canvas.configure(scrollregion=self.chat_canvas.bbox("all"))
         self.chat_canvas.yview_moveto(1.0)
+        if role == "assistant" and not self._rendering_chat_history:
+            self._refresh_chat_history()
+
+    def _refresh_chat_history(self):
+        """Refresh the left chat list without reading or changing old sessions."""
+        try:
+            memory = getattr(self.agent, "chat_memory", None)
+            if memory is None or not hasattr(self, "chat_history_list"):
+                return
+            self._chat_history_ids = []
+            self.chat_history_list.delete(0, "end")
+            active_id = memory.active_session_id
+            for index, session in enumerate(memory.list_sessions()):
+                self._chat_history_ids.append(session["id"])
+                self.chat_history_list.insert("end", session["title"] or "New chat")
+                if session["id"] == active_id:
+                    self.chat_history_list.selection_set(index)
+        except Exception:
+            pass
+
+    def _new_chat_session(self):
+        if self.processing:
+            self._append_chat("meta", "Finish or stop the current task before starting a new chat.")
+            return
+        memory = getattr(self.agent, "chat_memory", None)
+        if memory is None:
+            return
+        memory.new_session()
+        self._render_active_chat_session()
+        self._refresh_chat_history()
+        self.chat_subtitle_var.set("New chat — durable preferences and corrections are still remembered.")
+        self.input_entry.focus_set()
+
+    def _select_chat_session(self, _event=None):
+        if self._rendering_chat_history:
+            return
+        selected = self.chat_history_list.curselection()
+        if not selected:
+            return
+        index = selected[0]
+        if index >= len(self._chat_history_ids):
+            return
+        memory = getattr(self.agent, "chat_memory", None)
+        if memory is not None and memory.select_session(self._chat_history_ids[index]):
+            self._render_active_chat_session()
+            self.chat_subtitle_var.set("Viewing saved chat. Send a message to continue it.")
+
+    def _render_active_chat_session(self):
+        memory = getattr(self.agent, "chat_memory", None)
+        if memory is None:
+            return
+        self._rendering_chat_history = True
+        try:
+            for bubble in self._chat_bubbles:
+                bubble.destroy()
+            self._chat_bubbles = []
+            for message in memory.messages:
+                role = message.get("role", "assistant")
+                if role in ("user", "assistant"):
+                    self._append_chat(role, str(message.get("text", "")))
+        finally:
+            self._rendering_chat_history = False
 
     def _build_files_view(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -2597,7 +2678,15 @@ class TomDesktopApp:
         self._set_text(self.memory_result_text, f"Recalling '{query}'…")
 
         def work():
-            hits = mem.recall(query, limit=10, budget="mid")
+            try:
+                # Run through TOM's asyncio loop. Calling the cloud client
+                # directly from this UI worker can lose its task context.
+                future = asyncio.run_coroutine_threadsafe(
+                    mem.arecall(query, limit=10, budget="mid"), self._loop)
+                hits = future.result(timeout=mem.timeout + 5)
+            except Exception as exc:
+                mem.last_error = f"recall: {str(exc)[:200]}"
+                hits = []
             body = "\n\n".join(f"\u2022 {h.text}" + (f"   ({h.when})" if h.when else "") for h in hits)
             self._enqueue(self._set_text, self.memory_result_text,
                           body or f"Nothing remembered about '{query}' yet.\n{mem.last_error}".strip())
@@ -4755,6 +4844,12 @@ class TomDesktopApp:
             return
 
         from tools import llm_factory as _llm_factory
+        # Environment variables normally win over .env (tests and headless scripts
+        # rely on that). When a stale shell variable contradicts .env about the
+        # provider, say so instead of silently running the wrong model stack.
+        _provider_conflict = _llm_factory.provider_env_conflict()
+        if _provider_conflict:
+            self._enqueue(self._append_chat, "meta", _provider_conflict)
         use_ollama = _llm_factory.provider() == "ollama"
         if not use_ollama:
             self._enqueue(self._append_chat, "meta", f"Model provider: {_llm_factory.describe()}")

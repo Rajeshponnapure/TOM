@@ -34,6 +34,8 @@ class FakeHindsight:
         self._maybe_fail("retain")
         self.items.append({"bank": bank_id, "text": content, "tags": kwargs.get("tags") or [],
                            "context": kwargs.get("context"), "id": str(len(self.items) + 1),
+                           "document_id": kwargs.get("document_id"),
+                           "metadata": kwargs.get("metadata") or {},
                            "mentioned_at": "2026-09-2%d" % min(len(self.items), 8)})
         return SimpleNamespace(success=True, bank_id=bank_id, items_count=1)
 

@@ -73,6 +73,24 @@ def _llm_unreachable_hint(exc: BaseException) -> str:
     return ""
 
 
+# Image containers a vision model can be handed, as a data-URI mime subtype.
+_IMAGE_MIME = {".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg",
+               ".webp": "webp", ".gif": "gif", ".bmp": "bmp"}
+
+
+def _image_mime(path: str) -> str:
+    return _IMAGE_MIME.get(os.path.splitext(path or "")[1].lower(), "png")
+
+
+def _message_text(response: Any) -> str:
+    """Plain text from a LangChain message (content may be a list of parts)."""
+    content = getattr(response, "content", response)
+    if isinstance(content, list):
+        return " ".join(str(part.get("text", "")) for part in content
+                        if isinstance(part, dict)).strip()
+    return str(content or "").strip()
+
+
 def safe_print(message: str):
     clean = message.encode("ascii", errors="ignore").decode("ascii")
     print(clean)
@@ -380,10 +398,18 @@ class TomAgent:
             return [], "(I checked my memory — nothing specific about organizing this folder yet.)"
         return rules, ""
 
+    def _chat_session(self) -> Dict[str, str]:
+        """Id + title of the open chat, for tagging long-term memory. Never raises."""
+        try:
+            return self.chat_memory.active_session_info()
+        except Exception:
+            return {"id": "", "title": ""}
+
     def _retain_preference(self, command: str) -> None:
         """Store a correction / standing preference the user just stated."""
         category = memory_rules.categorize(command)
         correction = memory_rules.is_correction(command)
+        session = self._chat_session()
         if correction and self._last_command:
             content = (f"After TOM handled the request \"{self._last_command[:200]}\" "
                        f"(TOM replied: \"{' '.join(self._last_response.split())[:240]}\"), the user corrected TOM: "
@@ -391,9 +417,13 @@ class TomAgent:
         else:
             content = f"The user told TOM a standing instruction: \"{command}\""
         tags = [TAG_PREFERENCE, category] + ([TAG_CORRECTION] if correction else [])
-        self.memory.retain(content, context=f"user preference about {category.replace('_', ' ')}",
-                           tags=tags, metadata={"user_words": command[:400], "category": category},
-                           index_now=True)
+        context = f"user preference about {category.replace('_', ' ')}"
+        if session.get("title"):
+            context += f" — said in chat \"{session['title'][:60]}\""
+        self.memory.retain(content, context=context, tags=tags,
+                           metadata={"user_words": command[:400], "category": category,
+                                     "session_title": session.get("title", "")},
+                           index_now=True, session_id=session.get("id", ""))
 
     def _retain_outcome(self, command: str, result: Dict[str, Any], intent: str) -> None:
         """Store what TOM did and how it went, so future attempts can learn from it."""
@@ -410,9 +440,15 @@ class TomAgent:
         applied = result.get("applied_rules") or []
         if applied:
             content += " Remembered rules applied: " + "; ".join(a["rule"] for a in applied) + "."
-        self.memory.retain(content, context=f"task outcome — {category.replace('_', ' ')}",
+        session = self._chat_session()
+        context = f"task outcome — {category.replace('_', ' ')}"
+        if session.get("title"):
+            context += f" — chat \"{session['title'][:60]}\""
+        self.memory.retain(content, context=context,
                            tags=[TAG_TASK, category, f"status:{status}"],
-                           metadata={"category": category, "status": status})
+                           metadata={"category": category, "status": status,
+                                     "session_title": session.get("title", "")},
+                           session_id=session.get("id", ""))
 
     async def _memory_command(self, command: str) -> Optional[Dict[str, Any]]:
         """Meta commands about TOM's long-term memory. None if not one."""
@@ -725,6 +761,7 @@ class TomAgent:
             command_lower = command.lower().strip()
             intent = parsed.get("intent", "")
             safe_print(f"[STEP 2] Detected intent: {intent}")
+            engine_key = self.engine_router.detect(command_lower) if self.engine_router else None
 
             # ── Feedback handling ─────────────────────────────────────────
             # User says "that was wrong", "too long", "more detail", etc.
@@ -749,7 +786,16 @@ class TomAgent:
             # ── MCP connector calls ───────────────────────────────────────
             # e.g. "check my github repos", "list slack channels",
             #      "post to slack #general: hello", "get weather in London"
-            if self._is_mcp_request(command_lower, intent):
+            if engine_key == "fileops":
+                # A file command is never delegated to free-form chat. The
+                # engine builds a concrete plan and asks approval before moving
+                # anything, so a model cannot merely claim it completed work.
+                result = await self.engine_router.execute(command, key=engine_key)
+                if result.get("status") == "unhandled":
+                    result = {"status": "error", "response_type": "engine_fileops",
+                              "message": "I recognized a file task but could not build a safe plan."}
+
+            elif self._is_mcp_request(command_lower, intent):
                 result = await self._handle_mcp_request(command, command_lower, parsed)
                 # fall through only if mcp returned unhandled
                 if result.get("status") != "unhandled":
@@ -2207,8 +2253,28 @@ class TomAgent:
             return {"status": "error", "message": f"File analysis failed: {e}"}
 
     async def _analyze_image_with_vision(self, image_path: str, user_question: str = "") -> Dict[str, Any]:
-        """Use Gemma 4's vision to analyze an image via direct Ollama API."""
+        """Analyze an image with the ACTIVE provider's vision model.
+
+        Groq (hosted) is used when GROQ_VISION_MODEL names a multimodal model on
+        the account. Local Ollama vision runs only when the user explicitly
+        chose the local provider. With neither available TOM explains why and
+        uses local OCR — it never silently calls a local model behind a hosted
+        provider setting.
+        """
         safe_print(f"[VISION] Analyzing image: {os.path.basename(image_path)}")
+        if llm_factory.provider() == "groq":
+            hosted_model = llm_factory.groq_vision_model()
+            if hosted_model:
+                hosted = await self._analyze_image_with_groq_vision(image_path, user_question, hosted_model)
+                if hosted is not None:
+                    return hosted
+                note = ("Groq vision could not analyze this image, so I used local OCR "
+                        f"({str(getattr(self, '_vision_error', ''))[:120]}).")
+            else:
+                note = ("Groq is the active provider and no vision model is configured, so I used "
+                        "local OCR. Set GROQ_VISION_MODEL in .env to a multimodal model your Groq "
+                        "account can use, or run TOM with TOM_LLM_PROVIDER=ollama for local vision.")
+            return await self._analyze_image_with_ocr(image_path, user_question, note)
         try:
             with open(image_path, "rb") as f:
                 image_bytes = f.read()
@@ -2231,7 +2297,7 @@ class TomAgent:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            safe_print("[VISION] Sending image to Gemma 4 vision model...")
+            safe_print("[VISION] Sending image to the local vision model...")
             resp_data = await asyncio.wait_for(
                 asyncio.to_thread(lambda: urllib.request.urlopen(req, timeout=120).read()),
                 timeout=self.model_timeout_seconds,
@@ -2249,33 +2315,69 @@ class TomAgent:
                 "response_type": "image_analysis",
             }
         except Exception as e:
-            safe_print(f"[VISION] Vision failed ({e}), falling back to OCR...")
-            # Fallback: OCR + file metadata
-            try:
-                summary = await asyncio.to_thread(self.file_analyzer.summarize, image_path)
-                extracted = await asyncio.to_thread(self.file_analyzer.extract_text, image_path)
-                ocr_text = extracted.strip() if extracted else ""
+            safe_print(f"[VISION] Local vision failed ({e}), falling back to OCR...")
+            return await self._analyze_image_with_ocr(
+                image_path, user_question,
+                f"The local vision model could not analyze this image ({str(e)[:120]}).")
 
-                if ocr_text and len(ocr_text) > 20:
-                    fallback_prompt = self._safe_prompt([
-                        ("system", "You are TOM. The user attached an image. "
-                         "Vision analysis is unavailable, but OCR extracted text from the image. "
-                         "Analyze the extracted text and answer the user's question."),
-                        ("user", "Image info:\n{summary}\n\nOCR text from image:\n{ocr_text}\n\nUser question: {question}"),
-                    ])
-                    question = user_question or "What does this image contain?"
-                    resp = await self._invoke_llm(
-                        fallback_prompt,
-                        {"summary": summary, "ocr_text": ocr_text[:2000], "question": question},
-                        "image_ocr_analysis", self.llm)
-                    return {"status": "success", "message": resp.content.strip(),
-                            "response_type": "image_analysis_ocr"}
-                else:
-                    return {"status": "success",
-                            "message": f"Image details:\n{summary}\n\n(Vision model could not analyze this image. Error: {e})",
-                            "response_type": "image_analysis_fallback"}
-            except Exception as fallback_err:
-                return {"status": "error", "message": f"Image analysis failed: {e}. Fallback also failed: {fallback_err}"}
+    async def _analyze_image_with_groq_vision(self, image_path: str, user_question: str,
+                                              model_id: str) -> Optional[Dict[str, Any]]:
+        """Hosted image analysis through Groq. Returns None (never raises) on failure."""
+        try:
+            from langchain_core.messages import HumanMessage
+            with open(image_path, "rb") as fh:
+                b64_image = base64.b64encode(fh.read()).decode("utf-8")
+            question = user_question or "Describe this image in detail. What do you see?"
+            message = HumanMessage(content=[
+                {"type": "text", "text": question},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/{_image_mime(image_path)};base64,{b64_image}"}},
+            ])
+            llm = llm_factory.make_groq_model(model_id, max_tokens=2048)
+            response = await asyncio.wait_for(llm.ainvoke([message]),
+                                              timeout=self.model_timeout_seconds)
+            text = _message_text(response)
+            if not text:
+                raise RuntimeError("empty response from the Groq vision model")
+            safe_print(f"[VISION] Groq vision analysis complete ({model_id}).")
+            return {"status": "success", "message": text,
+                    "response_type": "image_analysis", "model": model_id}
+        except Exception as exc:
+            self._vision_error = str(exc)[:200]
+            safe_print(f"[VISION] Groq vision failed ({exc}); using OCR instead.")
+            return None
+
+    async def _analyze_image_with_ocr(self, image_path: str, user_question: str,
+                                      note: str = "") -> Dict[str, Any]:
+        """OCR + file metadata fallback — local tooling, not a hidden model swap."""
+        try:
+            summary = await asyncio.to_thread(self.file_analyzer.summarize, image_path)
+            extracted = await asyncio.to_thread(self.file_analyzer.extract_text, image_path)
+            ocr_text = extracted.strip() if extracted else ""
+
+            if ocr_text and len(ocr_text) > 20:
+                fallback_prompt = self._safe_prompt([
+                    ("system", "You are TOM. The user attached an image. "
+                     "Vision analysis is unavailable, but OCR extracted text from the image. "
+                     "Analyze the extracted text and answer the user's question."),
+                    ("user", "Image info:\n{summary}\n\nOCR text from image:\n{ocr_text}\n\nUser question: {question}"),
+                ])
+                question = user_question or "What does this image contain?"
+                resp = await self._invoke_llm(
+                    fallback_prompt,
+                    {"summary": summary, "ocr_text": ocr_text[:2000], "question": question},
+                    "image_ocr_analysis", self.llm)
+                body = _message_text(resp)
+                return {"status": "success",
+                        "message": f"{note}\n\n{body}" if note else body,
+                        "response_type": "image_analysis_ocr"}
+            return {"status": "success",
+                    "message": f"Image details:\n{summary}" + (f"\n\n({note})" if note else ""),
+                    "response_type": "image_analysis_fallback"}
+        except Exception as fallback_err:
+            detail = f"{note} " if note else ""
+            return {"status": "error",
+                    "message": f"Image analysis failed: {detail}{fallback_err}".strip()}
 
     # ── FILE COMMANDS ───────────────────────────────────────────────────
 
