@@ -38,6 +38,10 @@ class CommandRouter:
         if not lower:
             return RouteDecision("chat", "empty", "generate_chat_response", confidence=1.0)
 
+        # Explanation / understanding questions — must come BEFORE action handlers
+        if self._is_explanation_request(lower):
+            return RouteDecision("explanation", "explain_how_works", "explain_how_it_works", confidence=0.9)
+
         # Automation / agent intents
         if self._is_build_agent_request(lower):
             return RouteDecision("automation", "build_agent", "build_agent", confidence=0.95)
@@ -211,6 +215,42 @@ class CommandRouter:
         agent_names = ("email agent", "instagram agent")
         actions = ("start", "stop", "status", "restart")
         return any(name in lower for name in agent_names) and any(act in lower for act in actions)
+
+    def _is_explanation_request(self, lower: str) -> bool:
+        """Detect 'explain how X works', 'what is X', 'how does X work' questions."""
+        explanation_patterns = (
+            "explain how",
+            "how does",
+            "how do",
+            "what is",
+            "what are",
+            "how works",
+            "how it works",
+            "how they work",
+            "describe how",
+            "tell me how",
+            "explain what",
+            "explain the",
+            "explain",
+            "how to use",
+            "how can i",
+            "what does",
+            "how does the",
+            "how do i",
+        )
+        # Must have an explanation pattern AND a question-like structure
+        has_explanation_intent = any(pattern in lower for pattern in explanation_patterns)
+        if not has_explanation_intent:
+            return False
+        # Exclude action commands that happen to contain these words
+        action_exclusions = (
+            "send", "create", "make", "build", "write", "draft", "compose",
+            "open", "launch", "start", "run", "execute", "delete", "remove",
+            "post", "publish", "share", "transfer", "move", "copy",
+        )
+        if any(excl in lower for excl in action_exclusions):
+            return False
+        return True
 
     def _extract_profile_query(self, command: str) -> str:
         patterns = [

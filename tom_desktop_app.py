@@ -2074,9 +2074,14 @@ class TomDesktopApp:
         history_frame = tk.Frame(msg_frame, bg=C["surface2"], width=210, padx=8, pady=8)
         history_frame.grid(row=0, column=0, sticky="ns", padx=(0, 8))
         history_frame.grid_propagate(False)
-        tk.Button(history_frame, text="+  New chat", command=self._new_chat_session,
+        btn_row = tk.Frame(history_frame, bg=C["surface2"])
+        btn_row.pack(fill="x")
+        tk.Button(btn_row, text="+  New chat", command=self._new_chat_session,
             bg=C["blue"], fg="#ffffff", activebackground="#2563eb", activeforeground="#ffffff",
-            relief="flat", bd=0, padx=10, pady=8, font=("Segoe UI", 9, "bold"), cursor="hand2").pack(fill="x")
+            relief="flat", bd=0, padx=10, pady=8, font=("Segoe UI", 9, "bold"), cursor="hand2").pack(side="left", fill="x", expand=True)
+        tk.Button(btn_row, text="\U0001F5D1  Delete", command=self._delete_chat_session,
+            bg=C["surface2"], fg=C["red"], activebackground=C["border2"], activeforeground=C["red"],
+            relief="flat", bd=0, padx=10, pady=8, font=("Segoe UI", 9, "bold"), cursor="hand2").pack(side="left", fill="x", expand=True, padx=(4, 0))
         tk.Label(history_frame, text="RECENT CHATS", bg=C["surface2"], fg=C["muted"],
             font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(14, 5))
         self.chat_history_list = tk.Listbox(history_frame, bg=C["surface2"], fg=C["text2"],
@@ -2190,21 +2195,27 @@ class TomDesktopApp:
             relief="flat", bd=0, padx=14, pady=8, font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.voice_ui_btn.grid(row=0, column=1)
 
+        # Mute toggle for voice output
+        self.mute_btn = tk.Button(input_row, text="\U0001F50A  Mute", command=self._toggle_mute,
+            bg=C["surface2"], fg=C["text2"], activebackground=C["border2"], activeforeground=C["text"],
+            relief="flat", bd=0, padx=14, pady=8, font=("Segoe UI", 10, "bold"), cursor="hand2")
+        self.mute_btn.grid(row=0, column=2)
+
         self.mic_btn = tk.Button(input_row, text="\u266a", command=self._on_mic_click,
             bg=C["surface2"], fg=C["text2"], activebackground=C["surface"], activeforeground=C["blue"],
             relief="flat", bd=0, padx=14, pady=8, font=("Segoe UI", 13), cursor="hand2")
-        self.mic_btn.grid(row=0, column=2)
+        self.mic_btn.grid(row=0, column=3)
 
         self.send_btn = tk.Button(input_row, text="Send  \u25b6", command=self.send_message,
             bg=C["blue"], fg="#ffffff", activebackground="#2563eb", activeforeground="#ffffff",
             relief="flat", bd=0, padx=18, pady=8, font=("Segoe UI", 10, "bold"), cursor="hand2")
-        self.send_btn.grid(row=0, column=3, padx=(0, 0))
+        self.send_btn.grid(row=0, column=4, padx=(0, 0))
 
         self.stop_btn = tk.Button(input_row, text="■ Stop", command=self._cancel_active_work,
             bg=C["surface2"], fg=C["red"], activebackground=C["border2"], activeforeground=C["red"],
             relief="flat", bd=0, padx=12, pady=8, font=("Segoe UI", 9, "bold"),
             cursor="hand2", state="disabled")
-        self.stop_btn.grid(row=0, column=4, padx=(6, 0))
+        self.stop_btn.grid(row=0, column=5, padx=(6, 0))
 
         fb_row = tk.Frame(bottom_bar, bg=C["bg"])
         fb_row.grid(row=2, column=0, sticky="ew", pady=(6, 0))
@@ -2452,6 +2463,45 @@ class TomDesktopApp:
                     self._append_chat(role, str(message.get("text", "")))
         finally:
             self._rendering_chat_history = False
+
+    def _delete_chat_session(self):
+        """Delete the currently selected chat session."""
+        selected = self.chat_history_list.curselection()
+        if not selected:
+            self._append_chat("meta", "Select a chat to delete.")
+            return
+        index = selected[0]
+        if index >= len(self._chat_history_ids):
+            return
+        session_id = self._chat_history_ids[index]
+        memory = getattr(self.agent, "chat_memory", None)
+        if memory is None:
+            return
+        # Prevent deleting the only session
+        if len(memory.sessions) <= 1:
+            self._append_chat("meta", "Cannot delete the only chat session.")
+            return
+        if memory.delete_session(session_id):
+            self._refresh_chat_history()
+            self._render_active_chat_session()
+            self._append_chat("meta", "Chat deleted.")
+        else:
+            self._append_chat("meta", "Failed to delete chat.")
+
+    def _toggle_mute(self):
+        """Toggle voice output on/off."""
+        if not self.voice:
+            self._append_chat("meta", "Voice tools not available.")
+            return
+        self.voice.output_enabled = not self.voice.output_enabled
+        if self.voice.output_enabled:
+            self.mute_btn.configure(text="\U0001F50A  Mute", bg=C["surface2"], fg=C["text2"])
+            self._append_chat("meta", "Voice output: ON")
+        else:
+            self.mute_btn.configure(text="\U0001F507  Unmute", bg=C["amber"], fg="#000000")
+            self._append_chat("meta", "Voice output: MUTED")
+            # Stop any currently speaking
+            self.voice.stop_speaking()
 
     def _build_files_view(self, parent):
         parent.columnconfigure(0, weight=1)

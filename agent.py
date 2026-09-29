@@ -957,6 +957,10 @@ class TomAgent:
                 elif handler == "execute_web_search":
                     result = await self._web_search(command, parsed)
 
+                # Explanation / understanding questions
+                elif handler == "explain_how_it_works":
+                    result = await self._explain_how_it_works(command, parsed)
+
                 # Email drafting the router didn't claim ("email Ravi about the
                 # budget") — must win over skill/topic routes keyed on "budget" etc.
                 elif parsed.get("intent") == "write_email" and handler == "generate_chat_response":
@@ -2048,6 +2052,133 @@ class TomAgent:
             return {"status": "error", "message": f"Could not write website files: {err_detail}"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+    # ── EXPLANATION / UNDERSTANDING ──────────────────────────────────────────
+
+    async def _explain_how_it_works(self, command: str, parsed: Dict) -> Dict[str, Any]:
+        """Explain how a TOM feature/component works using the LLM with full context."""
+        # Extract what the user wants explained
+        topic = self._extract_explanation_topic(command)
+        
+        # Build comprehensive context about TOM's capabilities
+        system_prompt = (
+            "You are TOM, an AI assistant explaining your own capabilities to the user. "
+            "Provide clear, concise explanations of how specific features work. "
+            "Structure your response as:\n"
+            "1. What the user asked about (confirm understanding)\n"
+            "2. How it works (step-by-step)\n"
+            "3. What the user needs to do to use it\n"
+            "4. Any prerequisites or setup needed\n"
+            "Keep it practical and conversational. Don't be verbose."
+        )
+        
+        # Get relevant memory/knowledge context
+        memory_context = self._build_memory_context(command)
+        
+        # Add specific knowledge about the topic if available
+        knowledge = self._get_topic_knowledge(topic)
+        
+        prompt = self._safe_prompt([
+            ("system", system_prompt),
+            ("user", f"User asked: {command}\n\n"
+                     f"Topic to explain: {topic}\n\n"
+                     f"Memory context:\n{memory_context}\n\n"
+                     f"Knowledge base:\n{knowledge}\n\n"
+                     f"Explain how this works in a clear, practical way.")
+        ])
+        
+        resp = await self._invoke_llm(prompt, {"command": command, "topic": topic, "memory": memory_context}, "explanation", self.llm)
+        explanation = (getattr(resp, "content", "") or "").strip()
+        
+        return {
+            "status": "success",
+            "message": explanation,
+            "response_type": "explanation",
+            "topic": topic
+        }
+
+    def _extract_explanation_topic(self, command: str) -> str:
+        """Extract the main topic from an explanation request."""
+        import re
+        command_lower = command.lower()
+        # Patterns like "explain how X works", "how does X work", "what is X"
+        patterns = [
+            r"explain how\s+(.+?)(?:\s+works?)?(?:\?|$)",
+            r"how does\s+(.+?)\s+work(?:\?|$)",
+            r"how do\s+(.+?)\s+work(?:\?|$)",
+            r"what is\s+(.+?)(?:\?|$)",
+            r"what are\s+(.+?)(?:\?|$)",
+            r"how\s+(.+?)\s+works?(?:\?|$)",
+            r"describe how\s+(.+?)(?:\?|$)",
+            r"tell me how\s+(.+?)(?:\?|$)",
+            r"explain what\s+(.+?)(?:\?|$)",
+            r"explain the\s+(.+?)(?:\?|$)",
+            r"how to use\s+(.+?)(?:\?|$)",
+            r"how can i\s+(.+?)(?:\?|$)",
+            r"what does\s+(.+?)\s+do(?:\?|$)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, command_lower)
+            if match:
+                return match.group(1).strip().rstrip("?.,!")
+        # Fallback: return the command itself
+        return command.strip().rstrip("?.,!")
+
+    def _get_topic_knowledge(self, topic: str) -> str:
+        """Get relevant knowledge from TOM's knowledge base about a topic."""
+        if not getattr(self, "knowledge", None):
+            return "No curated knowledge base available."
+        
+        topic_lower = topic.lower()
+        knowledge_parts = []
+        
+        # Search knowledge base for relevant sections
+        try:
+            words = [w for w in topic_lower.split() if len(w) > 3]
+            for w in words[:5]:
+                results = self.knowledge.search(w)
+                for r in results[:2]:
+                    dom = self.knowledge.cache.get(r.get("domain_key"), {})
+                    for section in dom.get("sections", []):
+                        if section.get("name") == r.get("section"):
+                            expl = (section.get("explanation_simple") or "").strip()
+                            if expl:
+                                knowledge_parts.append(f"[{r.get('domain')} / {r.get('section')}] {expl[:300]}")
+                            break
+                    if len(knowledge_parts) >= 5:
+                        break
+                if len(knowledge_parts) >= 5:
+                    break
+        except Exception:
+            pass
+        
+        # Add specific known topics
+        if "email agent" in topic_lower:
+            knowledge_parts.append(
+                "[Email Agent] Automatically monitors inbox, classifies emails by importance, "
+                "drafts replies for approval, and sends approved emails via Gmail OAuth2. "
+                "Controlled with: 'start email agent', 'stop email agent', 'email agent summary'."
+            )
+        if "instagram agent" in topic_lower:
+            knowledge_parts.append(
+                "[Instagram Agent] Scrapes Instagram posts, extracts AI/news content, "
+                "generates reports, and can email them. "
+                "Controlled with: 'start instagram agent', 'instagram workflow'."
+            )
+        if "voice" in topic_lower:
+            knowledge_parts.append(
+                "[Voice] Uses SpeechRecognition (Google/Whisper) for input and edge-tts (Microsoft Neural) "
+                "or pyttsx3 for output. Continuous conversation mode available. "
+                "Requires: microphone, internet for STT/TTS (or local Whisper)."
+            )
+        if "rag" in topic_lower or "memory" in topic_lower:
+            knowledge_parts.append(
+                "[RAG Memory] Semantic memory using ChromaDB - stores conversations, documents, "
+                "knowledge as vectors. Retrieves relevant context by meaning. "
+                "Long-term memory (Hindsight) stores preferences/corrections across sessions."
+            )
+        
+        return "\n\n".join(knowledge_parts) if knowledge_parts else "No specific knowledge found for this topic."
 
     # ── EMAIL ───────────────────────────────────────────────────────────
 
