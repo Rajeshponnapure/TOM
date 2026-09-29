@@ -92,6 +92,111 @@ def groq_model(slot: str = "primary") -> str:
     return base
 
 
+# ── Groq model listing (desktop dropdown) ────────────────────────────────────
+# The desktop dropdown must offer exactly what the ACTIVE provider can serve.
+# Groq has no local-model concept, so an Ollama tag such as "gemma4:latest" must
+# never reach it: the dropdown used to persist that name as GROQ_MODEL and every
+# chat call then failed with Groq's "model not found".
+_GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
+_GROQ_USER_AGENT = "TOM/1.0"
+_GROQ_MODEL_CACHE_SECONDS = 300
+_GROQ_MODEL_CACHE: dict = {"when": 0.0, "names": []}
+# Groq serves more than chat models (speech-to-text, TTS, guard and embedding
+# endpoints); none of those belong in a chat dropdown.
+_GROQ_NON_CHAT_MARKERS = ("whisper", "tts", "orpheus", "guard", "embed", "rerank")
+
+
+def is_groq_chat_model(name: str) -> bool:
+    """True when `name` could be a Groq chat model id.
+
+    Groq ids are namespaced ("openai/gpt-oss-120b") or bare
+    ("llama-3.3-70b-versatile"). Ollama tags always carry a ":tag" suffix, so a
+    colon proves the name belongs to the local provider — or that the configured
+    Groq id was overwritten by one — and is rejected.
+    """
+    name = (name or "").strip()
+    if not name or ":" in name:
+        return False
+    lowered = name.lower()
+    return not any(marker in lowered for marker in _GROQ_NON_CHAT_MARKERS)
+
+
+def groq_configured_models() -> list:
+    """Groq model ids pinned in .env, in slot order (primary, fast, code)."""
+    names: list = []
+    for slot in ("primary", "fast", "code"):
+        name = groq_model(slot)
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def groq_available_models(api_key: str = "", timeout: float = 5.0) -> list:
+    """Model ids the Groq key can reach, straight from the API (5 min cache).
+
+    Returns [] when the key is missing or Groq is unreachable, so callers fall
+    back to the ids configured in .env. Never calls Ollama.
+    """
+    import time as _time
+    key = (api_key or os.environ.get("GROQ_API_KEY", "")).strip()
+    if not key:
+        return []
+    now = _time.time()
+    cached = _GROQ_MODEL_CACHE["names"]
+    if cached and now - _GROQ_MODEL_CACHE["when"] < _GROQ_MODEL_CACHE_SECONDS:
+        return list(cached)
+    try:
+        import json as _json
+        import urllib.request as _ur
+        # Groq sits behind Cloudflare, which answers 403 to the literal default
+        # urllib user-agent; any other UA (this one included) is accepted.
+        request = _ur.Request(_GROQ_MODELS_URL, method="GET",
+                              headers={"Authorization": f"Bearer {key}",
+                                       "User-Agent": _GROQ_USER_AGENT})
+        with _ur.urlopen(request, timeout=timeout) as resp:
+            payload = _json.loads(resp.read().decode("utf-8"))
+        names = [m.get("id", "") for m in payload.get("data", []) if m.get("id")]
+        if names:
+            _GROQ_MODEL_CACHE.update({"when": now, "names": names})
+            return names
+        return list(cached)
+    except Exception:
+        return list(cached)
+
+
+def groq_dropdown_models(timeout: float = 5.0) -> list:
+    """Chat models the desktop dropdown may offer while Groq is the provider.
+
+    Live account models first, then the ids pinned in .env so the current
+    setting stays selectable. Ollama-shaped entries are dropped even when they
+    came from .env: that is how a GROQ_MODEL corrupted by the old dropdown gets
+    healed instead of offered again. Never returns a "model:tag" name.
+    """
+    names: list = []
+    for name in groq_available_models(timeout=timeout):
+        if is_groq_chat_model(name) and name not in names:
+            names.append(name)
+    for name in groq_configured_models():
+        if is_groq_chat_model(name) and name not in names:
+            names.append(name)
+    return names
+
+
+def groq_model_switch_rejection(model_name: str) -> str:
+    """Why the desktop dropdown must refuse `model_name` while Groq is active.
+
+    "" means the switch is safe; anything else is the message for the user. A
+    colon is Ollama's "<model>:<tag>" shape, so refusing it here guarantees no
+    local tag can ever be persisted as GROQ_MODEL again.
+    """
+    name = (model_name or "").strip()
+    if name and is_groq_chat_model(name):
+        return ""
+    return (f"'{name}' is not a Groq chat model, so the model was left unchanged. "
+            "Groq is the active provider — pick a Groq model from the dropdown, "
+            f"or set TOM_LLM_PROVIDER=ollama in .env to run '{name or 'it'}' locally.")
+
+
 # ── Ollama model resolution ──────────────────────────────────────────────────
 # Slot defaults. Every slot is overridable in .env via OLLAMA_MODEL,
 # OLLAMA_FAST_MODEL, OLLAMA_CODE_MODEL, OLLAMA_EMBED_MODEL.

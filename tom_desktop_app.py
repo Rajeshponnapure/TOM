@@ -4871,15 +4871,17 @@ class TomDesktopApp:
 
         self._enqueue(self._set_status, f"Initializing TOM ({_llm_factory.describe()})...")
         try:
-            # Check required Ollama models exist before initializing
+            # Verify the models the active provider actually needs. On Groq the
+            # chat slots are hosted, so only the embedding model (always local,
+            # it powers RAG) matters locally.
             try:
                 model_req = Request("http://localhost:11434/api/tags", method="GET")
                 with urlopen(model_req, timeout=5) as resp:
                     tags = json.loads(resp.read().decode())
                     installed = [m["name"] for m in tags.get("models", [])]
                     required = [os.environ.get("OLLAMA_MODEL", "gemma4:latest"),
-                                os.environ.get("OLLAMA_FAST_MODEL", "qwen2.5-coder:7b-instruct"),
-                                os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")]
+                                os.environ.get("OLLAMA_FAST_MODEL", "qwen2.5-coder:7b-instruct")] if use_ollama else []
+                    required.append(os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text:latest"))
                     missing = [m for m in required if m not in installed]
                     if missing:
                         self._enqueue(self._append_chat, "meta",
@@ -4906,7 +4908,7 @@ class TomDesktopApp:
                           getattr(self.agent, "model_name", os.environ.get("OLLAMA_MODEL", "gemma4")), True)
             self._enqueue(self._append_chat, "meta", self.agent.memory.status_line())
             self._enqueue(self._update_voice_and_dashboard_state)
-            self._enqueue(self._fetch_ollama_models)
+            self._enqueue(self._fetch_provider_models)
         except Exception as exc:
             import traceback as _tb
             exc_detail = "".join(_tb.format_exception_only(type(exc), exc)).strip()
@@ -4948,6 +4950,53 @@ class TomDesktopApp:
         except Exception as exc:
             self._enqueue(self._append_chat, "meta", f"Unable to start Ollama: {exc}")
 
+    def _fetch_provider_models(self):
+        """Populate the model dropdown with the ACTIVE provider's models.
+
+        Groq and Ollama have nothing to do with each other: offering local
+        Ollama tags while Groq is active is what let the old dropdown write a
+        local model name into GROQ_MODEL.
+        """
+        try:
+            from tools import llm_factory
+            if llm_factory.provider() == "groq":
+                self._fetch_groq_models()
+            else:
+                self._fetch_ollama_models()
+        except Exception:
+            pass  # the dropdown keeps its configured default
+
+    def _fetch_groq_models(self):
+        """List the Groq chat models this key can use (never a local tag)."""
+        from tools import llm_factory
+        models = llm_factory.groq_dropdown_models()
+        if not models:
+            # Offline and nothing usable in .env; keep the configured default.
+            return
+        configured = llm_factory.groq_model("primary")
+        if configured not in models:
+            self._append_chat("meta",
+                f"GROQ_MODEL is '{configured}', which this Groq key cannot use. "
+                f"Showing the models it can — pick one (e.g. {models[0]}) to update .env.")
+        self._set_model_menu(models)
+
+    def _set_model_menu(self, models):
+        """Rebuild the OptionMenu choices, keeping the current pick when possible."""
+        models = list(dict.fromkeys(name for name in models if name))
+        if not models:
+            return
+        current = self.model_var.get()
+        # Keep current selection if it's still in the list, else default to first
+        if current not in models:
+            current = models[0]
+        self._model_names = models
+        menu = self.model_menu["menu"]
+        menu.delete(0, "end")
+        for name in models:
+            menu.add_command(label=name,
+                             command=lambda v=name: self._on_model_change(v))
+        self.model_var.set(current)
+
     def _fetch_ollama_models(self):
         """Query Ollama API for all installed models and populate the model dropdown."""
         try:
@@ -4957,28 +5006,34 @@ class TomDesktopApp:
                 models = [m["name"] for m in tags.get("models", [])]
                 if not models:
                     return
-                current = self.model_var.get()
-                # Keep current selection if it's still in the list, else default to first
-                if current not in models:
-                    current = models[0]
-                # Rebuild OptionMenu choices
-                self._model_names = models
-                menu = self.model_menu["menu"]
-                menu.delete(0, "end")
-                for name in models:
-                    menu.add_command(label=name,
-                                     command=lambda v=name: self._on_model_change(v))
-                self.model_var.set(current)
+                self._set_model_menu(models)
         except Exception:
             pass  # Ollama may not be available yet; the dropdown keeps its default
 
     def _on_model_change(self, model_name: str):
         """Called when the user selects a different model from the dropdown."""
+        try:
+            from tools import llm_factory as _llm_factory
+        except Exception:
+            _llm_factory = None
+        on_groq = _llm_factory is not None and _llm_factory.provider() == "groq"
+
+        if on_groq:
+            rejection = _llm_factory.groq_model_switch_rejection(model_name)
+            if rejection:
+                # Keep the running Groq model selected and explain, instead of
+                # persisting an Ollama tag that every chat call would 404 on.
+                self.model_var.set(_llm_factory.groq_model("primary"))
+                self._append_chat("meta", rejection)
+                return
+
         self.model_var.set(model_name)
+        # The agent reads GROQ_* while Groq is active, OLLAMA_* otherwise.
+        env_key = "GROQ_MODEL" if on_groq else "OLLAMA_MODEL"
         if hasattr(self, "agent") and self.agent_ready:
             try:
                 # Update the environment and the agent's LLM in-place
-                os.environ["OLLAMA_MODEL"] = model_name
+                os.environ[env_key] = model_name
                 if hasattr(self.agent, "switch_model"):
                     self.agent.switch_model(model_name)
                     self._append_chat("meta", f"Switched model to {model_name}")
@@ -4990,7 +5045,7 @@ class TomDesktopApp:
                 self._append_chat("meta", f"Model switch error: {exc}")
         else:
             # Agent not ready yet — update env so it picks up the selection on init
-            os.environ["OLLAMA_MODEL"] = model_name
+            os.environ[env_key] = model_name
 
     # ── Attachment handlers ─────────────────────────────────────────────
     def _attach_file(self):
