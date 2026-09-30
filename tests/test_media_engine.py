@@ -24,10 +24,15 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
-from PIL import Image
 
-import tools.media_engine as mediamod
-from tools.media_engine import MediaEngine
+# Pillow is optional and not in requirements-ci.txt; skip the whole module
+# (rather than erroring at collection) when it's absent, matching how
+# test_data_analysis.py / test_document_creator.py handle matplotlib / pptx.
+pytest.importorskip("PIL")
+from PIL import Image  # noqa: E402
+
+import tools.media_engine as mediamod  # noqa: E402
+from tools.media_engine import MediaEngine  # noqa: E402
 
 
 @pytest.fixture

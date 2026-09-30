@@ -15,7 +15,8 @@ PROMPTED = {
     "Hardware": "_handle_hardware", "Skill": "_handle_skill_query", "ML": "_handle_ml",
     "IoT": "_handle_iot", "VLSI": "_handle_vlsi", "Env Setup": "_handle_env",
     "News": "_handle_news", "Voice+": "_handle_voice_enhanced", "Game Dev": "_handle_game_dev",
-    "Blender 3D": "_handle_blender", "Auto-Update": "_handle_auto_update",
+    "Blender 3D": "_handle_blender", "Media Edit": "_handle_media", "Auto Scaler": "_handle_scaler",
+    "Auto-Update": "_handle_auto_update",
 }
 
 
@@ -55,8 +56,8 @@ def _app_with_quick_actions():
     return app
 
 
-def test_all_25_quick_actions_are_defined():
-    assert len(_app_with_quick_actions().quick_actions) == 25
+def test_all_27_quick_actions_are_defined():
+    assert len(_app_with_quick_actions().quick_actions) == 27
 
 
 def test_each_quick_action_reaches_its_handler():
