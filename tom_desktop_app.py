@@ -177,6 +177,13 @@ except ImportError:
     _HAS_BLENDER = False
 
 try:
+    from tools.media_engine import MediaEngine
+    _HAS_MEDIA = True
+except ImportError:
+    MediaEngine = None
+    _HAS_MEDIA = False
+
+try:
     from tools.auto_update import AutoUpdate
     _HAS_AUTO_UPDATE = True
 except ImportError:
@@ -1339,6 +1346,8 @@ class TomDesktopApp:
             {"icon": "\u266b", "label": "Voice+",      "cmd": "Voice+ (emotion, conversation): ",              "color": C["purple"]},
             {"icon": "\u25b6", "label": "Game Dev",    "cmd": "Game dev (pygame, unity, script): ",            "color": C["pink"]},
             {"icon": "\u25c7", "label": "Blender 3D",  "cmd": "Blender 3D (cube, sphere, terrain): ",          "color": C["orange"]},
+            {"icon": "\u25a3", "label": "Media Edit",  "cmd": "Media edit (video/photo file + action): ",      "color": C["red"]},
+            {"icon": "\u2261", "label": "Auto Scaler", "cmd": "Auto scaler (status, resources, simulate): ",   "color": C["indigo"]},
             {"icon": "\u21bb", "label": "Auto-Update", "cmd": "Auto-update (check, pull, pip, full): ",        "color": C["emerald"]},
         ]
 
@@ -1360,6 +1369,7 @@ class TomDesktopApp:
         self.voice_enhanced = None
         self.game_dev = None
         self.blender = None
+        self.media = None
         self.auto_update = None
 
         self._build_layout()
@@ -1776,7 +1786,7 @@ class TomDesktopApp:
             ("\u25cf  Email", C["cyan"]), ("\u25cf  Voice", C["purple"]),
             ("\u25cf  Research", C["amber"]), ("\u25cf  Code", C["orange"]),
             ("\u25cf  Game Dev", C["pink"]), ("\u25cf  Blender 3D", C["orange"]),
-            ("\u25cf  Security", C["red"]),
+            ("\u25cf  Media Edit", C["red"]), ("\u25cf  Security", C["red"]),
         ]
         row1 = tk.Frame(cap_frame, bg=C["bg"])
         row1.pack(fill="x")
@@ -2921,6 +2931,7 @@ class TomDesktopApp:
             ("Voice enhanced", "voice_enhanced"),
             ("Game dev", "game_dev"),
             ("Blender control", "blender"),
+            ("Media engine (video/photo)", "media"),
             ("Auto update", "auto_update"),
         ]
         ready = 0
@@ -3327,6 +3338,10 @@ class TomDesktopApp:
             self._prompt_and_run("Game dev command (e.g., 'scaffold pygame my_game platformer', 'script unity player movement', 'engines', 'installed'):", self._handle_game_dev)
         elif "Blender" in key:
             self._prompt_and_run("Blender command (e.g., 'cube', 'sphere', 'terrain', 'house', 'lights', 'render', 'animation', 'list'):", self._handle_blender)
+        elif "Media Edit" in key or "Media" in key:
+            self._prompt_and_run("Media edit (e.g., 'trim video C:/clip.mp4 from 5s for 10s', 'apply sepia filter to photo C:/pic.png', 'resize photo C:/pic.png to 800x600'):", self._handle_media)
+        elif "Auto Scaler" in key or "Scaler" in key:
+            self._prompt_and_run("Auto scaler (e.g., 'status', 'system resources', 'performance report', 'simulate load with 20 tasks', 'optimal workers for io-bound tasks'):", self._handle_scaler)
         elif "Auto-Update" in key:
             self._prompt_and_run("Auto-update command (e.g., 'check', 'pull', 'pip', 'full', 'research <topic>', 'trending', 'history'):", self._handle_auto_update)
         else:
@@ -4698,6 +4713,15 @@ class TomDesktopApp:
             self._append_chat("meta", f"[Blender unavailable: {exc}]")
 
         try:
+            if MediaEngine:
+                self.media = MediaEngine()
+                photo = "Pillow ready" if self.media.photo_available() else "Pillow missing"
+                video = "ffmpeg ready" if self.media.video_available() else "ffmpeg missing"
+                self._append_chat("meta", f"[Media Engine: photo edit ({photo}), video edit ({video})]")
+        except Exception as exc:
+            self._append_chat("meta", f"[Media Engine unavailable: {exc}]")
+
+        try:
             if AutoUpdate:
                 self.auto_update = AutoUpdate()
                 self._append_chat("meta", "[Auto-Update: git, pip, knowledge scraper]")
@@ -4779,19 +4803,66 @@ class TomDesktopApp:
             elif parts[0] == "list" or parts[0] == "capabilities":
                 caps = self.blender.list_capabilities()
                 response_msg = "Blender capabilities:\n" + "\n".join(f"  {k}: {v}" for k, v in caps.items())
+            elif not self.blender.is_available():
+                response_msg = ("Blender is not installed (or not found). Install it from blender.org "
+                                "and add blender.exe to PATH, then retry.")
             else:
-                script = self.blender.generate_script(detail)
-                r = self.blender.execute_script(script)
+                # generate_and_execute() saves a real .blend (+ preview render) and
+                # verifies it on disk; calling generate_script()+execute_script()
+                # directly skipped that, so the scene was discarded on exit.
+                r = self.blender.generate_and_execute(detail)
                 if r.get("status") == "success":
                     response_msg = f"Blender: {r.get('message', 'Done')}"
-                    if r.get("script_preview"):
-                        response_msg += f"\nScript preview:\n{r['script_preview']}"
+                    for extra_path in (r.get("paths") or [])[1:]:
+                        response_msg += f"\nPreview: {extra_path}"
                 else:
-                    script_preview = script[:300]
-                    response_msg = f"Generated script (execute in Blender):\n{script_preview}..."
+                    response_msg = f"Blender failed: {r.get('message', 'unknown error')}"
         except Exception as exc:
             response_msg = f"Blender Error: {exc}"
         self._enqueue(lambda: self._append_chat("assistant", f"[Blender] {response_msg}"))
+
+    def _handle_media(self, detail: str):
+        """Video (ffmpeg) / photo (Pillow) editing via the shared EngineRouter,
+        so the GUI uses the same detection + on-disk verification as chat/CLI."""
+        if not self.media:
+            self._enqueue(lambda: self._append_chat("meta", "[Media Engine not available]"))
+            return
+        detail = detail.strip()
+        try:
+            from tools.engine_router import EngineRouter
+            router = EngineRouter(self.agent if hasattr(self, "agent") else None)
+            future = asyncio.run_coroutine_threadsafe(
+                router.execute(detail, key="media"), self._loop)
+            r = future.result(timeout=360)
+            if r.get("status") == "success":
+                # message already carries the saved path ("Media: Saved to ...");
+                # append any extra artifacts (e.g. a preview) not already shown.
+                response_msg = r.get("message", "Done")
+                for p in (r.get("paths") or [])[1:]:
+                    if p not in response_msg:
+                        response_msg += f"\nAlso: {p}"
+            else:
+                response_msg = r.get("message", "Media editing failed")
+        except Exception as exc:
+            response_msg = f"Media Error: {exc}"
+        self._enqueue(lambda: self._append_chat("assistant", f"[Media] {response_msg}"))
+
+    def _handle_scaler(self, detail: str):
+        """Resource detection / parallel-execution status via EngineRouter."""
+        if not self.scaler:
+            self._enqueue(lambda: self._append_chat("meta", "[Auto Scaler not available]"))
+            return
+        detail = detail.strip()
+        try:
+            from tools.engine_router import EngineRouter
+            router = EngineRouter(self.agent if hasattr(self, "agent") else None)
+            future = asyncio.run_coroutine_threadsafe(
+                router.execute(detail, key="scaler"), self._loop)
+            r = future.result(timeout=120)
+            response_msg = r.get("message", "Done")
+        except Exception as exc:
+            response_msg = f"Auto Scaler Error: {exc}"
+        self._enqueue(lambda: self._append_chat("assistant", f"[Auto Scaler] {response_msg}"))
 
     def _handle_auto_update(self, detail: str):
         if not self.auto_update:

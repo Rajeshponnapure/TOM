@@ -161,7 +161,11 @@ class DataAnalysisEngine:
 
         files = []
         numeric_cols = df.select_dtypes(include=[np.number]).columns[:8]
-        categorical_cols = df.select_dtypes(exclude=[np.number]).columns[:6]
+        # datetime64 columns are excluded here: they get their own time-series
+        # chart below, and plotting value_counts() of raw timestamps as a bar
+        # chart crashes matplotlib/pandas ("Must supply freq for datetime
+        # value") since a DatetimeIndex has no implied bar-chart frequency.
+        categorical_cols = df.select_dtypes(exclude=[np.number, "datetime", "datetimetz"]).columns[:6]
         ts_cols = [c for c in df.columns if "date" in c.lower() or "time" in c.lower()]
 
         sns_style = "darkgrid" if _HAS_SNS else "default"
@@ -215,21 +219,24 @@ class DataAnalysisEngine:
 
         # 3. Categorical bar charts
         for col in categorical_cols[:3]:
-            fig, ax = plt.subplots(figsize=(8, 4))
-            counts = df[col].value_counts().head(15)
-            colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(counts)))
-            counts.plot(kind="barh", color=colors, ax=ax)
-            ax.set_title(f"Top {col} Values", color="white", fontsize=10)
-            ax.tick_params(colors="gray")
-            ax.set_facecolor("#0f1624")
-            for spine in ax.spines.values():
-                spine.set_color("#1e2d45")
-            fig.patch.set_facecolor("#080c14")
-            fig.tight_layout()
-            path = os.path.join(self.output_dir, f"{prefix}_{col}_top.png")
-            fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-            plt.close(fig)
-            files.append(path)
+            try:
+                fig, ax = plt.subplots(figsize=(8, 4))
+                counts = df[col].value_counts().head(15)
+                colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(counts)))
+                counts.plot(kind="barh", color=colors, ax=ax)
+                ax.set_title(f"Top {col} Values", color="white", fontsize=10)
+                ax.tick_params(colors="gray")
+                ax.set_facecolor("#0f1624")
+                for spine in ax.spines.values():
+                    spine.set_color("#1e2d45")
+                fig.patch.set_facecolor("#080c14")
+                fig.tight_layout()
+                path = os.path.join(self.output_dir, f"{prefix}_{col}_top.png")
+                fig.savefig(path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+                plt.close(fig)
+                files.append(path)
+            except Exception:
+                plt.close("all")
 
         # 4. Time series if date column found
         if ts_cols and len(numeric_cols) > 0:
@@ -428,8 +435,12 @@ class DataAnalysisEngine:
         if viz_files:
             html += "<h2>Visualizations</h2>"
             for vf in viz_files:
-                rel = os.path.relpath(vf, str(PROJECT_ROOT))
-                html += f'<img src="{rel}" alt="Visualization">\n'
+                # The report and every chart are always saved as siblings in
+                # self.output_dir, so the src must be the bare filename -- a
+                # path relative to PROJECT_ROOT is wrong whenever the report
+                # isn't opened from the project root itself (i.e. always) and
+                # breaks every chart image in every generated report.
+                html += f'<img src="{os.path.basename(vf)}" alt="Visualization">\n'
 
         if stats:
             html += "<h2>Statistical Summary</h2><div class='card'>"

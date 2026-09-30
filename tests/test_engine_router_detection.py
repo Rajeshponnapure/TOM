@@ -21,6 +21,17 @@ ROUTE = {
     "verify web app on localhost: 3000": "webauto",
     "run code myscript.py": "coderun",
     "execute analysis.py": "coderun",
+    "auto scaler status": "scaler",
+    "what is my system resources capacity": "scaler",
+    "simulate load with 6 tasks": "scaler",
+    "optimal workers for cpu-bound tasks": "scaler",
+    "scaler performance report": "scaler",
+    "trim video C:/clips/a.mp4 from 5s for 10s": "media",
+    "combine videos a.mp4 and b.mp4": "media",
+    "extract audio from a.mp4": "media",
+    "apply sepia filter to photo a.png": "media",
+    "resize photo a.png to 800x600": "media",
+    "add watermark 'TOM' to photo a.png": "media",
 }
 NO_ROUTE = [
     "send an email to bob", "create a word document about cars",
@@ -52,3 +63,24 @@ def test_unmatched_execute_is_unhandled():
     r = EngineRouter()
     res = asyncio.run(r.execute("hello there"))
     assert res["status"] == "unhandled"
+
+def test_scaler_still_required_not_orphaned():
+    """AutoScaler used to be instantiated at GUI startup (with a chat message
+    claiming it was "active") but no method was ever called anywhere -- dead
+    weight behind a misleading message. Now reachable via chat/CLI routing."""
+    r = EngineRouter()
+    res = asyncio.run(r.execute("auto scaler status", key="scaler"))
+    assert res["status"] == "success"
+    assert "cpu_cores" in str(res.get("raw", {}))
+
+def test_scaler_simulate_load_all_tasks_complete():
+    """Real bug: simulate_load()'s "cpu simulated" half appended the bare
+    _synthetic_task function (parallel_execute calls it with 0 args) even
+    though the function requires (duration, idx) -- every one of those tasks
+    raised TypeError. Invisible until this was wired into real routing."""
+    r = EngineRouter()
+    res = asyncio.run(r.execute("simulate load with 10 tasks", key="scaler"))
+    assert res["status"] == "success"
+    execution = res["raw"]["result"]["execution_result"]
+    assert execution["failed"] == 0
+    assert execution["completed"] == 10

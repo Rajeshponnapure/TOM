@@ -113,8 +113,8 @@ Return a JSON list of subtasks, each with:
 
 Output ONLY valid JSON array, no other text."""
             try:
-                response = await self.llm.agenerate([prompt])
-                text = response.generations[0][0].text.strip()
+                response = await self.llm.ainvoke(prompt)
+                text = (getattr(response, "content", "") or "").strip()
                 # Extract JSON array
                 import re
                 json_match = re.search(r"\[.*\]", text, re.DOTALL)
@@ -157,8 +157,8 @@ Output ONLY valid JSON array, no other text."""
         if self.llm:
             try:
                 prompt = f"Research topic: {description}\nProvide a concise summary of key information needed."
-                response = await self.llm.agenerate([prompt])
-                knowledge = response.generations[0][0].text.strip()
+                response = await self.llm.ainvoke(prompt)
+                knowledge = (getattr(response, "content", "") or "").strip()
                 if knowledge:
                     result["llm_knowledge"] = knowledge
             except Exception:
@@ -186,7 +186,7 @@ Output ONLY valid JSON array, no other text."""
                 result["output"] = str(out.get("summary", out))[:2000]
                 result["status"] = "completed"
 
-            elif tool == "data_analysis":
+            elif tool == "data_analysis" and self.tom_agent:
                 out = await self.tom_agent.execute_task(f"Analyze data: {description}")
                 result["output"] = str(out.get("message", out))[:2000]
                 result["status"] = "completed"
@@ -196,7 +196,7 @@ Output ONLY valid JSON array, no other text."""
                 result["output"] = str(out.get("message", out))[:2000]
                 result["status"] = "completed"
 
-            elif tool == "code":
+            elif tool == "code" and self.tom_agent:
                 out = await self.tom_agent.execute_task(f"Write code: {description}")
                 result["output"] = str(out.get("message", out))[:2000]
                 result["status"] = "completed"
@@ -216,7 +216,7 @@ Output ONLY valid JSON array, no other text."""
                 result["output"] = str(out.get("message", out))[:2000]
                 result["status"] = "completed"
 
-            elif tool == "system":
+            elif tool == "system" and self.tom_agent:
                 out = await self.tom_agent.execute_task(f"System: {description}")
                 result["output"] = str(out.get("message", out))[:2000]
                 result["status"] = "completed"
@@ -225,8 +225,8 @@ Output ONLY valid JSON array, no other text."""
                 # Use LLM for general reasoning
                 if self.llm:
                     prompt = f"Task: {description}\nProvide a detailed solution or answer."
-                    response = await self.llm.agenerate([prompt])
-                    result["output"] = response.generations[0][0].text.strip()[:2000]
+                    response = await self.llm.ainvoke(prompt)
+                    result["output"] = (getattr(response, "content", "") or "").strip()[:2000]
                     result["status"] = "completed"
                 else:
                     result["status"] = "skipped"
@@ -256,8 +256,8 @@ Success Criteria: {criteria}
 Output: {result.get('output', '')[:1000]}
 
 Does the output satisfy the success criteria? Answer only: PASS or FAIL + brief reason."""
-                response = await self.llm.agenerate([prompt])
-                text = response.generations[0][0].text.strip()
+                response = await self.llm.ainvoke(prompt)
+                text = (getattr(response, "content", "") or "").strip()
                 if text.startswith("FAIL"):
                     verification["passed"] = False
                     verification["issues"].append(text)
@@ -287,8 +287,8 @@ Plan had {len(plan.get('subtasks', []))} subtasks.
 
 Provide a brief reflection: what went well, what could be improved, and key learnings."""
         try:
-            response = await self.llm.agenerate([prompt])
-            return response.generations[0][0].text.strip()[:500]
+            response = await self.llm.ainvoke(prompt)
+            return (getattr(response, "content", "") or "").strip()[:500]
         except Exception:
             return "Reflection completed (no LLM feedback)"
 

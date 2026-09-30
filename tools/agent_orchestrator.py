@@ -159,11 +159,12 @@ class AgentOrchestrator:
         result = await self._delegate_task(task, role)
         return result
 
-    def _determine_best_agent(self, task_description: str, intent: str) -> AgentRole:
-        """Determine which sub-agent should handle this task."""
-        desc_lower = task_description.lower()
-        intent_lower = intent.lower()
+    _KEYWORD_MAP = None  # built lazily by _keyword_map(); a class-level cache
 
+    @classmethod
+    def _keyword_map(cls) -> List[tuple]:
+        if cls._KEYWORD_MAP is not None:
+            return cls._KEYWORD_MAP
         tech_keywords = [
             "code", "debug", "fix", "build", "program", "script", "function",
             "class", "api", "server", "database", "sql", "algorithm",
@@ -193,25 +194,33 @@ class AgentOrchestrator:
             "timeline", "deadline", "appointment", "reminder", "organize",
             "coordinate", "logistics", "resource",
         ]
-
-        keyword_map = [
+        cls._KEYWORD_MAP = [
             (AgentRole.CTO, tech_keywords),
             (AgentRole.CMO, marketing_keywords),
             (AgentRole.CPO, product_keywords),
             (AgentRole.CFO, finance_keywords),
             (AgentRole.COO, operations_keywords),
         ]
+        return cls._KEYWORD_MAP
 
-        best_role = AgentRole.CEO
-        best_score = 0
+    def _score_agents(self, task_description: str, intent: str) -> List[tuple]:
+        """Every sub-agent role ranked by keyword relevance to this task,
+        highest first. Shared by primary routing and failure escalation, so
+        a failed task is re-routed to whichever *remaining* agent actually
+        fits it instead of just the next idle one."""
+        desc_lower = task_description.lower()
+        intent_lower = intent.lower()
+        scored = [
+            (role, sum(1 for kw in keywords if kw in desc_lower or kw in intent_lower))
+            for role, keywords in self._keyword_map()
+        ]
+        scored.sort(key=lambda item: -item[1])
+        return scored
 
-        for role, keywords in keyword_map:
-            score = sum(1 for kw in keywords if kw in desc_lower or kw in intent_lower)
-            if score > best_score:
-                best_score = score
-                best_role = role
-
-        return best_role
+    def _determine_best_agent(self, task_description: str, intent: str) -> AgentRole:
+        """Determine which sub-agent should handle this task."""
+        best_role, best_score = self._score_agents(task_description, intent)[0]
+        return best_role if best_score > 0 else AgentRole.CEO
 
     async def _delegate_task(self, task: Task, role: AgentRole) -> Dict[str, Any]:
         """Delegate a task to a specific sub-agent."""
@@ -272,11 +281,17 @@ class AgentOrchestrator:
             self._process_pending_queue()
 
     async def _escalate_task(self, failed_task: Task) -> Dict[str, Any]:
-        """When a sub-agent fails, escalate to CEO for re-routing."""
-        other_agents = [
+        """When a sub-agent fails, re-route to whichever remaining idle agent
+        actually fits the task (by the same keyword scoring as primary
+        routing) — not just whichever one happens to be idle first, which
+        used to hand a failed coding task to the Marketing Lead."""
+        idle_roles = {
             r for r, a in self._agents.items()
             if a.status == "idle" and r != failed_task.assigned_to
-        ]
+        }
+        other_agents = [role for role, _score in self._score_agents(failed_task.description, failed_task.intent)
+                        if role in idle_roles]
+        other_agents += [r for r in idle_roles if r not in other_agents]
         if other_agents:
             new_role = other_agents[0]
             new_task = Task(

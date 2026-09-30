@@ -200,6 +200,43 @@ See [GMAIL_OAUTH_SETUP.md](GMAIL_OAUTH_SETUP.md) for the OAuth walkthrough.
 
 ---
 
+## 6a) Optional: ffmpeg (video editing)
+
+- Photo editing (`tools/media_engine.py`) works out of the box — Pillow is already in
+  `requirements.txt`.
+- Video editing (trim/concat/format-convert/text-overlay/color/volume) needs **ffmpeg**,
+  which is a system binary, not a pip package:
+  - Download from [ffmpeg.org/download.html](https://ffmpeg.org/download.html) and add
+    `ffmpeg.exe` to PATH, **or** place it at `C:\ffmpeg\bin\ffmpeg.exe`.
+  - Run `python tools/preflight.py` (or ask TOM "system status") to confirm it's found.
+- Without ffmpeg, video-editing requests return a clear "ffmpeg is not installed" error
+  instead of failing silently; photo editing is unaffected.
+
+---
+
+## 6b) Optional: external opt-in skills ("+864 auto-routed")
+
+The 47 skills in `skills/` ship with TOM and load by default. The README's "+864 opt-in"
+figure refers to a **separate, manually vendored** directory that is **not bundled with
+this repo and not downloaded by any setup script here**:
+
+- `tools/skill_manager.py` looks for `SKILL.md` files under `./awesome-claude-skills/`
+  (project root) only when `TOM_INCLUDE_EXTERNAL_SKILLS=1` is set in `.env`.
+- `.gitignore` excludes `awesome-claude-skills/` as a "vendored third-party repo (has its
+  own .git; not tracked here)" — but no commit in this repo's history records which
+  external repository was originally vendored there, and there are several unrelated
+  GitHub projects that share the name "awesome-claude-skills" with different skill
+  counts. **Pick the source yourself and verify its skill count before relying on the
+  "+864" figure** — do not assume any particular one is correct.
+- If you enable the flag without that directory present, TOM now logs a clear warning
+  (`[SkillManager] TOM_INCLUDE_EXTERNAL_SKILLS is on but ... does not exist`) and simply
+  runs with the 47 local skills — it will not crash or silently under-report.
+- To use it: clone/copy your chosen skills collection into `./awesome-claude-skills/`
+  such that each skill is `awesome-claude-skills/<skill-name>/SKILL.md`, then set
+  `TOM_INCLUDE_EXTERNAL_SKILLS=1` in `.env`.
+
+---
+
 ## 7) Run TOM (development)
 
 ```powershell

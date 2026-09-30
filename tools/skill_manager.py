@@ -6,6 +6,7 @@ classifies each skill by how Tom can use it.
 """
 from __future__ import annotations
 
+import logging
 import os
 
 import re
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from tools.project_paths import PROJECT_ROOT, project_path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,9 @@ class SkillManager:
         "fpga": ["vlsi_engine"],
         "blender": ["blender_control"],
         "3d": ["blender_control"],
+        "video editing": ["media_engine"],
+        "color grading": ["media_engine"],
+        "photo editing": ["media_engine"],
     }
 
     EXTERNAL_COMMAND_TERMS = {
@@ -197,8 +203,28 @@ class SkillManager:
         if self.include_external:
             external_root = project_path("awesome-claude-skills")
             if external_root.exists():
+                found = 0
                 for fpath in sorted(external_root.glob("**/SKILL.md")):
                     self._register(fpath, source="awesome")
+                    found += 1
+                if found == 0:
+                    logger.warning(
+                        "[SkillManager] TOM_INCLUDE_EXTERNAL_SKILLS is on but "
+                        "%s contains no SKILL.md files -- 0 external skills loaded.",
+                        external_root,
+                    )
+            else:
+                # Real gap: the README advertises "+864 opt-in (auto-routed)"
+                # external skills, but that directory is a manually-vendored,
+                # gitignored third-party checkout (see .gitignore) that ships
+                # with neither the repo nor any documented source URL. Without
+                # this warning, enabling the feature silently loads 0 skills.
+                logger.warning(
+                    "[SkillManager] TOM_INCLUDE_EXTERNAL_SKILLS is on but %s "
+                    "does not exist -- 0 external skills loaded. This directory "
+                    "must be manually vendored; it is not bundled with TOM.",
+                    external_root,
+                )
 
     def _register(self, fpath: Path, source: str) -> None:
         try:
@@ -317,10 +343,21 @@ class SkillManager:
 
     def _score_records(self, query_lower: str) -> List[tuple[float, SkillRecord]]:
         query_terms = self._terms(query_lower)
-        desired_names = []
+
+        # A DOMAIN_MAP keyword shared across many skills (e.g. "design" -> 5
+        # UI-ish skills) identifies any one of them far less precisely than a
+        # keyword that maps to a single skill (e.g. "database" -> just
+        # database-skills). Without this, "design a database schema" tied
+        # 01-ui-ux-design against 06-database-skills at the same score, and
+        # the alphabetical-by-name tiebreak picked the UI skill every time --
+        # so each matched keyword's bonus is now split across its own target
+        # list instead of a flat amount per match.
+        desired_weights: Dict[str, float] = {}
         for keyword, names in self.DOMAIN_MAP.items():
-            if self._has_term(query_lower, keyword):
-                desired_names.extend(names)
+            if self._has_term(query_lower, keyword) and names:
+                per_skill = 4.0 / len(names)
+                for name in names:
+                    desired_weights[name] = desired_weights.get(name, 0.0) + per_skill
 
         scored: List[tuple[float, SkillRecord]] = []
         for record in self._records.values():
@@ -328,9 +365,9 @@ class SkillManager:
             haystack = " ".join([record.name, *record.aliases]).lower()
             if record.name != "skill" and (record.name in query_lower or record.name.replace("-", " ") in query_lower):
                 score += 5.0
-            for desired in desired_names:
+            for desired, weight in desired_weights.items():
                 if desired in record.name:
-                    score += 4.0
+                    score += weight
             score += len(query_terms.intersection(self._terms(haystack))) * 0.8
             if query_lower and query_lower in record.content.lower():
                 score += 1.0

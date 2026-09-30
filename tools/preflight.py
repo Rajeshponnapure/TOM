@@ -57,6 +57,9 @@ CHECKS: Dict[str, Dict[str, Any]] = {
                    "fix": "pip install chromadb"},
     "blender":   {"label": "Blender 3D", "bins": ["blender"],
                   "fix": "Install Blender from blender.org and add blender.exe to PATH"},
+    "media":     {"label": "Video/photo editing", "mods": ["PIL"], "bins": ["ffmpeg"],
+                  "fix": "pip install Pillow (photo editing) + install ffmpeg from "
+                         "ffmpeg.org/download.html and add ffmpeg.exe to PATH (video editing)"},
     "vision":    {"label": "Vision/image analysis", "mods": ["cv2", "PIL"],
                   "fix": "pip install opencv-python pillow"},
     "code_run":  {"label": "Code runner", "mods": [],
@@ -80,7 +83,7 @@ CHECKS: Dict[str, Dict[str, Any]] = {
 # EngineRouter key → capability id (for precise unavailable-messages)
 ENGINE_TO_CAPABILITY = {
     "ml": "ml", "iot": "iot", "vlsi": "vlsi", "hardware": "hardware",
-    "gamedev": "gamedev", "blender": "blender", "news": "news",
+    "gamedev": "gamedev", "blender": "blender", "media": "media", "news": "news",
     "voiceplus": "voice", "webauto": "web_verify", "coderun": "code_run", "fileops": "file_ops", "webrecipes": "web_scrape", "schedule": "schedule_user",
 }
 

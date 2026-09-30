@@ -490,8 +490,19 @@ def create_presentation(
     transitions = ["fade", "push", "wipe", "cover", "split", "reveal", "randomBars", "dissolve"]
 
     for i, sd in enumerate(slides_content):
+        if not isinstance(sd, dict):
+            sd = {"content": [str(sd)]}
         slide_title = sd.get("title", f"Section {i+1}")
         bullets = sd.get("bullets", sd.get("content", []))
+        # LLM-generated slide JSON sometimes returns a single string instead
+        # of the requested bullet array (a plain paragraph for the slide, a
+        # None, or some other shape). Without normalizing it, the renderer
+        # below iterates it as-is -- a bare string renders one bullet per
+        # CHARACTER ("Welcome" -> 7 one-letter bullets).
+        if isinstance(bullets, str):
+            bullets = [bullets] if bullets.strip() else []
+        elif not isinstance(bullets, list):
+            bullets = [str(bullets)] if bullets else []
         notes = sd.get("notes", sd.get("subtitle", ""))
         layout = sd.get("layout", "content")
         table_data = sd.get("table_data")

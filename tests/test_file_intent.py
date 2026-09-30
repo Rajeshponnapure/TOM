@@ -50,7 +50,7 @@ def run(engine, command):
 
 
 def names(folder):
-    return sorted(str(p.relative_to(folder)) for p in Path(folder).rglob("*") if p.is_file())
+    return sorted(p.relative_to(folder).as_posix() for p in Path(folder).rglob("*") if p.is_file())
 
 
 # ── the reported bug ─────────────────────────────────────────────────────────

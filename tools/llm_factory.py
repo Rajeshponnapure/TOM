@@ -223,20 +223,29 @@ def _is_embed_model(name: str) -> bool:
 def _configured_model(slot: str) -> str:
     return (os.environ.get(_SLOT_ENV[slot], "") or "").strip() or _SLOT_DEFAULTS[slot]
 
-_OLLAMA_MODEL_CACHE = {"when": 0.0, "names": []}
+_OLLAMA_MODEL_CACHE = {"when": 0.0, "names": [], "checked": 0.0}
 
 
 def ollama_installed_models() -> list:
     """Names of models currently installed on the Ollama server (60 s cache).
 
     Returns [] when the server is unreachable and nothing has been cached —
-    callers then fall back to the configured name.
+    callers then fall back to the configured name. A failed probe is also
+    throttled (10 s) so a burst of calls in one process start-up (one per
+    model slot: primary/fast/code/embed, each read twice during agent
+    construction) doesn't each pay the full connection timeout while Ollama
+    is offline -- without this, four slots meant up to eight full network
+    round-trips (~4s each on Windows, where "localhost" resolution is slow)
+    on every single launch.
     """
     import time as _time
     now = _time.time()
     cached = _OLLAMA_MODEL_CACHE["names"]
     if cached and now - _OLLAMA_MODEL_CACHE["when"] < 60:
         return list(cached)
+    if not cached and now - _OLLAMA_MODEL_CACHE["checked"] < 10:
+        return []
+    _OLLAMA_MODEL_CACHE["checked"] = now
     try:
         import json as _json
         import urllib.request as _ur

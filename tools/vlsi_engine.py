@@ -62,8 +62,17 @@ def _verilog_header(module_name, ports, params=None):
         direction = p.get("dir", "input")
         width = p.get("width", None)
         name = p["name"]
+        # Outputs driven by a procedural always block (non-blocking `<=` or
+        # blocking `=` inside always) must be declared `reg`, not the default
+        # implicit `wire` -- otherwise the module fails to compile on any
+        # standard toolchain (Icarus, Verilator, Vivado). Callers that assign
+        # a port from inside an always block pass "reg": True for that port.
+        is_reg = bool(p.get("reg")) and direction == "output"
+        reg_kw = "reg " if is_reg else ""
         if width and width > 1:
-            lines.append(f"  {direction} [{width-1}:0] {name},")
+            lines.append(f"  {direction} {reg_kw}[{width-1}:0] {name},")
+        elif is_reg:
+            lines.append(f"  {direction} reg {name},")
         else:
             lines.append(f"  {direction} wire {name},")
     if ports:
@@ -148,7 +157,7 @@ class VLSIEngine:
     {"name": "en", "dir": "input"}, {"name": "load", "dir": "input"},
     {"name": "d", "dir": "input", "width": w},
     {"name": "q", "dir": "output", "width": w},
-    {"name": "tc", "dir": "output"},
+    {"name": "tc", "dir": "output", "reg": True},
 ])}
 {_INDENT}reg [{w-1}:0] count;
 {_INDENT}always @(posedge clk or negedge rst_n) begin
@@ -199,8 +208,8 @@ class VLSIEngine:
             code = f"""\\
 {_verilog_header("fsm", [
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
-    {"name": "start", "dir": "input"}, {"name": "done", "dir": "output"},
-    {"name": "data_out", "dir": "output", "width": 8},
+    {"name": "start", "dir": "input"}, {"name": "done", "dir": "output", "reg": True},
+    {"name": "data_out", "dir": "output", "width": 8, "reg": True},
 ])}
 {_INDENT}localparam [3:0]
 {_INDENT}  {_fsm_params};
@@ -241,11 +250,11 @@ class VLSIEngine:
     {"name": "a", "dir": "input", "width": w},
     {"name": "b", "dir": "input", "width": w},
     {"name": "op", "dir": "input", "width": 4},
-    {"name": "result", "dir": "output", "width": w},
-    {"name": "zero", "dir": "output"},
-    {"name": "carry", "dir": "output"},
-    {"name": "overflow", "dir": "output"},
-    {"name": "negative", "dir": "output"},
+    {"name": "result", "dir": "output", "width": w, "reg": True},
+    {"name": "zero", "dir": "output", "reg": True},
+    {"name": "carry", "dir": "output", "reg": True},
+    {"name": "overflow", "dir": "output", "reg": True},
+    {"name": "negative", "dir": "output", "reg": True},
 ])}
 {_INDENT}reg [{w-1}:0] r_temp;
 {_INDENT}reg c_temp, v_temp;
@@ -302,7 +311,7 @@ class VLSIEngine:
     {"name": "we", "dir": "input"},
     {"name": "addr", "dir": "input", "width": addr_w},
     {"name": "din", "dir": "input", "width": dw},
-    {"name": "dout", "dir": "output", "width": dw},
+    {"name": "dout", "dir": "output", "width": dw, "reg": True},
 ])}
 {_INDENT}reg [{dw-1}:0] mem [0:{d-1}];
 
@@ -319,7 +328,7 @@ class VLSIEngine:
 {_verilog_header("rom", [
     {"name": "clk", "dir": "input"},
     {"name": "addr", "dir": "input", "width": addr_w},
-    {"name": "dout", "dir": "output", "width": dw},
+    {"name": "dout", "dir": "output", "width": dw, "reg": True},
 ])}
 {_INDENT}reg [{dw-1}:0] mem [0:{d-1}];
 
@@ -337,12 +346,12 @@ class VLSIEngine:
 {_verilog_header("uart", [
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
     {"name": "rxd", "dir": "input"},
-    {"name": "txd", "dir": "output"},
+    {"name": "txd", "dir": "output", "reg": True},
     {"name": "tx_start", "dir": "input"},
     {"name": "tx_data", "dir": "input", "width": 8},
-    {"name": "tx_busy", "dir": "output"},
-    {"name": "rx_data", "dir": "output", "width": 8},
-    {"name": "rx_valid", "dir": "output"},
+    {"name": "tx_busy", "dir": "output", "reg": True},
+    {"name": "rx_data", "dir": "output", "width": 8, "reg": True},
+    {"name": "rx_valid", "dir": "output", "reg": True},
 ])}
 {_INDENT}localparam BAUD_DIV = {baud_div};
 
@@ -415,12 +424,12 @@ class VLSIEngine:
             code = f"""\\
 {_verilog_header("spi_master", [
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
-    {"name": "sclk", "dir": "output"}, {"name": "mosi", "dir": "output"},
-    {"name": "miso", "dir": "input"}, {"name": "cs_n", "dir": "output"},
+    {"name": "sclk", "dir": "output", "reg": True}, {"name": "mosi", "dir": "output", "reg": True},
+    {"name": "miso", "dir": "input"}, {"name": "cs_n", "dir": "output", "reg": True},
     {"name": "start", "dir": "input"},
     {"name": "tx_data", "dir": "input", "width": 8},
-    {"name": "rx_data", "dir": "output", "width": 8},
-    {"name": "busy", "dir": "output"},
+    {"name": "rx_data", "dir": "output", "width": 8, "reg": True},
+    {"name": "busy", "dir": "output", "reg": True},
 ])}
 {_INDENT}localparam CPOL = {cpol};
 {_INDENT}localparam CPHA = {cpha};
@@ -467,8 +476,8 @@ class VLSIEngine:
     {"name": "start", "dir": "input"}, {"name": "rw", "dir": "input"},
     {"name": "addr", "dir": "input", "width": 7},
     {"name": "tx_data", "dir": "input", "width": 8},
-    {"name": "rx_data", "dir": "output", "width": 8},
-    {"name": "ack_error", "dir": "output"}, {"name": "busy", "dir": "output"},
+    {"name": "rx_data", "dir": "output", "width": 8, "reg": True},
+    {"name": "ack_error", "dir": "output", "reg": True}, {"name": "busy", "dir": "output", "reg": True},
 ])}
 {_INDENT}reg scl_oe, sda_oe, scl_out, sda_out;
 {_INDENT}assign scl = scl_oe ? scl_out : 1'bz;
@@ -543,7 +552,7 @@ class VLSIEngine:
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
     {"name": "wr_en", "dir": "input"}, {"name": "rd_en", "dir": "input"},
     {"name": "din", "dir": "input", "width": dw},
-    {"name": "dout", "dir": "output", "width": dw},
+    {"name": "dout", "dir": "output", "width": dw, "reg": True},
     {"name": "full", "dir": "output"}, {"name": "empty", "dir": "output"},
     {"name": "level", "dir": "output", "width": aw+1},
 ])}
@@ -570,7 +579,7 @@ class VLSIEngine:
 {_verilog_header("debouncer", [
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
     {"name": "btn_in", "dir": "input"},
-    {"name": "btn_out", "dir": "output"}, {"name": "btn_edge", "dir": "output"},
+    {"name": "btn_out", "dir": "output", "reg": True}, {"name": "btn_edge", "dir": "output", "reg": True},
 ])}
 {_INDENT}localparam TIMEOUT = {timeout};
 {_INDENT}reg [31:0] cnt;
@@ -604,7 +613,7 @@ class VLSIEngine:
             code = f"""\\
 {_verilog_header("clock_divider", [
     {"name": "clk_in", "dir": "input"}, {"name": "rst_n", "dir": "input"},
-    {"name": "clk_out", "dir": "output"},
+    {"name": "clk_out", "dir": "output", "reg": True},
 ])}
 {_INDENT}localparam DIV = {div};
 {_INDENT}reg [(DIV)-1:0] cnt;
@@ -1135,8 +1144,8 @@ endmodule"""
                 {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
                 {"name": "start", "dir": "input"},
                 {"name": "a", "dir": "input", "width": w}, {"name": "b", "dir": "input", "width": w},
-                {"name": "prod", "dir": "output", "width": 2*w},
-                {"name": "done", "dir": "output"},
+                {"name": "prod", "dir": "output", "width": 2*w, "reg": True},
+                {"name": "done", "dir": "output", "reg": True},
             ])
             _tpl += _INDENT + "reg [" + _ws + ":0] acc;\n"
             _tpl += _INDENT + "reg [" + _ws + "-1:0] multiplier;\n"
@@ -1145,7 +1154,7 @@ endmodule"""
             _tpl += _INDENT + "always @(posedge clk or negedge rst_n) begin\n"
             _tpl += _INDENT + _INDENT + "if (!rst_n) begin count <= 0; done <= 0; prod <= 0; end\n"
             _tpl += _INDENT + _INDENT + "else if (start) begin\n"
-            _tpl += _INDENT + _INDENT + _INDENT + "acc <= {" + _ws + "{1'b0}}, a, 1'b0};\n"
+            _tpl += _INDENT + _INDENT + _INDENT + "acc <= {a, 1'b0};\n"
             _tpl += _INDENT + _INDENT + _INDENT + "multiplier <= b; count <= " + _ws + "; neg_bit <= 0; done <= 0;\n"
             _tpl += _INDENT + _INDENT + "end else if (count > 0) begin\n"
             _tpl += _INDENT + _INDENT + _INDENT + "case ({multiplier[0], neg_bit})\n"
@@ -1161,6 +1170,7 @@ endmodule"""
             _tpl += _INDENT + "end\n"
             _tpl += _verilog_footer()
             code = _tpl
+            return _make_result(code, "verilog")
 
         elif dt == "wallace_tree_multiplier":
             code = f"""\\
@@ -1207,7 +1217,7 @@ endmodule"""
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
     {"name": "en", "dir": "input"},
     {"name": "q", "dir": "output", "width": 4},
-    {"name": "carry", "dir": "output"},
+    {"name": "carry", "dir": "output", "reg": True},
 ])}
 {_INDENT}reg [3:0] count;
 {_INDENT}always @(posedge clk or negedge rst_n) begin
@@ -1320,7 +1330,7 @@ endmodule"""
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
     {"name": "load", "dir": "input"},
     {"name": "d", "dir": "input", "width": w},
-    {"name": "sout", "dir": "output"},
+    {"name": "sout", "dir": "output", "reg": True},
 ])}
 {_INDENT}reg [{w-1}:0] shift;
 {_INDENT}always @(posedge clk or negedge rst_n) begin
@@ -1393,7 +1403,7 @@ endmodule"""
 {_verilog_header("moore_fsm", [
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
     {"name": "inp", "dir": "input"},
-    {"name": "outp", "dir": "output", "width": 3},
+    {"name": "outp", "dir": "output", "width": 3, "reg": True},
 ])}
 {_INDENT}localparam S0 = 0, S1 = 1, S2 = 2, S3 = 3;
 {_INDENT}reg [1:0] state, next;
@@ -1419,7 +1429,7 @@ endmodule"""
             code = f"""\\
 {_verilog_header("mealy_fsm", [
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
-    {"name": "inp", "dir": "input"}, {"name": "outp", "dir": "output"},
+    {"name": "inp", "dir": "input"}, {"name": "outp", "dir": "output", "reg": True},
 ])}
 {_INDENT}localparam S0 = 0, S1 = 1, S2 = 2;
 {_INDENT}reg [1:0] state, next;
@@ -1484,36 +1494,19 @@ endmodule"""
         elif dt == "single_port_ram":
             dp = kw.get("depth", 16)
             aw = kw.get("addr_width", int(math.ceil(math.log2(dp))))
-            _w2 = 2 * w
-            _ws = str(w)
-            _concat_target = "carry_vec[i*" + _ws + "+:" + _ws + "], sum_vec[i*" + _ws + "+:" + _ws + "]"
-            _concat_src = "sum_vec[(i-1)*" + _ws + "+:" + _ws + "] + pp[i] + carry_vec[(i-1)*" + _ws + "+:" + _ws + "]"
-            _prod_range = _ws + "*" + _ws + "-1:0"
             code = f"""\\
-{_verilog_header("wallace_multiplier", [
-    {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
-    {"name": "start", "dir": "input"},
-    {"name": "a", "dir": "input", "width": w}, {"name": "b", "dir": "input", "width": w},
-    {"name": "prod", "dir": "output", "width": _w2},
+{_verilog_header("single_port_ram", [
+    {"name": "clk", "dir": "input"},
+    {"name": "we", "dir": "input"},
+    {"name": "addr", "dir": "input", "width": aw},
+    {"name": "din", "dir": "input", "width": w},
+    {"name": "dout", "dir": "output", "width": w, "reg": True},
 ])}
-{_INDENT}reg [{_w2}-1:0] pp [0:{w}-1];
-{_INDENT}integer i;
-{_INDENT}always @(*) begin
-{_INDENT}  for (i = 0; i < {w}; i = i + 1) begin
-{_INDENT}    pp[i] = b[i] ? a << i : 0;
-"""
-            code += f"""\
-{_INDENT}    end
-{_INDENT}  end
-{_INDENT}endgenerate
-{_INDENT}wire [{_w2}-1:0] sum_vec, carry_vec;
-{_INDENT}assign sum_vec = pp[0];
-{_INDENT}generate
-{_INDENT}  for (i = 1; i < {w}; i = i + 1) begin : red
-{_INDENT}    assign {{{_concat_target}}} = {_concat_src};
-{_INDENT}  end
-{_INDENT}endgenerate
-{_INDENT}assign prod = sum_vec[{_prod_range}] + carry_vec[{_prod_range}];
+{_INDENT}reg [{w-1}:0] mem [0:{dp-1}];
+{_INDENT}always @(posedge clk) begin
+{_INDENT}  if (we) mem[addr] <= din;
+{_INDENT}  dout <= mem[addr];
+{_INDENT}end
 {_verilog_footer()}"""
             return _make_result(code, "verilog")
 
@@ -1528,8 +1521,8 @@ endmodule"""
     {"name": "addr_b", "dir": "input", "width": aw},
     {"name": "din_a", "dir": "input", "width": w},
     {"name": "din_b", "dir": "input", "width": w},
-    {"name": "dout_a", "dir": "output", "width": w},
-    {"name": "dout_b", "dir": "output", "width": w},
+    {"name": "dout_a", "dir": "output", "width": w, "reg": True},
+    {"name": "dout_b", "dir": "output", "width": w, "reg": True},
 ])}
 {_INDENT}reg [{w-1}:0] mem [0:{dp-1}];
 {_INDENT}always @(posedge clk) begin
@@ -1550,7 +1543,7 @@ endmodule"""
 {_verilog_header("rom", [
     {"name": "clk", "dir": "input"},
     {"name": "addr", "dir": "input", "width": aw},
-    {"name": "dout", "dir": "output", "width": w},
+    {"name": "dout", "dir": "output", "width": w, "reg": True},
 ])}
 {_INDENT}reg [{w-1}:0] mem [0:{dp-1}];
 {_INDENT}initial $readmemh("rom_init.hex", mem);
@@ -1568,7 +1561,7 @@ endmodule"""
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
     {"name": "wr_en", "dir": "input"}, {"name": "rd_en", "dir": "input"},
     {"name": "din", "dir": "input", "width": w},
-    {"name": "dout", "dir": "output", "width": w},
+    {"name": "dout", "dir": "output", "width": w, "reg": True},
     {"name": "full", "dir": "output"}, {"name": "empty", "dir": "output"},
     {"name": "level", "dir": "output", "width": aw+1},
 ])}
@@ -1595,7 +1588,7 @@ endmodule"""
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
     {"name": "push", "dir": "input"}, {"name": "pop", "dir": "input"},
     {"name": "din", "dir": "input", "width": w},
-    {"name": "dout", "dir": "output", "width": w},
+    {"name": "dout", "dir": "output", "width": w, "reg": True},
     {"name": "full", "dir": "output"}, {"name": "empty", "dir": "output"},
 ])}
 {_INDENT}reg [{w-1}:0] stack [0:{dp-1}];
@@ -1618,7 +1611,7 @@ endmodule"""
     {"name": "a", "dir": "input", "width": w},
     {"name": "b", "dir": "input", "width": w},
     {"name": "op", "dir": "input", "width": 4},
-    {"name": "result", "dir": "output", "width": w},
+    {"name": "result", "dir": "output", "width": w, "reg": True},
     {"name": "zero", "dir": "output"}, {"name": "carry", "dir": "output"},
     {"name": "overflow", "dir": "output"}, {"name": "negative", "dir": "output"},
 ])}
@@ -1651,9 +1644,9 @@ endmodule"""
                 {"name": "start", "dir": "input"},
                 {"name": "dividend", "dir": "input", "width": w},
                 {"name": "divisor", "dir": "input", "width": w},
-                {"name": "quotient", "dir": "output", "width": w},
-                {"name": "remainder", "dir": "output", "width": w},
-                {"name": "done", "dir": "output"},
+                {"name": "quotient", "dir": "output", "width": w, "reg": True},
+                {"name": "remainder", "dir": "output", "width": w, "reg": True},
+                {"name": "done", "dir": "output", "reg": True},
             ])
             _tpl = _hd
             _tpl += _INDENT + "reg [2*" + _ws + ":0] acc;\n"
@@ -1682,9 +1675,9 @@ endmodule"""
                 {"name": "start", "dir": "input"},
                 {"name": "dividend", "dir": "input", "width": w},
                 {"name": "divisor", "dir": "input", "width": w},
-                {"name": "quotient", "dir": "output", "width": w},
-                {"name": "remainder", "dir": "output", "width": w},
-                {"name": "done", "dir": "output"},
+                {"name": "quotient", "dir": "output", "width": w, "reg": True},
+                {"name": "remainder", "dir": "output", "width": w, "reg": True},
+                {"name": "done", "dir": "output", "reg": True},
             ])
             _tpl = _hd
             _tpl += _INDENT + "reg [2*" + _ws + "-1:0] acc;\n"
@@ -1709,17 +1702,15 @@ endmodule"""
 
         elif dt == "cordic":
             st = kw.get("stages", 16)
-        elif dt == "cordic":
-            st = kw.get("stages", 16)
             _init_x = "{{" + str(w-2) + "{1'b0}}, 1'b1, 1'b0}"
             code = f"""\\
 {_verilog_header("cordic", [
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
     {"name": "start", "dir": "input"},
     {"name": "angle", "dir": "input", "width": w},
-    {"name": "sine", "dir": "output", "width": w},
-    {"name": "cosine", "dir": "output", "width": w},
-    {"name": "done", "dir": "output"},
+    {"name": "sine", "dir": "output", "width": w, "reg": True},
+    {"name": "cosine", "dir": "output", "width": w, "reg": True},
+    {"name": "done", "dir": "output", "reg": True},
 ])}
 {_INDENT}localparam STAGES = {st};
 {_INDENT}reg signed [{w-1}:0] x, y, z;
@@ -1755,7 +1746,7 @@ endmodule"""
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
     {"name": "en", "dir": "input"},
     {"name": "xin", "dir": "input", "width": w},
-    {"name": "yout", "dir": "output", "width": 2*w},
+    {"name": "yout", "dir": "output", "width": 2*w, "reg": True},
 ])}
 {_INDENT}localparam TAPS = {taps};
 {_INDENT}reg signed [{w-1}:0] delay_line [0:TAPS-1];
@@ -1783,7 +1774,7 @@ endmodule"""
     {"name": "clk", "dir": "input"}, {"name": "rst_n", "dir": "input"},
     {"name": "en", "dir": "input"},
     {"name": "xin", "dir": "input", "width": w},
-    {"name": "yout", "dir": "output", "width": 2*w},
+    {"name": "yout", "dir": "output", "width": 2*w, "reg": True},
 ])}
 {_INDENT}reg signed [{w-1}:0] x1, x2, y1, y2;
 {_INDENT}reg signed [2*{w}-1:0] acc;
