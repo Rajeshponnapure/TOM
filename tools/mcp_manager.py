@@ -699,11 +699,19 @@ class FilesystemConnector(MCPConnector):
         return os.path.abspath(os.path.expanduser(os.path.expandvars(path or "")))
 
     @staticmethod
-    def _blocked(path: str) -> Optional[str]:
+    def _blocked(raw_path: str, resolved_path: str) -> Optional[str]:
+        # Judge BOTH the path as written and the resolved path. The raw input
+        # catches a Windows system path ("C:\\Windows\\...") on any host --
+        # check_file_path_safe judges it via ntpath regardless of OS, but only
+        # if it sees the original string, since os.path.abspath() on Linux
+        # mangles "C:\\Windows\\..." into a harmless name under cwd. The
+        # resolved path catches "../" traversal that lands in a system tree.
         try:
             from safety.guards import SafetyGuards
-            if not SafetyGuards().check_file_path_safe(path):
-                return f"'{path}' is a protected system location; refusing."
+            guard = SafetyGuards()
+            for candidate in (raw_path, resolved_path):
+                if candidate and not guard.check_file_path_safe(candidate):
+                    return f"'{raw_path}' is a protected system location; refusing."
         except Exception:
             pass
         return None
@@ -711,10 +719,11 @@ class FilesystemConnector(MCPConnector):
     async def call_tool(self, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         try:
             if tool_name == "read_file":
-                path = self._resolve(args.get("path", ""))
+                raw = args.get("path", "")
+                path = self._resolve(raw)
                 if not path:
                     return self._err("'path' is required.")
-                blocked = self._blocked(path)
+                blocked = self._blocked(raw, path)
                 if blocked:
                     return self._err(blocked)
                 if not os.path.isfile(path):
@@ -728,11 +737,12 @@ class FilesystemConnector(MCPConnector):
                                 f"Read {size:,} bytes from {path}")
 
             elif tool_name == "write_file":
-                path = self._resolve(args.get("path", ""))
+                raw = args.get("path", "")
+                path = self._resolve(raw)
                 content = args.get("content", "")
                 if not path:
                     return self._err("'path' is required.")
-                blocked = self._blocked(path)
+                blocked = self._blocked(raw, path)
                 if blocked:
                     return self._err(blocked)
                 os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -742,8 +752,9 @@ class FilesystemConnector(MCPConnector):
                                 f"Wrote {len(content)} character(s) to {path}")
 
             elif tool_name == "list_directory":
-                path = self._resolve(args.get("path", "."))
-                blocked = self._blocked(path)
+                raw = args.get("path", ".")
+                path = self._resolve(raw)
+                blocked = self._blocked(raw, path)
                 if blocked:
                     return self._err(blocked)
                 if not os.path.isdir(path):
