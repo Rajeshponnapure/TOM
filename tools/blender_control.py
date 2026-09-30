@@ -512,7 +512,7 @@ door.name = "TOM_Door"
 print("TOM house model created")
 '''
 
-    def execute_script(self, script: str, background: bool = True) -> Dict[str, Any]:
+    def execute_script(self, script: str, background: bool = True, timeout: int = 120) -> Dict[str, Any]:
         if not self.blender_path and not self._has_bpy:
             return {"status": "error", "message": "Blender not found. Install Blender or run in direct mode."}
 
@@ -528,28 +528,78 @@ print("TOM house model created")
             except Exception as e:
                 return {"status": "error", "mode": "direct", "message": str(e)}
 
-        if background:
-            try:
-                subprocess.Popen(
-                    [self.blender_path, "--background", "--python", script_path],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                return {"status": "success", "mode": "background", "message": f"Blender launched with script"}
-            except Exception as e:
-                return {"status": "error", "mode": "background", "message": str(e)}
-        else:
-            try:
-                subprocess.run([self.blender_path, "--python", script_path], timeout=30)
-                return {"status": "success", "mode": "foreground", "message": "Blender script completed"}
-            except Exception as e:
-                return {"status": "error", "mode": "foreground", "message": str(e)}
+        # NOTE: this used to fire-and-forget with subprocess.Popen() and report
+        # "success" the instant the process merely *launched* -- never waiting
+        # for Blender to finish, never checking its exit code, with stdout/
+        # stderr both discarded to DEVNULL. Combined with none of the script
+        # templates saving/exporting anything, every "Blender create a house"
+        # style request reported success while producing zero files on disk.
+        # subprocess.run(..., timeout=...) always waits and captures output,
+        # whether or not the caller asked for "background" (Blender itself
+        # still runs headless via --background either way).
+        cmd = [self.blender_path, "--background", "--python", script_path] if background \
+            else [self.blender_path, "--python", script_path]
+        mode = "background" if background else "foreground"
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "mode": mode,
+                    "message": f"Blender did not finish within {timeout}s (script may still be rendering)."}
+        except Exception as e:
+            return {"status": "error", "mode": mode, "message": str(e)}
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip()[-800:]
+            return {"status": "error", "mode": mode,
+                    "message": f"Blender exited with code {proc.returncode}: {tail}"}
+        return {"status": "success", "mode": mode, "message": "Blender script completed",
+                "stdout_tail": (proc.stdout or "").strip()[-500:]}
 
     def generate_and_execute(self, task: str) -> Dict[str, Any]:
+        import re as _re
+        import uuid as _uuid
+        # A plain int(time.time()) here collided when two requests landed in
+        # the same second: the second run's "no file produced" case then read
+        # the first run's leftover file at the same path and falsely reported
+        # success. uuid4 guarantees a fresh directory every call.
+        slug = _re.sub(r"[^a-z0-9]+", "_", task.lower()).strip("_")[:40] or "scene"
+        out_dir = project_path_str("tom_brain", "blender_output", f"{slug}_{_uuid.uuid4().hex[:8]}")
         script = self.generate_script(task)
-        result = self.execute_script(script)
+        finalized, blend_path, png_path = self._finalize_script(script, out_dir)
+        result = self.execute_script(finalized)
         if result["status"] == "success":
             result["script_preview"] = script[:500]
+            # Don't just trust Blender's exit code: confirm the scene actually
+            # landed on disk before calling this a success.
+            if os.path.isfile(blend_path):
+                result["path"] = blend_path
+                result["paths"] = [blend_path] + ([png_path] if os.path.isfile(png_path) else [])
+                result["message"] = f"Blender scene saved to {blend_path}"
+            else:
+                result["status"] = "error"
+                result["message"] = (
+                    "Blender ran without error but no .blend file was found afterward "
+                    f"(expected {blend_path}). {result.get('stdout_tail', '')}"[:800])
         return result
+
+    def _finalize_script(self, script: str, out_dir: str):
+        """Append a save (+ preview render, unless the template already
+        renders one) so a generated scene leaves a real file behind instead
+        of vanishing when Blender's headless process exits."""
+        os.makedirs(out_dir, exist_ok=True)
+        blend_path = os.path.join(out_dir, "scene.blend").replace("\\", "/")
+        already_renders = "render.render(" in script
+        png_path = (os.path.join(os.path.expanduser("~"), "Desktop", "TOM_Render.png").replace("\\", "/")
+                    if already_renders else os.path.join(out_dir, "preview.png").replace("\\", "/"))
+        lines = [script.rstrip(), "", f"bpy.ops.wm.save_as_mainfile(filepath={blend_path!r})"]
+        if not already_renders:
+            lines += [
+                f"bpy.context.scene.render.filepath = {png_path!r}",
+                "try:",
+                "    bpy.ops.render.render(write_still=True)",
+                "except Exception as _tom_render_exc:",
+                "    print('TOM preview render skipped:', _tom_render_exc)",
+            ]
+        return "\n".join(lines), blend_path, png_path
 
     def list_capabilities(self) -> Dict[str, str]:
         return {

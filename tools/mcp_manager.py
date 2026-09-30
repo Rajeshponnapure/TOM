@@ -262,12 +262,7 @@ class GmailConnector(MCPConnector):
         msg["To"]      = args["to"]
         msg["Subject"] = args.get("subject", "(no subject)")
         msg.attach(MIMEText(args.get("body", ""), "plain"))
-        await asyncio.to_thread(
-            lambda: smtplib.SMTP_SSL("smtp.gmail.com", 465).__enter__().__class__(
-                smtplib.SMTP_SSL("smtp.gmail.com", 465).__enter__()
-            )
-        )
-        # Simpler sync approach
+
         def _do_send():
             with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
                 s.login(user, password)
@@ -685,6 +680,168 @@ def _wmo_code(code: int) -> str:
     return WMO.get(code, f"Code {code}")
 
 
+# ── Filesystem Connector ────────────────────────────────────────────────────────
+
+class FilesystemConnector(MCPConnector):
+    name = "filesystem"
+    description = "Filesystem — read/write/list files on disk (protected system paths blocked)"
+    tools = ["read_file", "write_file", "list_directory"]
+
+    MAX_READ_BYTES = 500_000
+    MAX_LIST_ENTRIES = 500
+
+    async def connect(self) -> bool:
+        self._connected = True
+        return True
+
+    @staticmethod
+    def _resolve(path: str) -> str:
+        return os.path.abspath(os.path.expanduser(os.path.expandvars(path or "")))
+
+    @staticmethod
+    def _blocked(path: str) -> Optional[str]:
+        try:
+            from safety.guards import SafetyGuards
+            if not SafetyGuards().check_file_path_safe(path):
+                return f"'{path}' is a protected system location; refusing."
+        except Exception:
+            pass
+        return None
+
+    async def call_tool(self, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            if tool_name == "read_file":
+                path = self._resolve(args.get("path", ""))
+                if not path:
+                    return self._err("'path' is required.")
+                blocked = self._blocked(path)
+                if blocked:
+                    return self._err(blocked)
+                if not os.path.isfile(path):
+                    return self._err(f"File not found: {path}")
+                size = os.path.getsize(path)
+                if size > self.MAX_READ_BYTES:
+                    return self._err(f"File is {size:,} bytes; refusing to read more than {self.MAX_READ_BYTES:,}.")
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                return self._ok({"path": path, "content": content, "bytes": size},
+                                f"Read {size:,} bytes from {path}")
+
+            elif tool_name == "write_file":
+                path = self._resolve(args.get("path", ""))
+                content = args.get("content", "")
+                if not path:
+                    return self._err("'path' is required.")
+                blocked = self._blocked(path)
+                if blocked:
+                    return self._err(blocked)
+                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                return self._ok({"path": path, "bytes": len(content.encode("utf-8"))},
+                                f"Wrote {len(content)} character(s) to {path}")
+
+            elif tool_name == "list_directory":
+                path = self._resolve(args.get("path", "."))
+                blocked = self._blocked(path)
+                if blocked:
+                    return self._err(blocked)
+                if not os.path.isdir(path):
+                    return self._err(f"Directory not found: {path}")
+                entries = []
+                with os.scandir(path) as it:
+                    for entry in it:
+                        entries.append({
+                            "name": entry.name,
+                            "is_dir": entry.is_dir(),
+                            "size": entry.stat().st_size if entry.is_file() else None,
+                        })
+                        if len(entries) >= self.MAX_LIST_ENTRIES:
+                            break
+                return self._ok(entries, f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'} in {path}")
+
+            else:
+                return self._err(f"Unknown tool: {tool_name}")
+        except Exception as e:
+            return self._err(str(e))
+
+
+# ── Database Connector ──────────────────────────────────────────────────────────
+
+class DatabaseConnector(MCPConnector):
+    name = "database"
+    description = "Database — SQLite / PostgreSQL queries via connection string"
+    tools = ["query"]
+
+    MAX_ROWS = 500
+
+    async def connect(self) -> bool:
+        self._connected = True
+        return True
+
+    async def call_tool(self, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        if tool_name != "query":
+            return self._err(f"Unknown tool: {tool_name}")
+        conn_str = args.get("connection_string") or self._get_env("DATABASE_URL")
+        sql = args.get("sql") or args.get("query")
+        if not conn_str:
+            return self._err("'connection_string' is required (or set DATABASE_URL in .env).")
+        if not sql:
+            return self._err("'sql' is required.")
+        params = args.get("params") or []
+        try:
+            if conn_str.startswith("postgres://") or conn_str.startswith("postgresql://"):
+                return await asyncio.to_thread(self._query_postgres, conn_str, sql, params)
+            return await asyncio.to_thread(self._query_sqlite, conn_str, sql, params)
+        except Exception as e:
+            return self._err(str(e))
+
+    @staticmethod
+    def _sqlite_path(conn_str: str) -> str:
+        if conn_str.startswith("sqlite:///"):
+            return conn_str[len("sqlite:///"):]
+        if conn_str.startswith("sqlite://"):
+            return conn_str[len("sqlite://"):]
+        return conn_str
+
+    def _query_sqlite(self, conn_str: str, sql: str, params: list) -> Dict[str, Any]:
+        import sqlite3
+        path = self._sqlite_path(conn_str)
+        con = sqlite3.connect(path)
+        try:
+            con.row_factory = sqlite3.Row
+            cur = con.execute(sql, params)
+            if cur.description:
+                rows = [dict(r) for r in cur.fetchmany(self.MAX_ROWS)]
+                con.commit()
+                return self._ok(rows, f"{len(rows)} row(s)")
+            con.commit()
+            affected = f"{cur.rowcount} row(s) affected" if cur.rowcount >= 0 else "statement executed"
+            return self._ok([], affected)
+        finally:
+            con.close()
+
+    def _query_postgres(self, conn_str: str, sql: str, params: list) -> Dict[str, Any]:
+        try:
+            import psycopg2
+            import psycopg2.extras
+        except ImportError:
+            return self._err("Install: pip install psycopg2-binary")
+        con = psycopg2.connect(conn_str)
+        try:
+            with con.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, params)
+                if cur.description:
+                    rows = [dict(r) for r in cur.fetchmany(self.MAX_ROWS)]
+                    con.commit()
+                    return self._ok(rows, f"{len(rows)} row(s)")
+                con.commit()
+                affected = f"{cur.rowcount} row(s) affected" if cur.rowcount >= 0 else "statement executed"
+                return self._ok([], affected)
+        finally:
+            con.close()
+
+
 # ── HTTP MCP Server Connector ──────────────────────────────────────────────────
 
 class HTTPMCPConnector(MCPConnector):
@@ -830,6 +987,8 @@ class MCPManager:
             WebSearchConnector,
             CalendarConnector,
             WeatherConnector,
+            FilesystemConnector,
+            DatabaseConnector,
         ]:
             mgr.register(ConnClass())
         # HTTP MCP servers from environment

@@ -16,6 +16,7 @@ import pytest
 def agent(tmp_path, monkeypatch, smtp_server, imap_server):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TOM_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("HINDSIGHT_ENABLED", "0")
     monkeypatch.delenv("GMAIL_CREDENTIALS_FILE", raising=False)
     monkeypatch.setenv("EMAIL_ADDRESS", "tom@example.com")
     monkeypatch.setenv("EMAIL_PASSWORD", "app-pass")

@@ -33,6 +33,32 @@ def test_knowledge_autodiscovers_all_domain_jsons():
     assert stats["domain_stats"]["cybersecurity"]["sections"] >= 20
     assert stats["total_sections"] >= 70
 
+
+def test_every_knowledge_json_file_on_disk_actually_parses():
+    """Every knowledge/*.json must be valid JSON the engine can load.
+
+    Real bug: 4 of 26 files silently contributed zero content -- two had a
+    UTF-8 BOM that plain `encoding="utf-8"` rejects, and two had genuine
+    JSON syntax errors (a trailing comma; a doubled backslash that closed a
+    string early). `_load_all()`'s bare `except: pass` swallowed all four
+    with no warning anywhere, so `get_stats()` looked fine while an entire
+    file's worth of curated knowledge (e.g. mobile security testing with
+    Frida, referenced by the cybersecurity skill for "deeper coverage") was
+    never actually searchable.
+    """
+    import glob
+    import json
+    import os
+    from tools.knowledge_engine import KNOWLEDGE_DIR
+    bad = []
+    for path in glob.glob(os.path.join(KNOWLEDGE_DIR, "**", "*.json"), recursive=True):
+        try:
+            with open(path, encoding="utf-8-sig") as fh:
+                json.load(fh)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            bad.append((path, str(exc)))
+    assert bad == [], f"malformed knowledge JSON files: {bad}"
+
 def test_all_local_skills_routable():
     from tools.skill_manager import SkillManager
     sm = SkillManager()
@@ -61,3 +87,18 @@ def test_frontmatter_skill_naming():
     sm = SkillManager()
     names = [r.name for r in sm.records()]
     assert "skill" not in names, "SKILL.md must register under its frontmatter name"
+
+
+def test_a_generic_domain_word_does_not_drown_out_a_specific_one():
+    """"design" maps to 5 UI-ish skills in DOMAIN_MAP; "database" maps to just one.
+    A query matching both used to tie 4.0 vs 4.0 and the alphabetical-by-name
+    tiebreak always picked 01-ui-ux-design over 06-database-skills, regardless
+    of the query actually being about a database."""
+    from tools.skill_manager import SkillManager
+    sm = SkillManager()
+    route = sm.route_task("i need to design a database schema")
+    assert route.matched and route.skill_name == "06-database-skills", route
+
+    # A genuinely UI-flavored "design" query must still route to UI skills.
+    route2 = sm.route_task("design a beautiful modern ui for my app")
+    assert route2.matched and route2.skill_name == "01-ui-ux-design", route2

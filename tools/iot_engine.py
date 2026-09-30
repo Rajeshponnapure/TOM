@@ -1749,7 +1749,7 @@ def _generate_pinout(components: List[str], board: str) -> str:
             result.append(f"  {comp:20s} VCC=5V     SDA=GPIO21  SCL=GPIO22  GND")
         elif comp == "RC522":
             spi_devs.append(comp)
-            result.append(f"  {comp:20s} VCC=3.3V   SS=GPIO{p:<3d}  RST=GPIO{_pin(chr(82)+chr(67)+chr(53)+chr(50)+chr(50)+chr(95)+chr(82)+chr(83)+chr(84), board):<3d}  MOSI=GPIO23  MISO=GPIO19  SCK=GPIO18")
+            result.append(f"  {comp:20s} VCC=3.3V   SS=GPIO{p:<3d}  RST=GPIO{_pin('RC522_RST', board):<3d}  MOSI=GPIO23  MISO=GPIO19  SCK=GPIO18")
         elif comp == "PN532":
             i2c_devs.append(comp)
             result.append(f"  {comp:20s} VCC=3.3V   SDA=GPIO21  SCL=GPIO22  IRQ=GPIO4  RST=GPIO5")
@@ -1778,7 +1778,7 @@ def _generate_pinout(components: List[str], board: str) -> str:
             bp = _pin("RGB_LED_B", board)
             result.append(f"  {comp:20s} R=GPIO{rp:<3d}  G=GPIO{gp:<3d}  B=GPIO{bp:<3d}  GND")
         elif comp == "DFPlayer_Mini":
-            result.append(f"  {comp:20s} VCC=5V     RX=GPIO{_pin(chr(68)+chr(70)+chr(80)+chr(108)+chr(97)+chr(121)+chr(101)+chr(114)+chr(95)+chr(82)+chr(88), board):<3d}  TX=GPIO{_pin(chr(68)+chr(70)+chr(80)+chr(108)+chr(97)+chr(121)+chr(101)+chr(114)+chr(95)+chr(84)+chr(88), board):<3d}  SPK")
+            result.append(f"  {comp:20s} VCC=5V     RX=GPIO{_pin('DFPlayer_RX', board):<3d}  TX=GPIO{_pin('DFPlayer_TX', board):<3d}  SPK")
         elif comp == "FlowSensor":
             result.append(f"  {comp:20s} VCC=5V     SIG=GPIO{p:<3d}  GND")
         elif comp == "ESP32-CAM":
@@ -2117,10 +2117,10 @@ class IoTEngine:
             arch = _ARCHITECTURES[uc]
             a = []
             a.append("=" * 70)
-            a.append(f"  TOM IoT -- Architecture: {use_case.replace(chr(95), chr(32)).title()}")
+            a.append(f"  TOM IoT -- Architecture: {use_case.replace('_', ' ').title()}")
             a.append("=" * 70)
             a.append("")
-            a.append(f"  Description: {arch[chr(100)+chr(101)+chr(115)+chr(99)+chr(114)+chr(105)+chr(112)+chr(116)+chr(105)+chr(111)+chr(110)]}")
+            a.append(f"  Description: {arch['description']}")
             a.append("")
             a.append("  Sensors/Components:")
             for s in arch.get("sensors", []):
@@ -2128,8 +2128,8 @@ class IoTEngine:
             for act in arch.get("actuators", []):
                 a.append(f"    - {act} (actuator)")
             a.append("")
-            a.append(f"  Protocol: {arch.get(chr(112)+chr(114)+chr(111)+chr(116)+chr(111)+chr(99)+chr(111)+chr(108), chr(78)+chr(47)+chr(65))}")
-            a.append(f"  Backend: {arch.get(chr(98)+chr(97)+chr(99)+chr(107)+chr(101)+chr(110)+chr(100), chr(78)+chr(47)+chr(65))}")
+            a.append(f"  Protocol: {arch.get('protocol', 'N/A')}")
+            a.append(f"  Backend: {arch.get('backend', 'N/A')}")
             a.append("")
             a.append("  Key Features:")
             for f in arch.get("features", []):
@@ -2191,6 +2191,6 @@ if __name__ == "__main__":
     if r["status"] == "success":
         print("=== ESP32 FIRMWARE ===")
         print(r["result"][:2000])
-        print(f"... ({len(r[chr(114)+chr(101)+chr(115)+chr(117)+chr(108)+chr(116)])} chars)")
+        print(f"... ({len(r['result'])} chars)")
     else:
         print("ERROR:", r["message"])

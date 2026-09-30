@@ -1,6 +1,9 @@
 import json
+import logging
 import os
 import random
+
+logger = logging.getLogger(__name__)
 
 KNOWLEDGE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "knowledge")
 
@@ -76,7 +79,12 @@ class KnowledgeEngine:
                 fpath = os.path.join(domain_dir, fname)
                 if os.path.isfile(fpath):
                     try:
-                        with open(fpath, "r", encoding="utf-8") as f:
+                        # utf-8-sig: several knowledge JSON files carry a
+                        # leading UTF-8 BOM (likely saved by an editor that
+                        # adds one); plain "utf-8" rejects that byte and
+                        # silently dropped the whole file's content below,
+                        # with nothing anywhere indicating it never loaded.
+                        with open(fpath, "r", encoding="utf-8-sig") as f:
                             data = json.load(f)
                             if isinstance(data, dict):
                                 domain_data["sections"].extend(
@@ -85,8 +93,8 @@ class KnowledgeEngine:
                                 domain_data["topics"].extend(
                                     data.get("topics", [])
                                 )
-                    except (json.JSONDecodeError, Exception):
-                        pass
+                    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+                        logger.warning("[KNOWLEDGE] Failed to load %s: %s", fpath, exc)
             self.cache[domain] = domain_data
             self._loaded_domains.add(domain)
 

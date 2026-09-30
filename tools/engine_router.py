@@ -54,6 +54,16 @@ def _extract_kv_num(command: str, key: str, default: int) -> int:
     return default
 
 
+def _extract_quoted(command: str) -> Optional[str]:
+    """Pull 'this exact text' / "this exact text" out of a command."""
+    m = re.search(r"['\"]([^'\"]+)['\"]", command)
+    return m.group(1) if m else None
+
+
+_VIDEO_EXT = r"[\w:\\/.\-]+\.(?:mp4|mov|avi|mkv|webm|flv|wmv)"
+_PHOTO_EXT = r"[\w:\\/.\-]+\.(?:png|jpe?g|gif|bmp|webp|tiff?)"
+
+
 def parse_schedule_command(command: str):
     """'schedule X every N hours/minutes' / 'every morning' → (task, hours).
     Returns (None, None) if no schedule intent."""
@@ -136,6 +146,12 @@ class EngineRouter:
                     tom_agent=self._agent,
                     llm=getattr(self._agent, "llm", None),
                 )
+            elif key == "scaler":
+                from tools.auto_scaler import AutoScaler
+                engine = AutoScaler()
+            elif key == "media":
+                from tools.media_engine import MediaEngine
+                engine = MediaEngine()
         except Exception as exc:  # missing optional dependency etc.
             self._engines[key] = None
             self._last_load_error = f"{key}: {exc}"
@@ -159,6 +175,7 @@ class EngineRouter:
             ("blender ", "blender"), ("game dev ", "gamedev"),
             ("gamedev ", "gamedev"), ("news ", "news"), ("env ", "deps"),
             ("auto-update ", "autoupdate"), ("auto update ", "autoupdate"),
+            ("scaler ", "scaler"), ("autoscale ", "scaler"), ("auto-scale ", "scaler"),
         ):
             if c.startswith(prefix):
                 return key
@@ -177,12 +194,27 @@ class EngineRouter:
         if re.search(r"\b(esp32|esp8266|micropython|arduino|raspberry pi pico)\b", c) and \
            re.search(r"\b(code|firmware|sketch|generate|sensor|mqtt|pinout)\b", c):
             return "iot"
+        if (re.search(r"\b(trim|cut|clip|concat(enate)?|combine|merge|join|caption|subtitle|"
+                      r"text overlay|extract audio|resize|scale|mute|convert|color correct)\b", c) and
+                (re.search(r"\bvideos?\b", c) or re.search(_VIDEO_EXT, c, re.I))) or \
+           (re.search(r"\b(crop|resize|scale|rotate|watermark|grayscale|black and white|blur|sharpen|"
+                      r"smooth|contour|brighten|darken|high contrast|saturate|sepia|filter|convert)\b", c) and
+                re.search(r"\b(photo|image|picture)s?\b", c)) or \
+           re.search(r"\bedit (the |this |my )?(video|photo|image|picture)\b", c):
+            return "media"
         if re.search(r"\b(predictive analysis|prediction|predict|forecast|regression|classif\w+|cluster\w*|auto[_ ]?ml|anomal\w+|time[- ]series)\b", c) and \
            re.search(r"\b(model|train|ml|data|dataset|algorithm|analysis|forecast|kmeans|knn|svm|x=|y=)", c):
             return "ml"
         if re.search(r"\b(move (the )?mouse|click at \d|press (the )?key|type text|take a screenshot|"
                      r"volume (up|down|to \d+)|mute|unmute|system info|screen ?shot)\b", c):
             return "hardware"
+        if re.search(r"\b(auto[- ]?scaler|resource manager|worker pool)\b.*\bstatus\b", c) or \
+           re.search(r"\b(scaler|autoscaler) (status|performance report)\b", c) or \
+           re.search(r"\b(simulate load|benchmark parallel|stress test (the )?(scaler|workers?))\b", c) or \
+           re.search(r"\b(optimal|optimize)\b.*\bworkers?\b", c) or \
+           re.search(r"\bsystem resources?\b", c) or \
+           re.search(r"\bhow many cpu cores\b", c):
+            return "scaler"
         if "blender" in c:
             return "blender"
         if re.search(r"\b(scaffold|make|create|build)\b.*\b(pygame|unity|godot)\b", c) or \
@@ -502,6 +534,133 @@ class EngineRouter:
                             "mute/unmute · system info")
         return self._ok("engine_hardware", f"Hardware: {str(r)[:600]}", raw=r)
 
+    # ── Auto-scaler (resource management, parallel execution) ────────────
+    def _run_scaler(self, command: str) -> Dict[str, Any]:
+        eng = self._get("scaler")
+        if not eng:
+            return self._unavailable("Auto-scaler", "")
+        c = command.lower()
+        if re.search(r"\b(optimal|optimize)\b.*\bworkers?\b", c):
+            type_m = re.search(
+                r"\b(cpu[-_]?bound|io[-_]?bound|network|disk|file|compute|computation|cpu|io)\b", c)
+            res = eng.optimize_workers(type_m.group(1) if type_m else "cpu")
+        elif re.search(r"\b(simulate load|benchmark parallel|stress test)\b", c):
+            n_m = re.search(r"\b(\d+)\s*tasks?\b", c)
+            count = min(int(n_m.group(1)), 200) if n_m else 10
+            res = eng.simulate_load(count)
+        elif "performance report" in c:
+            res = eng.performance_report()
+        elif "status" in c:
+            res = eng.get_status()
+        else:
+            res = eng.detect_resources()
+        body = res.get("result", res) if isinstance(res, dict) else res
+        return self._ok("engine_scaler",
+                        f"Auto-scaler: {res.get('message', '')}\n{str(body)[:1500]}", raw=res)
+
+    # ── Media (real video via ffmpeg, real photo via Pillow) ──────────────
+    def _run_media(self, command: str) -> Dict[str, Any]:
+        eng = self._get("media")
+        if not eng:
+            return self._unavailable("Media", "")
+        c = command.lower()
+        video_m = re.search(_VIDEO_EXT, command, re.I)
+        photo_m = re.search(_PHOTO_EXT, command, re.I)
+        is_photo = bool(photo_m) and not video_m
+        path = (video_m or photo_m).group(0) if (video_m or photo_m) else None
+        if not path:
+            return self._ok("engine_media",
+                            "Tell me the file to edit (a full path ending in .mp4/.mov/... for video, "
+                            ".png/.jpg/... for photo), e.g. 'trim video C:\\clips\\a.mp4 from 5s for 10s' "
+                            "or 'apply sepia filter to photo C:\\pics\\a.png'.")
+
+        if is_photo:
+            if not eng.photo_available():
+                return self._unavailable("Photo editing", "Pillow must be installed.", "media")
+            if "crop" in c:
+                nums = [int(x) for x in re.findall(r"\d+", command.replace(path, ""))][:4]
+                if len(nums) < 4:
+                    return self._ok("engine_media",
+                                    "Give me 4 numbers for the crop box: left top right bottom "
+                                    "(pixels), e.g. 'crop photo a.png 0 0 400 300'.")
+                res = eng.crop_image(path, *nums)
+            elif re.search(r"\bresize|scale\b", c):
+                wh = re.search(r"(\d+)\s*[x\u00d7]\s*(\d+)", c)
+                if not wh:
+                    return self._ok("engine_media", "Give me a size, e.g. 'resize photo a.png to 800x600'.")
+                res = eng.resize_image(path, int(wh.group(1)), int(wh.group(2)))
+            elif re.search(r"\brotate\b", c):
+                deg_m = re.search(r"(-?\d+(?:\.\d+)?)\s*deg", c) or re.search(r"\bby\s+(-?\d+(?:\.\d+)?)", c)
+                res = eng.rotate_image(path, float(deg_m.group(1)) if deg_m else 90.0)
+            elif re.search(r"\bwatermark\b", c):
+                text = _extract_quoted(command) or "TOM"
+                pos_m = re.search(r"\b(top-left|top-right|bottom-left|bottom-right|center)\b", c)
+                res = eng.add_watermark(path, text, pos_m.group(1) if pos_m else "bottom-right")
+            elif re.search(r"\bconvert\b", c):
+                fmt_m = re.search(r"\bto\s+(png|jpe?g|gif|bmp|webp)\b", c)
+                if not fmt_m:
+                    return self._ok("engine_media", "Convert to which format? e.g. 'convert photo a.png to jpg'.")
+                res = eng.convert_image_format(path, fmt_m.group(1))
+            else:
+                filt_m = re.search(
+                    r"\b(grayscale|black and white|blur|sharpen|smooth|contour|brighten|darken|"
+                    r"high contrast|saturate|sepia)\b", c)
+                if not filt_m:
+                    return self._ok("engine_media",
+                                    "Which filter? grayscale, blur, sharpen, smooth, contour, brighten, "
+                                    "darken, high_contrast, saturate, sepia.")
+                name = "grayscale" if filt_m.group(1) == "black and white" else filt_m.group(1).replace(" ", "_")
+                res = eng.apply_filter(path, name)
+        else:
+            if not eng.video_available():
+                return self._unavailable("Video editing", "ffmpeg must be installed.", "media")
+            if re.search(r"\btrim|cut|clip\b", c):
+                start_m = re.search(r"from\s+(\d+(?:\.\d+)?)\s*s", c)
+                dur_m = re.search(r"for\s+(\d+(?:\.\d+)?)\s*s", c)
+                res = eng.trim_video(path, float(start_m.group(1)) if start_m else 0.0,
+                                     float(dur_m.group(1)) if dur_m else 10.0)
+            elif re.search(r"\bconcat(enate)?|combine|merge|join\b", c):
+                paths = re.findall(_VIDEO_EXT, command, re.I)
+                if len(paths) < 2:
+                    return self._ok("engine_media", "Give me at least 2 video file paths to combine.")
+                res = eng.concat_videos(paths)
+            elif re.search(r"\bcaption|subtitle|text overlay|add text\b", c):
+                text = _extract_quoted(command) or "TOM"
+                pos_m = re.search(r"\b(top|center|bottom)\b", c)
+                res = eng.add_text_overlay(path, text, pos_m.group(1) if pos_m else "bottom")
+            elif "extract audio" in c:
+                res = eng.extract_audio(path)
+            elif re.search(r"\bresize|scale\b", c):
+                wh = re.search(r"(\d+)\s*[x\u00d7]\s*(\d+)", c)
+                if not wh:
+                    return self._ok("engine_media", "Give me a size, e.g. 'resize video a.mp4 to 1280x720'.")
+                res = eng.resize_video(path, int(wh.group(1)), int(wh.group(2)))
+            elif "mute" in c:
+                res = eng.set_video_volume(path, 0.0)
+            elif "volume" in c:
+                factor_m = re.search(r"(\d+(?:\.\d+)?)\s*%", c)
+                res = eng.set_video_volume(path, (float(factor_m.group(1)) / 100.0) if factor_m else 1.5)
+            elif re.search(r"\bconvert\b", c):
+                fmt_m = re.search(r"\bto\s+(mp4|mov|avi|mkv|webm|flv|wmv)\b", c)
+                if not fmt_m:
+                    return self._ok("engine_media", "Convert to which format? e.g. 'convert video a.mov to mp4'.")
+                res = eng.convert_video_format(path, fmt_m.group(1))
+            else:
+                res = eng.adjust_video(path)
+
+        # Same lesson as Blender: don't hardcode success via _ok() regardless of
+        # what the engine actually reported, and promote path/paths to the top
+        # level so the verification pass below re-checks the file on disk.
+        if res.get("status") != "success":
+            return {"status": "error", "response_type": "engine_media",
+                    "message": f"Media: {res.get('message', 'failed')}", "raw": res}
+        extra = {"raw": res}
+        if res.get("path"):
+            extra["path"] = res["path"]
+        if res.get("paths"):
+            extra["paths"] = res["paths"]
+        return self._ok("engine_media", f"Media: {res.get('message', 'done')}", **extra)
+
     # ── Game Dev ─────────────────────────────────────────────────────────
     def _run_gamedev(self, command: str) -> Dict[str, Any]:
         eng = self._get("gamedev")
@@ -528,7 +687,21 @@ class EngineRouter:
                             "Blender is not installed (or not found). Install Blender and retry.")
         task = re.sub(r"^blender\s*", "", command, flags=re.I).strip() or "cube"
         res = eng.generate_and_execute(task)
-        return self._ok("engine_blender", f"Blender:\n{str(res)[:1200]}", raw=res)
+        # _ok() hardcodes status="success" -- it used to be returned unconditionally
+        # here regardless of what the engine actually reported, so a Blender script
+        # that produced nothing still read as a success to the caller. Also promote
+        # path/paths to the top level (not just nested in "raw") so the verification
+        # pass below (_apply_verification/_declared_artifacts) actually re-checks the
+        # file on disk instead of silently skipping an unrecognized artifact shape.
+        if res.get("status") != "success":
+            return {"status": "error", "response_type": "engine_blender",
+                    "message": f"Blender: {res.get('message', 'failed')}", "raw": res}
+        extra = {"raw": res}
+        if res.get("path"):
+            extra["path"] = res["path"]
+        if res.get("paths"):
+            extra["paths"] = res["paths"]
+        return self._ok("engine_blender", f"Blender:\n{str(res)[:1200]}", **extra)
 
     # ── News ─────────────────────────────────────────────────────────────
     def _run_news(self, command: str) -> Dict[str, Any]:

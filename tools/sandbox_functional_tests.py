@@ -82,6 +82,17 @@ class FakeEmailTools:
     def __init__(self):
         self.calls = []
 
+    async def draft_email(self, recipient, subject, body, attachments=None):
+        self.calls.append(("draft_email", recipient, subject, body))
+        return {
+            "status": "draft_ready",
+            "message": "Email drafted successfully. Ready for your review before sending.",
+            "recipient": recipient,
+            "subject": subject,
+            "body": body,
+            "attachments": [],
+        }
+
     async def draft_email_with_llm(self, recipient, prompt, llm):
         self.calls.append(("draft", recipient, prompt))
         return {"status": "success", "message": f"drafted {recipient}", "recipient": recipient}
@@ -191,7 +202,7 @@ async def main() -> int:
         ("create a word document about leave letter", "word"),
         ("create an excel budget tracker", "excel"),
         ("create a powerpoint presentation about AI", "powerpoint"),
-        ("write email to john@example.com about meeting", "draft"),
+        ("write email to john@example.com about meeting", "draft_email"),
         ("send email to john@example.com saying hello", "send"),
         ("open vs code", "open"),
         ("create website called demo website", "website"),

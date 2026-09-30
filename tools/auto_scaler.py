@@ -1285,7 +1285,12 @@ class AutoScaler:
             cpu_tasks_count = task_count // 2
             io_tasks_count = task_count - cpu_tasks_count
             for i in range(cpu_tasks_count):
-                tasks.append(_synthetic_task)
+                # Bare-callable submission (parallel_execute calls task() with no
+                # args) -- _synthetic_task requires (duration, idx), so this used
+                # to fail every "cpu simulated" task with a TypeError. Never
+                # caught because nothing called simulate_load() before it was
+                # wired into natural-language routing.
+                tasks.append([_synthetic_task, (task_duration, i)])
             for i in range(io_tasks_count):
                 tasks.append([_synthetic_task, (task_duration * random.uniform(0.5, 2.0), i)])
 

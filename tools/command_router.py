@@ -217,30 +217,42 @@ class CommandRouter:
         return any(name in lower for name in agent_names) and any(act in lower for act in actions)
 
     def _is_explanation_request(self, lower: str) -> bool:
-        """Detect 'explain how X works', 'what is X', 'how does X work' questions."""
-        explanation_patterns = (
-            "explain how",
-            "how does",
-            "how do",
-            "what is",
-            "what are",
-            "how works",
-            "how it works",
-            "how they work",
-            "describe how",
-            "tell me how",
-            "explain what",
-            "explain the",
-            "explain",
-            "how to use",
-            "how can i",
-            "what does",
-            "how does the",
-            "how do i",
+        """Detect 'explain how X works', 'what is X', 'how does X work' questions.
+
+        Two tiers, because the original single flat pattern list was both
+        too broad and too narrow at once:
+
+        * Unambiguous lead-ins ("explain how ...", "describe how ...") always
+          mean the user wants an explanation, even if the topic itself is an
+          action ("explain how to send an email" must be explained, not
+          executed -- the old code excluded it for containing "send").
+        * Generic phrasings ("what is X", "how do X") are common in totally
+          unrelated questions ("what is the weather in Paris", "how do I get
+          to the airport"), so they only count as asking about TOM itself
+          when the topic actually names one of TOM's own features.
+        """
+        stripped = lower.strip()
+        strong_starts = (
+            "explain how", "explain what", "explain the", "explain why",
+            "describe how", "tell me how", "how does the", "how do you",
+            "how does tom", "how to use",
         )
-        # Must have an explanation pattern AND a question-like structure
-        has_explanation_intent = any(pattern in lower for pattern in explanation_patterns)
-        if not has_explanation_intent:
+        if any(stripped.startswith(p) for p in strong_starts):
+            return True
+
+        weak_patterns = (
+            "what is", "what are", "how does", "how do", "what does",
+            "how it works", "how they work", "how can i",
+        )
+        if not any(pattern in lower for pattern in weak_patterns):
+            return False
+        tom_topic_words = (
+            "tom", "yourself", "this app", "this feature", "memory", "hindsight",
+            "rag", "skill", "capabilit", "voice", "agent", "orchestrator", "mcp",
+            "autonomous", "scheduler", "approval", "safety guard", "chat memory",
+            "knowledge base", "command router", "engine router",
+        )
+        if not any(w in lower for w in tom_topic_words):
             return False
         # Exclude action commands that happen to contain these words
         action_exclusions = (

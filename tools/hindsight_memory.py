@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import queue
 import threading
@@ -48,6 +49,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from tools.project_paths import PROJECT_ROOT
+
+logger = logging.getLogger(__name__)
 
 CLOUD_URL = "https://api.hindsight.vectorize.io"
 STATE_DIR = Path(PROJECT_ROOT) / "tom_brain" / "hindsight"
@@ -334,10 +337,25 @@ class HindsightMemory:
         if not self.available or not self.pending_file.exists():
             return 0
         with self._lock:
-            try:
-                lines = self.pending_file.read_text(encoding="utf-8").splitlines()
-                self.pending_file.unlink()
-            except OSError:
+            lines: Optional[List[str]] = None
+            # Reading+unlinking right after _queue_pending() just wrote the file
+            # can hit a momentary Windows file lock (antivirus/indexer touching
+            # the just-written temp file) -- WinError 32, "used by another
+            # process". That used to abandon the flush permanently (this is the
+            # only place anything re-sends the offline queue); a few short
+            # retries clear it in practice without risking a real, longer-lived
+            # lock turning into a busy-loop.
+            for _attempt in range(15):
+                try:
+                    lines = self.pending_file.read_text(encoding="utf-8").splitlines()
+                    self.pending_file.unlink()
+                    break
+                except FileNotFoundError:
+                    return 0
+                except OSError as exc:
+                    self.last_error = f"flush_pending: {exc}"
+                    time.sleep(0.1)
+            if lines is None:
                 return 0
         sent = 0
         for i, line in enumerate(lines):
@@ -359,8 +377,16 @@ class HindsightMemory:
                             for line_text in remaining:
                                 fh.write(line_text + "\n")
                         self.stats["queued"] += len(remaining)
-                    except OSError:
-                        pass
+                    except OSError as exc:
+                        # Genuine data loss: these retains are gone (the
+                        # original pending_file was already unlinked above)
+                        # rather than merely delayed, so this must not be
+                        # silent like the best-effort mirror writes elsewhere.
+                        self.last_error = f"flush_pending re-queue: {exc}"
+                        logger.warning(
+                            "[Hindsight] Lost %d queued retain(s) while re-queuing "
+                            "after a failed flush attempt: %s", len(remaining), exc
+                        )
                 break
         return sent
 
