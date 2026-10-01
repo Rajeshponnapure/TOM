@@ -506,6 +506,82 @@ push-to-talk window. Shortcuts: `Ctrl+D` Dashboard · `Ctrl+C` Chat.
 local model instead, set `TOM_LLM_PROVIDER=ollama`; TOM never falls back to local on its
 own. The embedding slot stays local either way (Groq has no embeddings endpoint).
 
+**You need only one provider to run — but you can set up both and switch live.** The
+minimum to get TOM working is a single choice: either a `GROQ_API_KEY` (hosted) *or* local
+Ollama models. You are not required to configure both.
+
+**Run both and toggle (recommended for flexibility):** configure `GROQ_API_KEY` **and**
+install Ollama, and the desktop header's provider dropdown — *Groq (hosted)* ↔
+*Ollama (local)* — flips between them **without a restart**. Exactly one provider is active
+per request (TOM does not blend the two into one answer); the dropdown just lets you choose
+per task — Groq for hosted speed/quality, Ollama for fully-offline local. Picking one
+hot-swaps all chat slots, refreshes the model dropdown with that provider's models, and
+writes `TOM_LLM_PROVIDER` to `.env` so the choice survives a restart. Each provider
+remembers its own model via its `GROQ_*` / `OLLAMA_*` slots. A failed switch (no
+`GROQ_API_KEY`, Ollama unreachable) leaves the current provider running and explains the fix
+in chat. The embedding slot stays local either way (Groq has no embeddings endpoint), and
+TOM never silently falls back to local on its own.
+
+### 🗂️ Workspace — TOM builds *outside* its own folder
+
+When you ask TOM to build something (a website, a code project, a document, a deck), the
+output goes to a dedicated **workspace on your Desktop** — `…/Desktop/TOM Workspace/` — not
+into the TOM install. Each build lands in its own named sub-folder. You can:
+
+- **name a path** and TOM builds there instead: *"build a portfolio site in `D:\Projects\Me`"*;
+- **override the default** with `TOM_WORKSPACE_DIR=<path>` in `.env`.
+
+TOM's own repo is never used as a scratch area, and its source files are protected from
+deletion (see below).
+
+### 🗑️ Guarded delete
+
+Ask TOM to *"delete the folder `old_build`"* or *"remove `C:\Users\me\Desktop\notes.txt`"*
+and it shows a warning with exactly what will be removed (type, size/file-count) and asks
+before doing anything. On approval it moves the item to the **Recycle Bin** when possible
+(recoverable). It will **refuse** — approval or not — to delete the TOM install, operating-
+system folders, drive roots, or top-level personal folders (Desktop/Documents/…).
+
+### 🎨 Presentation themes
+
+Decks pick a professional theme automatically, or you can name one:
+*"make a 10-slide deck on fintech in a **gradient** theme"*. Built-in styles include
+`technology`, `business`, `finance`, `gaming`, `gradient`, `floral`, `vibrant`, `dark`,
+`elegant`, `ocean`, `sunset`, `pastel`, `royal`, `minimal` — plus colour cues like
+*"bright colours"* → vibrant.
+
+### 📚 Learn a missing topic
+
+*"learn about X"* / *"research and remember X"* makes TOM research the topic on the web and
+save a curated note into its knowledge base (`knowledge/acquired_*.md`), usable immediately.
+It writes notes only — it does **not** download and run code from the internet.
+
+### 🌐 Network & device diagnostics
+
+Ask *"show the devices on my wifi"*, *"what's my network info"*, *"my wifi status"*, *"list my
+saved wifi networks"*, or *"scan ports on 192.168.1.10"*. TOM reads the ARP table of the
+network you're on, your adapter/WiFi info (`netsh`/`ipconfig`), and does a TCP connect scan —
+**restricted to loopback and private-LAN hosts** (your own devices). It is standard admin
+tooling: there is **no** WiFi-password cracking, deauth, or device-takeover, because a tool
+can't verify at runtime that a target is yours.
+
+### 🧰 Acquire a tool TOM doesn't have
+
+- *"install requests"* / *"install the pandas library"* → `pip install` into TOM's venv (after approval)
+- *"get the parser from github.com/owner/repo"* → clones and **inspects** it (lists files + README); it is **not** run or installed
+- *"build a tool that converts CSV to JSON"* → scaffolds a reviewed Python module into the workspace
+
+It never downloads-and-executes untrusted code — acquisition stops at install (PyPI, which you
+approve) and read-only inspection.
+
+### 🔐 Security guardrail
+
+TOM's security knowledge is for **learning and defending systems you own or are authorised
+to test**. Requests aimed at someone else's device/account, or that describe causing harm or
+evading detection, are refused. Requests about your *own* systems (or a CTF/lab) are allowed
+but ask you to confirm authorisation first, and stay with legitimate, non-destructive
+techniques.
+
 ---
 
 ## 🚀 Quick start
@@ -585,11 +661,16 @@ Settings live in `.env` (copy from [.env.example](.env.example)). Nothing is req
 - **OCR:** `TESSERACT_CMD` (only if Tesseract isn't on PATH).
 - **Voice:** `VOICE_INPUT_ENABLED`, `VOICE_OUTPUT_ENABLED`, `TOM_VOICE`, `TOM_VOICE_RATE`,
   `VOICE_RECOGNITION_ENGINE`, tuning thresholds.
+- **Workspace & folders:** `TOM_WORKSPACE_DIR` (where deliverables are built — default
+  `<Desktop>/TOM Workspace`), `TOM_DOWNLOADS_DIR`, `TOM_BROWSER_HEADLESS`.
 
 </details>
 
-> ✅ **No API keys** for Chrome automation, Instagram/YouTube browsing, or local Office —
-> those use your signed-in browser session and local apps.
+> ✅ **No API keys** for Chrome automation, Instagram/YouTube browsing, local Office,
+> network diagnostics (devices on your wifi / port-scan your own hosts), guarded delete,
+> document/website/deck building, or tool acquisition (installing a library uses `pip`;
+> *cloning* a repo just needs Git on PATH). These use your local machine and signed-in
+> browser session — no cloud credentials.
 
 Full annotated reference: [.env.example](.env.example).
 
@@ -813,7 +894,8 @@ versions to avoid hard-to-debug native/ABI mismatches.
 <summary><b>Can I use a different model?</b></summary>
 
 Yes — set `OLLAMA_MODEL` (and the fast/code/embed slots) to any Ollama model, or call
-`switch_model(name)` at runtime to hot-swap all slots.
+`switch_model(name)` at runtime to hot-swap all slots. The desktop header's provider
+dropdown also hot-swaps between Groq (hosted) and Ollama (local) without a restart.
 </details>
 
 <details>

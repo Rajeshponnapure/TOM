@@ -5,6 +5,55 @@ All notable changes to TOM. Format: [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 
 ### Added
+- **Network & device diagnostics engine (`tools/network_tools.py`, routed via `engine_router` as the
+  `network` key).** The legitimate realization of "show me the devices on my wifi / my network info":
+  `list_devices` (ARP table of the local subnet), `wifi_status` + `wifi_profiles` (own machine, via
+  `netsh`), `network_overview` (hostname/IPs), and `scan_ports` — a TCP connect scan **restricted to
+  loopback/private-LAN targets** (`_is_private_host`), refusing arbitrary public hosts. No attack
+  tooling (no WiFi-password cracking, deauth, or device takeover — those can't be runtime-constrained
+  to systems the user owns). Subprocess calls use arg lists (never `shell=True`), time out, and decode
+  UTF-8 with `errors="replace"` so `netsh`'s non-cp1252 bytes never crash the reader thread. Registered
+  in `capability_registry` (`network`), tests in `tests/test_network_tools.py`.
+- **Tool acquisition (`tools/tool_acquirer.py`; `agent.execute_tool_acquisition`).** Acquire a
+  capability TOM lacks: `install_package` (`pip install` into the venv, strict name validation so no
+  shell metacharacters reach pip, approval-gated), `clone_repo` (shallow-clone + read-only inspect of a
+  public repo from an allowlisted host — github/gitlab/bitbucket/codeberg/sr.ht over https; the repo is
+  never run or installed), and `save_tool` (write an LLM-scaffolded module into the workspace for
+  review, not imported/executed). Routed via `_is_acquire_tool_request`/`_extract_package`/
+  `_scaffold_tool`, approval-gated for install/clone. Deliberately does not download-and-run untrusted
+  code. Registered in `capability_registry` (`tool_acquire`), tests in `tests/test_tool_acquirer.py`.
+- **Workspace isolation — TOM now builds user deliverables *outside* its own repo.** Websites, code
+  scaffolds, documents, decks and reports were being written into the TOM install (`output/`, or the
+  current working dir for `--- FILE: … ---` scaffolds), polluting the app folder. Added workspace
+  routing in `tools/project_paths.py` (`workspace_root()` → `<Desktop>/TOM Workspace`, overridable via
+  `TOM_WORKSPACE_DIR`; `resolve_deliverable_dir`/`resolve_deliverable_path`; honours an explicit
+  absolute path named in the request). `FileTools.output_dir` and `document_creator.OUTPUT_DIR` now
+  point at the workspace; `create_website` takes a `target_root`; `agent.py` resolves every
+  `--- FILE: … ---` entry under a per-project workspace sub-folder (`_deliverable_target`/`_place_in`)
+  and extracts an explicit target path from the command (`_extract_target_dir`). Tests in
+  `tests/test_workspace_and_delete.py`.
+- **Guarded delete (`FileTools.delete_path` + `SafetyGuards.is_protected_from_deletion`).** TOM can
+  delete a file or folder, but only after showing a warning with exactly what will be removed (type,
+  size/file-count) and getting explicit approval; it deletes to the Recycle Bin when `send2trash` is
+  available. It refuses — approval or not — to delete the TOM install or anything inside it (stops
+  "delete agent.py" self-destructing the app), OS system trees, drive roots, and top-level personal
+  folders. Routed in `agent.py` (`_is_delete_request`/`_extract_delete_target`/`execute_delete`), with
+  the generic approval gate deferring to the delete executor's richer prompt. Tests included.
+- **Presentation themes by name.** Added `gaming`, `gradient`, `floral`, `vibrant`, `dark`, `elegant`,
+  `ocean`, `sunset`, `pastel`, `royal` presets (plus alias cues like "bright"→vibrant) to
+  `tools/document_creator.py`, with `_resolve_style` + alias map; `_detect_theme` now accepts a plain
+  style string. `agent._extract_requested_theme` pulls an explicitly-requested theme from the command
+  and overrides the LLM's guess. Tests in `tests/test_ppt_themes.py`.
+- **Knowledge acquisition — "learn about X".** `agent.acquire_knowledge` researches a topic on the web
+  (reusing `_research_topic`), saves a curated note to `knowledge/acquired_*.md`, and hot-reloads the
+  knowledge engine so it is usable immediately; also indexed into RAG. Routed via `_is_learn_request`/
+  `_learn_topic`. It writes notes only — it does not download or execute code from the internet. Tests
+  in `tests/test_knowledge_acquisition.py`.
+- **Defensive security gate (`SafetyGuards.assess_security_request`, wired into `is_action_safe`).**
+  Security help is scoped to systems the user owns or is authorised to test. Requests targeting third
+  parties, or describing harm/credential theft/detection-evasion, are blocked; own-system/CTF/lab and
+  educational-defence requests are allowed but require an authorisation confirmation. Tests in
+  `tests/test_security_gate.py`.
 - **Real video/photo editing engine (`tools/media_engine.py`) — TOM had zero actual capability here before.**
   `skills/39-media-production-skills.md` is pure reference text about Premiere Pro/DaVinci Resolve/Photoshop,
   but `SkillManager._classify()` had labeled it `tool_backed` against `blender_control` + `os_tools` — neither

@@ -19,6 +19,7 @@ so the rest of TOM never needs to know which provider is active.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,56 @@ def provider_env_conflict() -> str:
     return (f"Heads-up: TOM_LLM_PROVIDER={process_value} is set in this shell and overrides "
             f".env ({file_value or 'not set'}). TOM is running on {describe()}. "
             "Unset it (Remove-Item Env:TOM_LLM_PROVIDER) if .env should decide.")
+
+
+def set_provider(name: str) -> str:
+    """Switch the active provider at runtime (desktop provider dropdown).
+
+    Accepts the same values as TOM_LLM_PROVIDER: "groq", "ollama" and the
+    local aliases. Sets the process env, resets the Groq/Ollama model caches
+    (a cached list from the other provider must never reach the new one) and
+    returns the canonical provider id. Raises ValueError for anything else so
+    callers can show the message instead of silently staying put.
+    """
+    value = (name or "").strip().lower()
+    if value in _LOCAL_PROVIDER_ALIASES:
+        canonical = "ollama"
+    elif value == "groq":
+        canonical = "groq"
+    else:
+        raise ValueError(f"Unknown LLM provider '{(name or '').strip()}'. "
+                         "Use 'groq' or 'ollama'.")
+    os.environ["TOM_LLM_PROVIDER"] = canonical
+    _GROQ_MODEL_CACHE.update({"when": 0.0, "names": []})
+    _OLLAMA_MODEL_CACHE.update({"when": 0.0, "names": [], "checked": 0.0})
+    return canonical
+
+
+def persist_provider(name: str, env_path=None) -> None:
+    """Write TOM_LLM_PROVIDER into the project .env so a restart keeps it.
+
+    Same replace-or-append contract as TomAgent._persist_model_env. The file
+    is the user's live config, so any error is reported, never raised.
+    """
+    try:
+        if env_path is None:
+            env_path = Path(__file__).resolve().parents[1] / ".env"
+        lines: list = env_path.read_text(encoding="utf-8").splitlines() \
+            if env_path.is_file() else []
+        pattern = re.compile(r"^\s*(?:export\s+)?TOM_LLM_PROVIDER\s*=")
+        replaced = False
+        for i, line in enumerate(lines):
+            if pattern.match(line):
+                lines[i] = f"TOM_LLM_PROVIDER={name}"
+                replaced = True
+                break
+        if not replaced:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(f"TOM_LLM_PROVIDER={name}")
+        env_path.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
+    except Exception as exc:
+        print(f"[LLM_FACTORY] Could not persist provider to .env: {exc}")
 
 
 def groq_model(slot: str = "primary") -> str:
@@ -258,6 +309,21 @@ def ollama_installed_models() -> list:
         return names
     except Exception:
         return list(cached)
+
+
+def ollama_dropdown_models() -> list:
+    """Chat models installed on the local Ollama server, for the dropdown.
+
+    Embedding-only models are excluded (they cannot chat) so the desktop
+    dropdown can never switch a chat slot onto nomic-embed-text. When the
+    server is unreachable it falls back to the configured primary slot, whose
+    real "ollama pull" error surfaces on the first chat instead.
+    """
+    installed = ollama_installed_models()
+    names = [m for m in installed if not _is_embed_model(m)]
+    if not names:
+        return [_configured_model("primary")]
+    return names
 
 
 def resolve_model(slot: str = "primary") -> str:

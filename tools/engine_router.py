@@ -152,6 +152,9 @@ class EngineRouter:
             elif key == "media":
                 from tools.media_engine import MediaEngine
                 engine = MediaEngine()
+            elif key == "network":
+                from tools.network_tools import NetworkTools
+                engine = NetworkTools()
         except Exception as exc:  # missing optional dependency etc.
             self._engines[key] = None
             self._last_load_error = f"{key}: {exc}"
@@ -257,6 +260,17 @@ class EngineRouter:
         if re.search(r"\b(run|execute)\b[^.]*\.py\b", c) or \
            re.search(r"^run (the )?(code|script)\b", c) or c.startswith("run code"):
             return "coderun"
+        # Network diagnostics (own LAN / this host) — the legitimate
+        # "show devices on my wifi / my network info / scan my ports".
+        if re.search(r"\b(devices?|who ?is|what ?is)\b.*\b(on|connected to)\b.*\b(my )?(wi[- ]?fi|network|lan|router)\b", c) or \
+           re.search(r"\b(list|show|scan|see)\b.*\b(devices?|machines?|hosts?)\b.*\b(network|wi[- ]?fi|lan)\b", c) or \
+           re.search(r"\b(my )?(wi[- ]?fi|wlan)\b.*\b(status|info|profiles?|networks?|signal|connection)\b", c) or \
+           re.search(r"\b(what'?s|show|list)\b.*\b(wi[- ]?fi|networks?)\b.*\b(know|saved|remember)", c) or \
+           re.search(r"\b(my )?(network|ip)\b.*\b(info|overview|address|details)\b", c) or \
+           re.search(r"\bwhat'?s my (ip|local ip|network)\b", c) or \
+           re.search(r"\b(scan|check)\b.*\bports?\b", c) or \
+           re.search(r"\bnetwork\b.*\b(overview|diagnostics?|scan)\b", c):
+            return "network"
         return None
 
     # ── Dispatch ─────────────────────────────────────────────────────────
@@ -557,6 +571,28 @@ class EngineRouter:
         body = res.get("result", res) if isinstance(res, dict) else res
         return self._ok("engine_scaler",
                         f"Auto-scaler: {res.get('message', '')}\n{str(body)[:1500]}", raw=res)
+
+    # ── Network diagnostics (own LAN / this host, read-only) ─────────────
+    def _run_network(self, command: str) -> Dict[str, Any]:
+        eng = self._get("network")
+        if not eng:
+            return self._unavailable("Network diagnostics", "")
+        c = command.lower()
+        # Port scan: "scan ports on 192.168.1.10" / "scan my ports".
+        if re.search(r"\b(scan|check)\b.*\bports?\b", c):
+            host_m = re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", command)
+            host = host_m.group(1) if host_m else "127.0.0.1"
+            return eng.scan_ports(host)
+        if re.search(r"\bprofiles?\b", c) or re.search(r"\b(saved|known|remember)\b.*\b(wi[- ]?fi|networks?)\b", c):
+            return eng.wifi_profiles()
+        if re.search(r"\bwi[- ]?fi\b|\bwlan\b", c) and re.search(r"\b(status|signal|connection|connected|current)\b", c):
+            return eng.wifi_status()
+        if re.search(r"\b(wi[- ]?fi|wlan)\b", c) and not re.search(r"\bdevices?\b", c):
+            return eng.wifi_status()
+        if re.search(r"\b(ip|overview|address|hostname|adapters?)\b", c) and not re.search(r"\bdevices?\b", c):
+            return eng.network_overview()
+        # Default: who is on my network.
+        return eng.list_devices()
 
     # ── Media (real video via ffmpeg, real photo via Pillow) ──────────────
     def _run_media(self, command: str) -> Dict[str, Any]:
