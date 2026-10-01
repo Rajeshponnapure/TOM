@@ -22,11 +22,14 @@ import textwrap
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from tools.project_paths import project_path
+from tools.project_paths import project_path, workspace_root
 
 logger = logging.getLogger(__name__)
 
-OUTPUT_DIR = project_path("output")
+# User deliverables (docs, decks, reports, charts) are written to the Desktop
+# workspace, not the TOM repo. An absolute filename passed by the caller still
+# wins (see _output_path), so explicit user paths and tests are unaffected.
+OUTPUT_DIR = workspace_root()
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -127,6 +130,71 @@ _THEME_PRESETS = {
         "bg_dark": "#121212", "bg_light": "#FAFAFA", "text_dark": "#212121", "text_light": "#FFFFFF",
         "font_heading": "Segoe UI", "font_body": "Segoe UI",
     },
+    # ── Style themes (selectable by name: "make it a gaming/floral/... deck") ──
+    "gaming": {
+        "primary": "#7B2FF7", "secondary": "#F107A3", "accent": "#00F5D4",
+        "bg_dark": "#0B0120", "bg_light": "#1A0B2E", "text_dark": "#0B0120", "text_light": "#FFFFFF",
+        "font_heading": "Segoe UI", "font_body": "Segoe UI",
+    },
+    "gradient": {
+        "primary": "#6A11CB", "secondary": "#2575FC", "accent": "#FF8A00",
+        "bg_dark": "#1B1035", "bg_light": "#F3F0FF", "text_dark": "#1B1035", "text_light": "#FFFFFF",
+        "font_heading": "Segoe UI", "font_body": "Segoe UI",
+    },
+    "floral": {
+        "primary": "#C2185B", "secondary": "#7B1FA2", "accent": "#FFB300",
+        "bg_dark": "#3A0B2E", "bg_light": "#FFF0F5", "text_dark": "#3A0B2E", "text_light": "#FFFFFF",
+        "font_heading": "Segoe UI", "font_body": "Segoe UI",
+    },
+    "vibrant": {
+        "primary": "#FF3D00", "secondary": "#FF9100", "accent": "#00E676",
+        "bg_dark": "#12005E", "bg_light": "#FFF8E1", "text_dark": "#12005E", "text_light": "#FFFFFF",
+        "font_heading": "Segoe UI", "font_body": "Segoe UI",
+    },
+    "dark": {
+        "primary": "#00E5FF", "secondary": "#18FFFF", "accent": "#FF4081",
+        "bg_dark": "#0A0A0A", "bg_light": "#1C1C1C", "text_dark": "#0A0A0A", "text_light": "#FFFFFF",
+        "font_heading": "Segoe UI", "font_body": "Segoe UI",
+    },
+    "elegant": {
+        "primary": "#B8860B", "secondary": "#8B7355", "accent": "#D4AF37",
+        "bg_dark": "#1A1A1A", "bg_light": "#FAF7F0", "text_dark": "#1A1A1A", "text_light": "#FFFFFF",
+        "font_heading": "Georgia", "font_body": "Segoe UI",
+    },
+    "ocean": {
+        "primary": "#006064", "secondary": "#0097A7", "accent": "#00E5FF",
+        "bg_dark": "#012E33", "bg_light": "#E0F7FA", "text_dark": "#012E33", "text_light": "#FFFFFF",
+        "font_heading": "Segoe UI", "font_body": "Segoe UI",
+    },
+    "sunset": {
+        "primary": "#E65100", "secondary": "#C2185B", "accent": "#FFD54F",
+        "bg_dark": "#2E0D1B", "bg_light": "#FFF3E0", "text_dark": "#2E0D1B", "text_light": "#FFFFFF",
+        "font_heading": "Segoe UI", "font_body": "Segoe UI",
+    },
+    "pastel": {
+        "primary": "#7E9FB8", "secondary": "#B8A7CE", "accent": "#F7A9A8",
+        "bg_dark": "#3C4A5A", "bg_light": "#FDF6F0", "text_dark": "#3C4A5A", "text_light": "#FFFFFF",
+        "font_heading": "Segoe UI", "font_body": "Segoe UI",
+    },
+    "royal": {
+        "primary": "#1A237E", "secondary": "#4A148C", "accent": "#FFD700",
+        "bg_dark": "#0B0B3B", "bg_light": "#EDE7F6", "text_dark": "#0B0B3B", "text_light": "#FFFFFF",
+        "font_heading": "Georgia", "font_body": "Segoe UI",
+    },
+}
+
+# Aliases so a user's words map onto a preset ("bright" -> vibrant, etc.).
+_THEME_ALIASES = {
+    "game": "gaming", "gamer": "gaming", "neon": "gaming", "cyberpunk": "gaming",
+    "bright": "vibrant", "colorful": "vibrant", "colourful": "vibrant", "bold": "vibrant",
+    "flower": "floral", "flowers": "floral", "nature-bright": "floral",
+    "dark mode": "dark", "night": "dark", "black": "dark",
+    "luxury": "elegant", "premium": "elegant", "gold": "elegant", "classy": "elegant",
+    "sea": "ocean", "water": "ocean", "aqua": "ocean", "blue": "ocean",
+    "warm": "sunset", "orange": "sunset",
+    "soft": "pastel", "muted": "pastel", "calm": "pastel",
+    "purple": "royal", "regal": "royal",
+    "tech": "technology", "technology ": "technology",
 }
 
 _THEME_KEYWORDS = {
@@ -148,14 +216,33 @@ _THEME_KEYWORDS = {
 }
 
 
-def _detect_theme(topic: str, custom: dict = None) -> dict:
+def _resolve_style(style: str) -> str:
+    """Map a user/LLM style word onto a known preset name ("" if unknown)."""
+    s = (style or "").strip().lower()
+    if not s:
+        return ""
+    if s in _THEME_PRESETS:
+        return s
+    if s in _THEME_ALIASES:
+        return _THEME_ALIASES[s]
+    # Substring match so "gaming theme" / "bright colours" still resolve.
+    for key in _THEME_PRESETS:
+        if key in s:
+            return key
+    for alias, target in _THEME_ALIASES.items():
+        if alias in s:
+            return target
+    return ""
+
+
+def _detect_theme(topic: str, custom=None) -> dict:
     default = dict(_THEME_PRESETS["minimal"])
     if custom:
-        style = custom.get("style", "")
-        if style in _THEME_PRESETS:
-            base = dict(_THEME_PRESETS[style])
-        else:
-            base = dict(default)
+        # Accept either a plain style string or a dict with a "style" key.
+        if isinstance(custom, str):
+            custom = {"style": custom}
+        resolved = _resolve_style(custom.get("style", ""))
+        base = dict(_THEME_PRESETS[resolved]) if resolved else dict(default)
         base.update({k: v for k, v in custom.items() if v and k != "style"})
         return base
     lower = topic.lower()

@@ -284,6 +284,56 @@ class TomAgent:
         self.nlp_parser = CommandParser(llm=self.fast_llm)
         safe_print(f"[MODEL] All LLMs switched to: {model_name}")
 
+    def switch_provider(self, provider_name: str) -> Dict[str, Any]:
+        """Hot-swap between Groq (hosted) and Ollama (local) at runtime.
+
+        The factory resolves provider and models from the environment on every
+        call, so a switch is: set TOM_LLM_PROVIDER, rebuild the four chat slots
+        (the embed slot stays local on both providers — Groq has no embeddings
+        endpoint) and re-read the model names. Model choice is preserved per
+        provider via the GROQ_*/OLLAMA_* env vars already in .env. Raises
+        RuntimeError when the target provider cannot serve a chat, leaving the
+        previous provider fully intact.
+        """
+        old_provider = llm_factory.provider()
+        new_provider = llm_factory.set_provider(provider_name)
+        if new_provider == old_provider:
+            return {"provider": new_provider, "model": self.model_name, "changed": False}
+
+        try:
+            if new_provider == "groq":
+                primary = llm_factory.groq_model("primary")
+                if not (os.environ.get("GROQ_API_KEY") or "").strip():
+                    raise RuntimeError(
+                        "Groq needs GROQ_API_KEY in .env before TOM can switch to it. "
+                        "Staying on Ollama.")
+            else:
+                primary = llm_factory.resolve_model("primary")
+                if not llm_factory.ollama_installed_models():
+                    raise RuntimeError(
+                        "Ollama is not reachable at "
+                        f"{os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')}. "
+                        "Start it with 'ollama serve' — staying on Groq.")
+
+            self.llm_provider = new_provider
+            self.model_name = primary
+            self.fast_model_name = primary
+            self.code_model_name = primary
+            self.llm      = self._make_llm(primary, max_tokens=4096)
+            self.fast_llm = self._make_llm(primary, max_tokens=2048)
+            self.chat_llm = self._make_llm(primary, max_tokens=256)
+            self.code_llm = self._make_llm(primary, max_tokens=4096)
+            self.nlp_parser = CommandParser(llm=self.fast_llm)
+        except Exception:
+            # Put the old provider back before reporting the failure.
+            llm_factory.set_provider(old_provider)
+            raise
+
+        self._persist_model_env(primary, "GROQ" if new_provider == "groq" else "OLLAMA")
+        llm_factory.persist_provider(new_provider)
+        safe_print(f"[MODEL] Provider switched to {new_provider} ({primary})")
+        return {"provider": new_provider, "model": primary, "changed": True}
+
     @staticmethod
     def _persist_model_env(model_name: str, env_prefix: str = "OLLAMA",
                            env_path=None) -> None:
@@ -317,6 +367,53 @@ class TomAgent:
             env_path.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
         except Exception as exc:
             safe_print(f"[MODEL] Could not persist model to .env: {exc}")
+
+    # ── Workspace routing (build OUTSIDE the TOM repo) ───────────────────
+    # Every user deliverable (website, code scaffold, document) is written to
+    # the Desktop workspace, or to an explicit absolute path the user named —
+    # never scattered inside the TOM install.
+
+    @staticmethod
+    def _extract_target_dir(command: str) -> str:
+        """An explicit absolute output directory named in the command, or "".
+
+        Recognises a Windows drive path (C:\\Users\\me\\Proj), a UNC share
+        (\\\\server\\share) or a POSIX home/mnt path. Conservative on purpose:
+        a false positive would misplace the whole build, so only a clearly
+        absolute path counts.
+        """
+        m = re.search(r'([A-Za-z]:[\\/][^\s"\'<>|?*]*|\\\\[^\s"\'<>|?*]+'
+                      r'|/(?:home|mnt|media|Users|tmp)/[^\s"\'<>|?*]+)', command or "")
+        if not m:
+            return ""
+        cand = m.group(1).strip().rstrip(" .,:;\"'")
+        if cand.lower().startswith(("http://", "https://")):
+            return ""
+        return cand
+
+    def _deliverable_target(self, command: str, parsed: Dict, default_name: str) -> str:
+        """Absolute directory a user deliverable should be built in.
+
+        Explicit user path wins; otherwise a per-project subfolder in the
+        Desktop workspace (keeps each build tidy and out of the TOM repo).
+        """
+        explicit = self._extract_target_dir(command)
+        if explicit:
+            try:
+                os.makedirs(explicit, exist_ok=True)
+            except Exception:
+                pass
+            return explicit
+        from tools.project_paths import resolve_deliverable_dir
+        name = (parsed.get("subject") or parsed.get("app_name")
+                or parsed.get("file_name") or default_name or "project")
+        return str(resolve_deliverable_dir(subfolder=str(name)))
+
+    @staticmethod
+    def _place_in(base_dir: str, raw_path: str) -> str:
+        """Resolve one '--- FILE: <raw_path> ---' entry under base_dir."""
+        raw = (raw_path or "").strip().strip('"').strip("'")
+        return raw if os.path.isabs(raw) else os.path.join(base_dir, raw)
 
     def _build_memory_context(self, query: str) -> str:
         """Build context string: recent chat + RAG semantic retrieval + curated knowledge."""
@@ -682,6 +779,14 @@ class TomAgent:
         if safety_check.get("requires_approval") and self._email_send_defers_approval(command):
             # Approval happens once, on the actual message, in execute_email_send_flow.
             already_approved = True
+        elif safety_check.get("requires_approval") and self._is_delete_request(command.lower()):
+            # Deletes show their own rich warning (what exactly will be removed)
+            # in execute_delete; skip the generic gate to avoid a double prompt.
+            already_approved = True
+        elif safety_check.get("requires_approval") and self._is_acquire_tool_request(command.lower()):
+            # Tool acquisition (install/clone) asks for its own approval in
+            # execute_tool_acquisition; skip the generic gate.
+            already_approved = True
         elif safety_check.get("requires_approval"):
             approved = await asyncio.to_thread(
                 self.approval_manager.request_approval,
@@ -800,7 +905,19 @@ class TomAgent:
             # e.g. "check my github repos", "list slack channels",
             #      "post to slack #general: hello", "get weather in London"
             chat_request = self.nlp_parser.extract_chat_request(command)
-            if chat_request:
+            if self._is_delete_request(command_lower):
+                # File/folder deletion — always warns and asks before removing.
+                result = await self.execute_delete(command, parsed)
+
+            elif self._is_learn_request(command_lower):
+                # "learn about X" — research the web and grow the knowledge base.
+                result = await self.acquire_knowledge(self._learn_topic(command))
+
+            elif self._is_acquire_tool_request(command_lower):
+                # "install X" / "get X from github" / "build a tool that …"
+                result = await self.execute_tool_acquisition(command, parsed)
+
+            elif chat_request:
                 # "message Ravi on telegram", "post to slack #dev: ..." - real send, approved on the exact text.
                 result = await self._send_chat_app_message(chat_request)
 
@@ -1740,11 +1857,17 @@ class TomAgent:
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0].strip()
             deck = json.loads(content)
+            # An explicitly requested theme ("gaming theme", "floral", "bright
+            # colours", "gradient") overrides whatever style the LLM guessed.
+            theme = deck.get("theme")
+            requested = self._extract_requested_theme(command)
+            if requested:
+                theme = {"style": requested}
             result = await self.file_tools.create_powerpoint(
                 file_name,
                 slides=deck.get("slides", []),
                 title=deck.get("title", subject),
-                theme=deck.get("theme"),
+                theme=theme,
             )
             if result["status"] == "success":
                 self.file_tools.open_file(result["path"])
@@ -1761,6 +1884,25 @@ class TomAgent:
                                      f"\n⚠️ Content generation failed ({type(e).__name__}), so this deck has "
                                      "one placeholder slide. Try rephrasing for full content.")
             return result
+
+    @staticmethod
+    def _extract_requested_theme(command: str) -> str:
+        """A presentation theme the user named explicitly, else "".
+
+        Matches "<word> theme", "in a <word> theme/style", and common colour
+        cues ("bright/vibrant/neon/pastel colours"). Returns the raw word; the
+        document creator resolves it to a preset (with aliases).
+        """
+        cl = (command or "").lower()
+        # Known style words win (reliable, unambiguous).
+        m = re.search(r'\b(gaming|gamer|neon|cyberpunk|gradient|floral|flower|vibrant|bright|'
+                      r'colou?rful|pastel|elegant|luxury|premium|royal|ocean|sunset|dark|minimal|'
+                      r'technology|tech|business|corporate|nature|health|creative|education|finance)\b', cl)
+        if m:
+            return m.group(1).strip()
+        # Otherwise the single word immediately before "theme"/"style".
+        m = re.search(r'\b([a-z][a-z\-]{2,20})\s+(?:theme|style|palette|vibe)\b', cl)
+        return m.group(1).strip() if m else ""
 
     # ── PROFESSIONAL PDF ────────────────────────────────────────────────
 
@@ -1922,10 +2064,11 @@ class TomAgent:
             content = resp.content.strip()
 
             # Write any generated files
+            base_dir = self._deliverable_target(command, parsed, "data_analysis")
             files_written = []
             if "--- FILE:" in content:
                 for match in re.finditer(r"--- FILE:\s*(.+?)\s*---\n(.*?)(?=--- FILE:|$)", content, re.DOTALL):
-                    fpath = match.group(1).strip()
+                    fpath = self._place_in(base_dir, match.group(1))
                     fcontent = match.group(2).strip()
                     try:
                         await self.file_tools.write_file(fpath, fcontent)
@@ -1960,10 +2103,11 @@ class TomAgent:
                                        "document_writing")
         content = resp.content.strip()
 
+        base_dir = self._deliverable_target(command, parsed, "document")
         files_written = []
         if "--- FILE:" in content:
             for match in re.finditer(r"--- FILE:\s*(.+?)\s*---\n(.*?)(?=--- FILE:|$)", content, re.DOTALL):
-                fpath = match.group(1).strip()
+                fpath = self._place_in(base_dir, match.group(1))
                 fcontent = match.group(2).strip()
                 try:
                     await self.file_tools.write_file(fpath, fcontent)
@@ -1991,10 +2135,11 @@ class TomAgent:
         resp = await self._invoke_llm(prompt, {"memory": memory_context, "command": command},
                                        "code_project", self.code_llm)
         content = resp.content.strip()
+        base_dir = self._deliverable_target(command, parsed, "code_project")
         files_written = []
         if "--- FILE:" in content:
             for match in re.finditer(r"--- FILE:\s*(.+?)\s*---\n(.*?)(?=--- FILE:|$)", content, re.DOTALL):
-                fpath = match.group(1).strip()
+                fpath = self._place_in(base_dir, match.group(1))
                 fcontent = match.group(2).strip()
                 try:
                     await self.file_tools.write_file(fpath, fcontent)
@@ -2003,8 +2148,9 @@ class TomAgent:
                     files_written.append(f"{fpath} (failed: {e})")
         msg = content[:2000]
         if files_written:
-            msg += f"\n\nFiles written: {', '.join(files_written)}"
-        return {"status": "success", "message": msg, "response_type": "code_project"}
+            msg += f"\n\nProject built in: {base_dir}\nFiles written: {', '.join(files_written)}"
+        return {"status": "success", "message": msg, "response_type": "code_project",
+                "path": base_dir}
 
     # ── WEBSITE CREATION ────────────────────────────────────────────────
 
@@ -2014,6 +2160,7 @@ class TomAgent:
             name_match = re.search(r'(?:for|called|named)\s+["\']?([a-zA-Z0-9_\-\s]+?)["\']?(?:\s+website|\s+site|$)',
                                    command, re.IGNORECASE)
             project_name = name_match.group(1).strip().replace(" ", "_").lower()[:30] if name_match else "premium_site"
+            target_root = self._extract_target_dir(command)
             memory_context = self._build_memory_context(command)
 
             prompt = self._safe_prompt([
@@ -2032,7 +2179,9 @@ class TomAgent:
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0].strip()
             payload = json.loads(content)
-            result = await self.file_tools.create_website(project_name, payload.get("index_html"), payload.get("style_css"))
+            result = await self.file_tools.create_website(
+                project_name, payload.get("index_html"), payload.get("style_css"),
+                target_root=target_root or None)
             if result.get("status") == "success":
                 safe_print(f"Website generated at: {result['path']}/")
                 preview_note = "Open index.html in your browser to view it."
@@ -2045,13 +2194,79 @@ class TomAgent:
                 except Exception:
                     pass
                 return {"status": "success",
-                        "message": f"Website '{project_name}' created successfully!\nFiles: index.html + style.css in ./{project_name}/\n{preview_note}",
+                        "message": f"Website '{project_name}' created successfully!\nBuilt in: {result['path']}\nFiles: index.html + style.css\n{preview_note}",
                         "path": result["path"]}
             # Friendly error instead of raw internal dict
             err_detail = result.get("message") or result.get("error") or str(result)
             return {"status": "error", "message": f"Could not write website files: {err_detail}"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+    # ── DELETE (guarded) ────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_delete_request(command_lower: str) -> bool:
+        """True only for a filesystem delete ("delete the folder X", "rm C:\\...").
+
+        Requires both a delete verb AND a filesystem signal (file/folder/path
+        word, or a path-shaped token) so "delete my last email" or "remove the
+        meeting" never reach the file deleter.
+        """
+        cl = command_lower or ""
+        verbs = ("delete ", "remove ", "erase ", "trash ", "get rid of ", "rm -")
+        if not any(v in cl for v in verbs):
+            return False
+        if any(w in cl for w in ("file", "folder", "directory", " dir ", "path")):
+            return True
+        # A path-shaped token: C:\..., /home/..., or a name.ext
+        return bool(re.search(r'[a-z]:[\\/]|/(?:home|mnt|users|tmp)/|["\']?[\w .\-]+\.\w{1,6}\b', cl))
+
+    def _extract_delete_target(self, command: str, parsed: Dict) -> str:
+        """Resolve which path the user wants deleted (absolute, best-effort)."""
+        explicit = self._extract_target_dir(command)
+        if explicit:
+            return explicit
+        cand = ""
+        m = re.search(r'["\']([^"\']+)["\']', command)
+        if m:
+            cand = m.group(1)
+        if not cand:
+            cand = parsed.get("file_name") or ""
+        if not cand:
+            m = re.search(r'(?:folder|directory|dir|file)\s+(?:called\s+|named\s+)?'
+                          r'["\']?([\w .\-]+?)["\']?(?:\s|$)', command, re.I)
+            cand = m.group(1).strip() if m else ""
+        if not cand:
+            m = re.search(r'\b([\w .\-]+\.\w{1,6})\b', command)
+            cand = m.group(1).strip() if m else ""
+        cand = (cand or "").strip().strip('"').strip("'")
+        if not cand:
+            return ""
+        if os.path.isabs(os.path.expanduser(cand)):
+            return os.path.expanduser(cand)
+        # Bare name: resolve against the most likely locations, in order.
+        from tools.project_paths import workspace_root
+        from pathlib import Path as _Path
+        bases = [workspace_root(), _Path(os.path.expanduser("~/Desktop")),
+                 _Path(os.path.expanduser("~/OneDrive/Desktop")), _Path.cwd()]
+        for base in bases:
+            try:
+                p = base / cand
+                if p.exists():
+                    return str(p)
+            except OSError:
+                continue
+        return str(workspace_root() / cand)  # doesn't exist; delete_path reports it cleanly
+
+    async def execute_delete(self, command: str, parsed: Dict) -> Dict[str, Any]:
+        """Delete a file/folder after an explicit, informed confirmation."""
+        target = self._extract_delete_target(command, parsed)
+        if not target:
+            return {"status": "needs_input",
+                    "message": "Which file or folder should I delete? "
+                               "Give me its name or full path."}
+        return await self.file_tools.delete_path(
+            target, approval_manager=self.approval_manager)
 
     # ── EXPLANATION / UNDERSTANDING ──────────────────────────────────────────
 
@@ -2490,6 +2705,190 @@ class TomAgent:
         except Exception:
             return f"Could not research '{topic}'. Please check internet connection."
 
+    # ── KNOWLEDGE ACQUISITION (learn a missing topic from the web) ───────
+
+    @staticmethod
+    def _is_learn_request(command_lower: str) -> bool:
+        triggers = ("learn about", "learn how to", "research and remember",
+                    "add knowledge about", "teach yourself", "gain knowledge about",
+                    "acquire knowledge", "update your knowledge", "study up on",
+                    "remember everything about")
+        return any(t in command_lower for t in triggers)
+
+    @staticmethod
+    def _learn_topic(command: str) -> str:
+        """Strip the trigger phrase to leave the topic to learn."""
+        t = command or ""
+        phrases = ("research and remember", "add knowledge about",
+                   "update your knowledge about", "update your knowledge on",
+                   "remember everything about", "acquire knowledge about",
+                   "acquire knowledge on", "gain knowledge about",
+                   "teach yourself about", "teach yourself", "study up on",
+                   "learn how to", "learn about", "learn")
+        for p in phrases:  # longest first so "learn about" wins over "learn"
+            t = re.sub(r'(?i)\b' + re.escape(p) + r'\b', ' ', t, count=1)
+            if t != command:
+                break
+        return t.strip(" .:-\t") or command
+
+    async def acquire_knowledge(self, topic: str) -> Dict[str, Any]:
+        """Research a topic TOM lacks, save it to the knowledge base, reload.
+
+        Safe acquisition: it gathers information from the web (or the model's
+        knowledge as a fallback) and stores a curated markdown note that the
+        knowledge engine then serves. It does NOT download and run code from the
+        internet — fetching and executing untrusted tools is intentionally not
+        automated.
+        """
+        topic = (topic or "").strip()
+        if not topic:
+            return {"status": "needs_input", "message": "What topic should I learn about?"}
+        safe_print(f"[LEARN] Acquiring knowledge about '{topic}'...")
+        research = await self._research_topic(topic)
+        if not research or research.lower().startswith("could not research"):
+            return {"status": "error",
+                    "message": f"Could not gather reliable information about '{topic}'. "
+                               "Check the internet connection and try again."}
+        slug = re.sub(r'[^a-z0-9]+', '-', topic.lower()).strip('-')[:50] or "topic"
+        import datetime as _dt
+        note = (f"# {topic.title()}\n\n"
+                f"> Acquired by TOM on {_dt.date.today():%Y-%m-%d} via web research. "
+                "Verify critical facts against primary sources before relying on them.\n\n"
+                f"{research}\n")
+        note_path = project_path_str("knowledge", f"acquired_{slug}.md")
+        try:
+            with open(note_path, "w", encoding="utf-8") as f:
+                f.write(note)
+        except Exception as e:
+            return {"status": "error",
+                    "message": f"Researched '{topic}' but could not save the note: {e}"}
+        # Hot-reload the knowledge engine so the note is usable right away.
+        try:
+            import tools.knowledge_engine as _ke
+            _ke._instance = None
+            self.knowledge = _ke.get_engine()
+        except Exception as _kerr:
+            safe_print(f"[LEARN] Note saved but engine reload failed: {_kerr}")
+        # Store in RAG for semantic recall too.
+        if self.rag and getattr(self.rag, "available", False):
+            try:
+                self.rag.store_conversation("assistant", note[:4000],
+                                            {"topic": topic, "acquired": "true"})
+            except Exception:
+                pass
+        return {"status": "success", "response_type": "knowledge_acquired",
+                "message": (f"Learned about '{topic}' and saved it to the knowledge base "
+                            f"(knowledge/acquired_{slug}.md) — I can use this now.\n\n"
+                            f"Summary:\n{research[:1200]}"),
+                "path": note_path}
+
+    # ── TOOL ACQUISITION (install / clone / scaffold a capability) ───────
+
+    # A forge repo reference like "github.com/owner/repo" (NOT a bare "github.com",
+    # which also appears inside email addresses such as boss@github.com).
+    _REPO_RE = (r"(?:https://)?(?:www\.)?"
+                r"(?:github|gitlab|bitbucket|codeberg)\.com/[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+")
+
+    @staticmethod
+    def _is_acquire_tool_request(command_lower: str) -> bool:
+        cl = command_lower or ""
+        # An email command is never a tool-acquisition request, even if the
+        # address domain happens to be a forge (boss@github.com).
+        if re.search(r"\b(e-?mail|send (?:an? )?(?:mail|message))\b", cl) and "@" in cl:
+            return False
+        if re.search(TomAgent._REPO_RE, cl) or re.search(r"\bclone\b.*https?://", cl):
+            return True
+        if re.search(r"\b(get|download|fetch|clone)\b.*\bfrom (?:github|gitlab|a |the )?repo", cl):
+            return True
+        if re.search(r"\b(acquired tools|tools you(?:'ve| have) acquired|list acquired)\b", cl):
+            return True
+        if re.search(r"\b(build|make|create|scaffold|generate)\b[^.]*\ba (new )?tool\b", cl):
+            return True
+        if re.search(r"\bpip install\b", cl):
+            return True
+        if re.search(r"\binstall(?: the)?\s+[A-Za-z0-9._\-]+", cl) and \
+           re.search(r"\b(library|package|module|dependency)\b", cl):
+            return True
+        if re.search(r"^\s*install\s+[A-Za-z0-9._\-\[\]=<>~!]+\s*$", cl):
+            return True
+        return False
+
+    @staticmethod
+    def _extract_package(command: str) -> str:
+        m = re.search(r"\b(?:pip install|install(?: the)?|add(?: the)?)\s+"
+                      r"([A-Za-z0-9._\-\[\]=<>~!]+)", command, re.I)
+        if not m:
+            return ""
+        pkg = m.group(1).strip()
+        return "" if pkg.lower() in ("library", "package", "module", "dependency", "tool") else pkg
+
+    async def _confirm(self, summary: str, details: Optional[Dict] = None) -> bool:
+        return await asyncio.to_thread(
+            self.approval_manager.request_approval,
+            ApprovalRequest(action="tool_acquisition", summary=summary,
+                            details=details or {}, risk_level="high"))
+
+    async def execute_tool_acquisition(self, command: str, parsed: Dict) -> Dict[str, Any]:
+        """Acquire a capability TOM lacks: install a library, clone+inspect a
+        public repo (read-only), or scaffold a new tool module for review.
+        Never downloads-and-runs untrusted code."""
+        from tools.tool_acquirer import ToolAcquirer
+        acq = ToolAcquirer()
+        cl = command.lower()
+
+        if re.search(r"\b(acquired tools|tools you(?:'ve| have) acquired|list acquired)\b", cl):
+            return acq.list_acquired()
+
+        url_m = re.search(r"(https://[^\s'\"]+)", command)
+        repo_m = re.search(TomAgent._REPO_RE, command, re.I)
+        if repo_m or (url_m and "clone" in cl):
+            if url_m:
+                url = url_m.group(1)
+            else:
+                url = repo_m.group(0)
+                if not url.lower().startswith("http"):
+                    url = "https://" + url
+            if not url:
+                return {"status": "needs_input",
+                        "message": "Give me the full https repo URL to clone, e.g. "
+                                   "https://github.com/owner/repo."}
+            if not await self._confirm(f"Clone and INSPECT this repo (it will not be run)?\n{url}",
+                                       {"url": url}):
+                return {"status": "cancelled", "message": "Clone cancelled."}
+            return await asyncio.to_thread(acq.clone_repo, url)
+
+        if re.search(r"\b(build|make|create|scaffold|generate)\b[^.]*\ba (new )?tool\b", cl):
+            return await self._scaffold_tool(command, parsed, acq)
+
+        pkg = self._extract_package(command)
+        if not pkg:
+            return {"status": "needs_input",
+                    "message": "Which package should I install? e.g. 'install requests'."}
+        if not await self._confirm(
+                f"Install the Python package '{pkg}' into TOM's environment?", {"package": pkg}):
+            return {"status": "cancelled", "message": f"Install of '{pkg}' cancelled."}
+        return await asyncio.to_thread(acq.install_package, pkg)
+
+    async def _scaffold_tool(self, command: str, parsed: Dict, acq) -> Dict[str, Any]:
+        name = parsed.get("subject") or parsed.get("app_name") or "custom_tool"
+        prompt = self._safe_prompt([
+            ("system", "You are TOM generating a single, self-contained Python tool MODULE. "
+             "Return ONLY Python code (no prose). Include a module docstring, imports, and "
+             "well-documented functions/classes. No top-level side effects, no network calls "
+             "or other work that runs merely on import."),
+            ("user", "Build a Python tool for this request:\n{command}"),
+        ])
+        try:
+            resp = await self._invoke_llm(prompt, {"command": command}, "scaffold_tool", self.code_llm)
+            code = resp.content.strip()
+            if "```" in code:
+                blocks = re.findall(r"```(?:python)?\s*(.*?)```", code, re.DOTALL)
+                if blocks:
+                    code = max(blocks, key=len).strip()
+            return acq.save_tool(name, code)
+        except Exception as e:
+            return {"status": "error", "message": f"Could not scaffold the tool: {e}"}
+
     # ── SCREEN READ ─────────────────────────────────────────────────────
 
     async def execute_screen_read(self, command: str) -> Dict[str, Any]:
@@ -2718,12 +3117,20 @@ class TomAgent:
             else:
                 content = f"# {filename}\n# Created by TOM\n"
 
-            result = await self.file_tools.write_file(filename, content)
+            # Write into the workspace (or an explicit path), not the TOM repo.
+            if os.path.isabs(os.path.expanduser(filename)):
+                out_path = os.path.expanduser(filename)
+            else:
+                from tools.project_paths import workspace_root
+                target = self._extract_target_dir(command)
+                base = target if target else str(workspace_root())
+                out_path = os.path.join(base, filename)
+            result = await self.file_tools.write_file(out_path, content)
             if not result or result.get("status") != "success":
                 err_detail = (result or {}).get("message", "unknown error")
                 return {"status": "error", "message": f"Could not create {filename}: {err_detail}"}
-            return {"status": "success", "message": f"Created {filename} ({len(content)} bytes).",
-                    "filename": filename, "content_written": len(content)}
+            return {"status": "success", "message": f"Created {out_path} ({len(content)} bytes).",
+                    "filename": out_path, "content_written": len(content)}
         except Exception as e:
             return {"status": "error", "message": f"File creation failed: {str(e)}"}
 

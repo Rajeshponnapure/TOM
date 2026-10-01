@@ -204,6 +204,20 @@ CAPABILITIES: List[Dict[str, Any]] = [
     {"id": "vision", "label": "Image/vision analysis", "category": "intelligence",
      "triggers": ["analyze this image"], "surfaces": "chat+cli+gui",
      "executor": "agent.py::_analyze_image_with_vision"},
+
+    # ── Network, deletion & self-extension ───────────────────────────────
+    {"id": "network", "label": "Network diagnostics (devices on your LAN, WiFi info, port scan)",
+     "category": "system", "triggers": ["show devices on my wifi"], "surfaces": "chat+cli+gui",
+     "executor": "tools/engine_router.py::EngineRouter._run_network"},
+    {"id": "delete_files", "label": "Delete a file/folder (warns & asks first; protects system/self)",
+     "category": "system", "triggers": ["delete the folder old_build"], "surfaces": "chat+cli+gui",
+     "executor": "agent.py::execute_delete"},
+    {"id": "tool_acquire", "label": "Acquire tools: install a library, clone+inspect a repo, scaffold a tool",
+     "category": "dev", "triggers": ["install requests"], "surfaces": "chat+cli+gui",
+     "executor": "agent.py::execute_tool_acquisition"},
+    {"id": "knowledge_acquire", "label": "Learn a missing topic from the web into the knowledge base",
+     "category": "intelligence", "triggers": ["learn about vector databases"], "surfaces": "chat+cli+gui",
+     "executor": "agent.py::acquire_knowledge"},
 ]
 
 

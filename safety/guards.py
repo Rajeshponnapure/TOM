@@ -144,6 +144,22 @@ class SafetyGuards:
             "install_software": ["install software", "install package", "pip install"],
         }
 
+        # ── Security / offensive-intent gate ─────────────────────────────
+        # Educational and defensive security is allowed; this gate blocks the
+        # unambiguously harmful cases and the ones aimed at third parties.
+        sec = self.assess_security_request(action_name)
+        if sec["block"]:
+            result["safe"] = False
+            result["requires_approval"] = False
+            result["message"] = sec["message"]
+            self.log_action("SECURITY_BLOCK", target=target or action_name,
+                            status="BLOCKED", message=sec["message"])
+            return result
+        if sec["warn"]:
+            result["security_warning"] = sec["message"]
+            result["requires_approval"] = True
+            result["message"] = sec["message"]
+
         if hard_blocked_hit:
             result["safe"] = False
             result["requires_approval"] = False
@@ -171,6 +187,96 @@ class SafetyGuards:
         )
 
         return result
+
+    def assess_security_request(self, command: str) -> Dict[str, Any]:
+        """Classify a security-related request into block / warn / allow.
+
+        This is a *defensive* guardrail, not an attack tool. TOM's cybersecurity
+        knowledge is for learning, defence, and testing systems the user owns or
+        is authorised to test. This method decides how a request is handled:
+
+          block=True  → refuse outright (harmful, or aimed at a third party)
+          warn=True   → allowed but the user must confirm authorisation first
+          otherwise   → ordinary request, no special handling
+
+        It never returns exploit steps; `message` explains the decision.
+        """
+        out = {"block": False, "warn": False, "message": "", "category": ""}
+        cl = (command or "").lower()
+
+        offensive = ("hack", "exploit", "crack", "brute force", "bruteforce",
+                     "penetrat", "pentest", "backdoor", "keylog", "phish",
+                     "ddos", "dos attack", "botnet", "ransomware", "malware",
+                     "spyware", "trojan", "rootkit", "sniff", "mitm",
+                     "man in the middle", "deauth", "wep crack", "wpa crack",
+                     "sql injection", "sqlmap", "privilege escalat", "bypass login",
+                     "steal password", "dump credential", "intercept",
+                     "break into", "gain unauthorized access", "gain unauthorised access",
+                     "unauthorized access", "unauthorised access")
+        if not any(t in cl for t in offensive):
+            return out  # not a security-offensive request at all
+
+        # 1) Universally harmful categories - blocked regardless of target.
+        malicious = ("ransomware", "botnet", "ddos", "dos attack", "spyware",
+                     "trojan", "rootkit", "distribute malware", "spread malware",
+                     "steal", "exfiltrat", "credit card", "identity theft",
+                     "evade detection", "avoid detection", "cover my tracks",
+                     "undetectable", "without them knowing", "without consent")
+        hit = next((t for t in malicious if t in cl), "")
+        if hit:
+            out["block"] = True
+            out["category"] = "malicious"
+            out["message"] = (
+                "I can't help with this - it describes causing harm, unauthorised "
+                "access, or evading detection, which crosses from security learning "
+                "into attacking. I can instead explain how this class of attack works "
+                "and, importantly, how to defend against it.")
+            return out
+
+        # 2) Third-party targeting - blocked. TOM only acts on the user's own,
+        #    authorised systems. These phrases indicate someone else's property.
+        third_party = ("someone else", "another person", "other people", "my friend",
+                       "my neighbor", "my neighbour", "my ex", "girlfriend",
+                       "boyfriend", "a stranger", "target's", "victim", "their phone",
+                       "their wifi", "their account", "their device", "their computer",
+                       "his phone", "her phone", "his account", "her account",
+                       "anyone's", "somebody's", "another company", "a website i don't own")
+        hit = next((t for t in third_party if t in cl), "")
+        if hit:
+            out["block"] = True
+            out["category"] = "third_party"
+            out["message"] = (
+                "I can only help with security testing on systems you own or are "
+                "explicitly authorised to test. This request looks like it targets "
+                "someone else's device or account, which I won't do. If it is actually "
+                "your own system, say so and describe it as yours.")
+            return out
+
+        # 3) Own / authorised testing - allowed, but confirm authorisation and
+        #    keep it to legitimate, non-destructive techniques.
+        owns = ("my own", "my wifi", "my network", "my router", "my phone",
+                "my laptop", "my pc", "my server", "my account", "my device",
+                "i own", "authorized", "authorised", "lab", "ctf", "test environment",
+                "for learning", "for testing", "for education", "home network")
+        if any(t in cl for t in owns):
+            out["warn"] = True
+            out["category"] = "authorized_self"
+            out["message"] = (
+                "Treating this as authorised testing on your OWN system. Confirm you "
+                "own or are authorised to test this target. I'll stick to legitimate, "
+                "non-destructive methods (e.g. scanning your own network, reviewing "
+                "configuration) and explain each step - not stealthy or damaging ones.")
+            return out
+
+        # 4) Security intent with no ownership signal - warn and ask for scope.
+        out["warn"] = True
+        out["category"] = "unspecified_target"
+        out["message"] = (
+            "Before going further: I only help with security work on systems you own "
+            "or are authorised to test, for learning or defence. Tell me the target is "
+            "yours (e.g. \"my own laptop / my home wifi / a CTF lab\") and I'll help with "
+            "legitimate techniques and the defensive side.")
+        return out
 
     async def require_user_confirmation(self, action: str, details: Dict[str, Any]) -> bool:
         """
@@ -506,3 +612,63 @@ class SafetyGuards:
         if "/sys/" in posix_view or "/proc/" in posix_view:
             return False
         return True
+
+    def is_protected_from_deletion(self, path: str):
+        """Should this path be refused for deletion, and why.
+
+        Returns (protected: bool, reason: str). Protected regardless of any
+        approval: OS system trees (reuses check_file_path_safe), the TOM
+        install itself, and top-level roots (a drive root, the user's home
+        folder, the Desktop/Documents/Downloads roots) — deleting those wholesale
+        is never what a user means and would be catastrophic. Specific files or
+        sub-folders inside the home tree remain deletable (with approval).
+        """
+        if not path:
+            return True, "empty path"
+        try:
+            abs_path = os.path.normpath(os.path.abspath(path))
+        except (OSError, ValueError):
+            return True, "path could not be resolved"
+
+        if not self.check_file_path_safe(abs_path):
+            return True, "this is a protected operating-system location"
+
+        norm = abs_path.replace("/", "\\").rstrip("\\").lower()
+
+        # Drive root ("c:\") or bare UNC/POSIX root.
+        if re.match(r"^[a-z]:\\?$", norm) or norm in ("", "\\", "/"):
+            return True, "this is a drive root"
+
+        # The TOM install itself, anything INSIDE it, or any parent of it. TOM
+        # builds user work in the Desktop workspace, never in its own tree, so
+        # its source (agent.py, tools/, ...) is never a valid delete target —
+        # this stops "delete agent.py" resolving against the repo and self-
+        # destructing the app.
+        try:
+            from tools.project_paths import PROJECT_ROOT
+            tom_root = str(PROJECT_ROOT).replace("/", "\\").rstrip("\\").lower()
+            if norm == tom_root or norm.startswith(tom_root + "\\"):
+                return True, "this is inside the TOM application folder"
+            if tom_root.startswith(norm + "\\"):
+                return True, "this is a parent of the TOM application folder"
+        except Exception:
+            pass
+
+        # Home folder root and its immediate personal roots.
+        try:
+            home = os.path.normpath(os.path.expanduser("~")).replace("/", "\\").rstrip("\\").lower()
+            if norm == home:
+                return True, "this is your home folder root"
+            protected_roots = {os.path.join(home, d).replace("/", "\\").lower()
+                               for d in ("desktop", "documents", "downloads", "pictures",
+                                         "videos", "music", "onedrive")}
+            # Also guard the OneDrive-redirected Desktop, if any.
+            one = (os.environ.get("OneDrive") or "").strip()
+            if one:
+                protected_roots.add(os.path.join(one, "Desktop").replace("/", "\\").lower())
+            if norm in protected_roots:
+                return True, "this is a top-level personal folder (delete items inside it instead)"
+        except Exception:
+            pass
+
+        return False, ""

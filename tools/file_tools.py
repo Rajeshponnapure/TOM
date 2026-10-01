@@ -3,7 +3,7 @@ import subprocess
 from typing import Optional, Dict, Any, List
 
 from safety.guards import SafetyGuards
-from tools.project_paths import PROJECT_ROOT
+from tools.project_paths import PROJECT_ROOT, workspace_root
 
 
 class FileTools:
@@ -12,8 +12,9 @@ class FileTools:
         self.config_dir = os.path.join(self.project_root, "config")
         os.makedirs(self.config_dir, exist_ok=True)
 
-        # Default output directory for generated documents
-        self.output_dir = os.path.join(self.project_root, "output")
+        # Default output directory for user deliverables: the Desktop workspace,
+        # NOT the TOM repo. Keeps generated docs/decks/sites out of TOM's folder.
+        self.output_dir = str(workspace_root())
         os.makedirs(self.output_dir, exist_ok=True)
 
     # ── File Writing ──────────────────────────────────────────────────────
@@ -51,12 +52,104 @@ class FileTools:
         except Exception:
             pass
 
+    # ── Delete (guarded, approval-gated) ──────────────────────────────────
+
+    @staticmethod
+    def _describe_target(path: str) -> str:
+        """Human summary of what a delete would remove (type + size/count)."""
+        try:
+            if os.path.isdir(path):
+                files = dirs = 0
+                total = 0
+                for _root, dirnames, filenames in os.walk(path):
+                    dirs += len(dirnames)
+                    files += len(filenames)
+                    for fn in filenames:
+                        try:
+                            total += os.path.getsize(os.path.join(_root, fn))
+                        except OSError:
+                            pass
+                mb = total / (1024 * 1024)
+                return f"folder with {files} file(s) and {dirs} sub-folder(s), {mb:.1f} MB"
+            size = os.path.getsize(path)
+            return f"file, {size / 1024:.1f} KB"
+        except OSError:
+            return "item"
+
+    async def delete_path(self, target_path: str, approval_manager=None,
+                          to_trash: bool = True) -> Dict[str, Any]:
+        """Delete a file or folder, but only after the user approves.
+
+        Order of operations:
+          1. Resolve to an absolute path and verify it exists.
+          2. Refuse protected targets (system dirs, the TOM install itself,
+             drive/home roots) — these are never deletable, approval or not.
+          3. Show a warning with exactly what will be removed and ask the user.
+          4. Only on an explicit "yes" delete it — to the Recycle Bin when
+             send2trash is available (recoverable), otherwise permanently.
+        """
+        safety = SafetyGuards()
+        raw = (target_path or "").strip().strip('"').strip("'")
+        if not raw:
+            return {"status": "error", "message": "No path given to delete."}
+        abs_path = os.path.abspath(os.path.expanduser(raw))
+
+        if not os.path.exists(abs_path):
+            return {"status": "error", "message": f"Nothing to delete — path does not exist: {abs_path}"}
+
+        protected, reason = safety.is_protected_from_deletion(abs_path)
+        if protected:
+            return {"status": "blocked",
+                    "message": f"Refused to delete '{abs_path}': {reason}"}
+
+        summary = self._describe_target(abs_path)
+        if approval_manager is not None:
+            from tools.approval import ApprovalRequest
+            approved = approval_manager.request_approval(ApprovalRequest(
+                action="delete_path",
+                summary=(f"PERMANENTLY DELETE this {summary}?\n\n{abs_path}\n\n"
+                         "This cannot be easily undone."
+                         + ("" if to_trash else " (bypasses the Recycle Bin)")),
+                details={"path": abs_path, "target": summary},
+                risk_level="high",
+            ))
+            if not approved:
+                return {"status": "cancelled", "message": f"Delete cancelled — '{abs_path}' was left untouched."}
+
+        try:
+            import shutil
+            trashed = False
+            if to_trash:
+                try:
+                    from send2trash import send2trash as _s2t
+                    _s2t(abs_path)
+                    trashed = True
+                except Exception:
+                    trashed = False
+            if not trashed:
+                if os.path.isdir(abs_path):
+                    shutil.rmtree(abs_path)
+                else:
+                    os.remove(abs_path)
+            where = "moved to the Recycle Bin" if trashed else "permanently deleted"
+            safety.log_action("DELETE_PATH", target=abs_path, status="SUCCESS",
+                              message=f"{summary} {where}")
+            return {"status": "success",
+                    "message": f"Deleted ({summary}) — {where}:\n{abs_path}",
+                    "path": abs_path, "recoverable": trashed}
+        except Exception as exc:
+            return {"status": "error", "message": f"Could not delete '{abs_path}': {exc}"}
+
     # ── Website Creation ──────────────────────────────────────────────────
 
     async def create_website(self, project_name: str, index_content: Optional[str] = None,
-                             css_content: Optional[str] = None) -> Dict[str, Any]:
+                             css_content: Optional[str] = None,
+                             target_root: Optional[str] = None) -> Dict[str, Any]:
         try:
-            target_dir = os.path.join("output", project_name)
+            # Build the site in the user workspace (or an explicit path the
+            # caller resolved), never inside the TOM repo.
+            base = target_root or self.output_dir
+            target_dir = os.path.join(base, project_name)
             os.makedirs(target_dir, exist_ok=True)
             final_html = index_content or "<!DOCTYPE html>\n<html>\n<head><title>Page</title></head>\n<body>\n<h1>Welcome</h1>\n</body>\n</html>"
             final_css = css_content or "body { margin: 0; font-family: Arial, sans-serif; }"

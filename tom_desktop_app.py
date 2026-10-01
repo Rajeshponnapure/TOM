@@ -228,6 +228,14 @@ def _llm_factory_model() -> str:
     return os.environ.get("OLLAMA_MODEL", "gemma4:latest")
 
 
+def _llm_factory_provider() -> str:
+    try:
+        from tools import llm_factory
+        return llm_factory.provider()
+    except Exception:
+        return "ollama"
+
+
 def hex_to_rgb(h):
     h = h.lstrip("#")
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
@@ -1500,6 +1508,24 @@ class TomDesktopApp:
         self.clock_var = tk.StringVar(value="00:00:00")
         tk.Label(right, textvariable=self.clock_var, bg="#0a0e1a", fg=C["text2"],
             font=("Consolas", 11)).pack(side="left", padx=(0, 12))
+
+        # Provider dropdown — Groq (hosted) ↔ Ollama (local), live switch
+        self._provider_labels = {"groq": "Groq (hosted)", "ollama": "Ollama (local)"}
+        self.provider_var = tk.StringVar(value=self._provider_labels.get(
+            _llm_factory_provider(), "Ollama (local)"))
+        self.provider_menu = tk.OptionMenu(right, self.provider_var,
+                                           *self._provider_labels.values(),
+                                           command=self._on_provider_change)
+        self.provider_menu.config(
+            bg="#0a0e1a", fg=C["muted"], activebackground=C["surface"],
+            activeforeground=C["text"], relief="flat", bd=0,
+            highlightthickness=0, font=("Segoe UI", 9), cursor="hand2",
+            padx=6, pady=0)
+        self.provider_menu["menu"].config(
+            bg=C["surface"], fg=C["text"],
+            activebackground=C["blue"], activeforeground="#ffffff",
+            font=("Segoe UI", 9))
+        self.provider_menu.pack(side="left", padx=(0, 6))
 
         # Model toggle dropdown — populated from Ollama /api/tags in _startup
         self._model_names = [_llm_factory_model()]
@@ -5132,6 +5158,70 @@ class TomDesktopApp:
                 self._set_model_menu(models)
         except Exception:
             pass  # Ollama may not be available yet; the dropdown keeps its default
+
+    def _refresh_model_dropdown(self):
+        """Re-populate the model dropdown for the CURRENT provider.
+
+        Runs on the UI thread. Network probes (Groq API, Ollama /api/tags) run
+        through the same code paths as _startup, with their own timeouts.
+        """
+        try:
+            from tools import llm_factory
+            if llm_factory.provider() == "groq":
+                self._fetch_groq_models()
+            else:
+                self._fetch_ollama_models()
+        except Exception:
+            pass  # the dropdown keeps whatever is showing
+
+    def _on_provider_change(self, label: str):
+        """Provider dropdown: hot-swap Groq ↔ Ollama without a restart.
+
+        The switch itself runs on a worker thread: proving Ollama is reachable
+        can block for seconds, and the UI must not freeze while it does. The
+        dropdown snaps back on failure, and TOM explains in chat either way.
+        """
+        wanted = next((pid for pid, lbl in self._provider_labels.items()
+                       if lbl == label), None)
+        if not wanted:
+            self.provider_var.set(self._provider_labels.get(
+                _llm_factory_provider(), "Ollama (local)"))
+            return
+        if not getattr(self, "agent", None) or not self.agent_ready:
+            self.provider_var.set(self._provider_labels.get(
+                _llm_factory_provider(), "Ollama (local)"))
+            self._append_chat("meta",
+                "TOM is still starting up — the provider can be switched once the agent is ready.")
+            return
+
+        def worker():
+            try:
+                result = self.agent.switch_provider(wanted)
+            except Exception as exc:
+                self._enqueue(self._provider_switch_finished, wanted, False,
+                              str(exc))
+                return
+            self._enqueue(self._provider_switch_finished, wanted, True,
+                          result.get("model", ""))
+
+        threading.Thread(target=worker, name="provider-switch", daemon=True).start()
+
+    def _provider_switch_finished(self, provider_id: str, ok: bool, detail: str):
+        """UI-thread epilogue for a provider switch: label, dropdowns, chat."""
+        try:
+            from tools import llm_factory
+            active = llm_factory.provider()
+        except Exception:
+            active = provider_id if ok else _llm_factory_provider()
+        self.provider_var.set(self._provider_labels.get(active, "Ollama (local)"))
+        if ok:
+            self._append_chat("meta",
+                f"Switched to {self._provider_labels.get(active, active)} — model: {detail}. "
+                "The choice is saved to .env and survives restarts.")
+            self._refresh_model_dropdown()
+            self._update_statusbar("Ready", f"{active}: {detail}", True)
+        else:
+            self._append_chat("meta", f"Could not switch provider: {detail}")
 
     def _on_model_change(self, model_name: str):
         """Called when the user selects a different model from the dropdown."""
