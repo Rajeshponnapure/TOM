@@ -27,8 +27,13 @@ def agent(tmp_path, monkeypatch, smtp_server, imap_server):
     monkeypatch.setenv("IMAP_PORT", str(imap_server.server_address[1]))
     monkeypatch.setenv("IMAP_SSL", "false")
     monkeypatch.setenv("EMAIL_AGENT_STATE_DIR", str(tmp_path / "state"))
+    # Deliverables (e.g. "draft a note …" → Word doc) must land in tmp_path, never
+    # the user's real Desktop workspace, and must not launch Word/Excel via startfile.
+    monkeypatch.setenv("TOM_WORKSPACE_DIR", str(tmp_path / "workspace"))
     from agent import TomAgent
     tom = TomAgent()
+    tom.opened_files = []
+    monkeypatch.setattr(tom.file_tools, "open_file", tom.opened_files.append)
 
     async def fake_llm(self, chain, payload, task_name, llm=None):
         return SimpleNamespace(content="SUBJECT: Quarterly report\nBODY:\nHello John, the quarterly report is "
