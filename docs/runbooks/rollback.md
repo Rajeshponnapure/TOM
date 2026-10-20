@@ -16,12 +16,20 @@ saved (§S4 "Existing Hindsight memory must not be discarded").
 
 ## 1. Fast rollback: feature flags (no code change)
 
-| Phase | Flag in `.env` | Restores |
-|---|---|---|
-| R2 | `TOM_TASK_SERVICE=0` | `execute_task` runs the legacy body directly |
-| R3 | `TOM_POLICY_ENGINE=0` | legacy keyword gate only (ADR-006: never weaker than baseline) |
-| R4 | `TOM_TASK_STORE=0` | in-memory tasks, no SQLite writes |
-| R6 | `TOM_RESOURCE_ADMISSION=0` | model loads not admission-checked |
+| Phase | Flag in `.env` | Restores | Status |
+|---|---|---|---|
+| R2 | `TOM_TASK_SERVICE=0` | `execute_task` runs the legacy body directly | implemented, tested |
+| R4 | `TOM_TASK_STORE=0` | in-memory tasks, no SQLite writes | implemented, tested |
+| R3 | `TOM_POLICY_ENGINE=0` | legacy keyword gate only (ADR-006: never weaker than baseline) | not built yet |
+| R6 | `TOM_RESOURCE_ADMISSION=0` | model loads not admission-checked | not built yet |
+
+Cloud routes (ADR-005) are restored per route, not by a single flag:
+`TOM_LLM_PROVIDER=groq`, `HINDSIGHT_BASE_URL=https://api.hindsight.vectorize.io`,
+`VOICE_RECOGNITION_ENGINE=google`, `TOM_TTS_ENGINE=edge`. The pre-change `.env` is in
+`tom_brain/backups/env-before-r2-*.bak`, and the pre-change package set in `tom_brain/backups/pip-freeze-before-r2-*.txt`
+(`pip install -r` that file to restore it exactly).
+
+Voice: `TOM_ASR_DEVICE=cpu` keeps speech recognition off the GPU; `TOM_TTS_ENGINE=sapi` uses the old pyttsx3 voice.
 
 Restart TOM after changing `.env`.
 

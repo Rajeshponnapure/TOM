@@ -161,7 +161,7 @@ LONG-TERM MEMORY (TOM learns from your corrections):
 
             # Execute task
             result = await asyncio.wait_for(
-                tom_agent.execute_task(user_input),
+                tom_agent.execute_task(user_input, interface="cli"),
                 timeout=task_timeout,
             )
 

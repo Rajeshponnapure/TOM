@@ -2,15 +2,16 @@
 LLM factory — one place that builds every chat model TOM uses.
 
 Providers (TOM_LLM_PROVIDER):
-  * "groq"   — hosted, OpenAI-compatible models via langchain-groq. Active by
-               default whenever GROQ_API_KEY is set in .env.
   * "ollama" — fully local via langchain-ollama, plus the aliases "local" /
-               "local-llm". Selected ONLY when the user asks for it explicitly.
+               "local-llm". The DEFAULT: prompts never leave the machine.
+  * "groq"   — hosted, OpenAI-compatible models via langchain-groq. Used ONLY
+               when TOM_LLM_PROVIDER=groq is set explicitly (the GUI provider
+               toggle sets it). A GROQ_API_KEY on its own does not opt in.
 
-TOM never silently swaps to a local model: while a Groq key is configured the
-hosted provider stays in charge until TOM_LLM_PROVIDER=ollama says otherwise.
-The one thing that is always local is the RAG embedding encoder — Groq has no
-embeddings endpoint (see resolve_model("embed")), which is not a chat fallback.
+Cloud inference is opt-in (PRD RRM-007, ADR-005, owner decision 2026-10-21);
+this reverses the earlier "Groq whenever a key exists" default.
+The RAG embedding encoder is always local — Groq has no embeddings endpoint
+(see resolve_model("embed")).
 
 Every caller gets a LangChain chat model with the same `.ainvoke()` surface,
 so the rest of TOM never needs to know which provider is active.
@@ -33,14 +34,12 @@ _LOCAL_PROVIDER_ALIASES = ("ollama", "local", "local-llm", "local_llm")
 
 
 def provider() -> str:
-    """Active provider: "groq" (hosted) or "ollama" (local, opt-in only)."""
+    """Active provider: "ollama" (local, default) or "groq" (hosted, explicit opt-in only)."""
     value = (os.environ.get("TOM_LLM_PROVIDER") or "").strip().lower()
-    if value in _LOCAL_PROVIDER_ALIASES:
-        return "ollama"
     if value == "groq":
         return "groq"
-    # Unset or unrecognised: hosted when it can actually run, local otherwise.
-    return "groq" if (os.environ.get("GROQ_API_KEY") or "").strip() else "ollama"
+    # Local aliases, unset or unrecognised: stay on the machine.
+    return "ollama"
 
 
 def groq_vision_model() -> str:

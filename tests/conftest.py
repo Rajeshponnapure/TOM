@@ -9,6 +9,16 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Long-term memory is local by default (ADR-005). Never let a test read or write the user's real
+# store in tom_brain/hindsight — every test session gets a throwaway one unless a test sets its own.
+if not os.environ.get("TOM_MEMORY_STATE_DIR"):
+    import tempfile as _tempfile
+    os.environ["TOM_MEMORY_STATE_DIR"] = _tempfile.mkdtemp(prefix="tom_test_memory_")
+# Same for the durable task store (tom_brain/tasks.sqlite3).
+if not os.environ.get("TOM_TASK_DB"):
+    import tempfile as _tempfile
+    os.environ["TOM_TASK_DB"] = os.path.join(_tempfile.mkdtemp(prefix="tom_test_tasks_"), "tasks.sqlite3")
+
 from tools.email_tools import EmailTools  # noqa: E402
 
 

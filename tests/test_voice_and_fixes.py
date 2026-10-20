@@ -27,11 +27,18 @@ def test_play_audio_survives_pygame_failure(tmp_path, monkeypatch):
     assert not hasattr(vt, "_utt_counter") or isinstance(vt._utt_counter, int)
 
 def test_unique_tts_filenames():
-    """Fixed tom_voice.mp3 name caused WinError 32 lock; must be unique now."""
-    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            "tools", "voice_tools.py"), encoding="utf-8").read()
-    assert 'f"tom_voice_{os.getpid()}_{self._utt_counter}.mp3"' in src
-    assert 'os.path.join(tempfile.gettempdir(), "tom_voice.mp3")' not in src
+    """Fixed tom_voice.mp3 name caused WinError 32 lock; must be unique now.
+
+    Synthesis moved to tom_core/voice (edge-tts adapter + Windows voice worker); both still
+    write one uniquely named file per utterance.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(root, "tools", "voice_tools.py"), encoding="utf-8").read()
+    tts = open(os.path.join(root, "tom_core", "voice", "tts.py"), encoding="utf-8").read()
+    worker = open(os.path.join(root, "tom_core", "voice", "tts_worker.py"), encoding="utf-8").read()
+    assert 'f"tom_edge_{os.getpid()}_{self._n}.mp3"' in tts
+    assert 'f"utt_{counter[0]}.wav"' in worker and "tempfile.mkdtemp(" in worker
+    assert '"tom_voice.mp3"' not in src + tts
     assert "pygame.mixer.music.unload()" in src
 
 def test_calibration_once_per_session():

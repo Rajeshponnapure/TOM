@@ -44,8 +44,8 @@ a = Analysis(
         'google_auth_oauthlib.flow', 'google.oauth2.credentials',
         'imapclient', 'pytesseract', 'reportlab',
         'langchain_core', 'langchain_ollama',
-        # Groq is the default provider whenever GROQ_API_KEY is set: the import
-        # lives inside llm_factory.make_groq_model(), so pin it explicitly.
+        # Groq is opt-in (TOM_LLM_PROVIDER=groq); the import lives inside
+        # llm_factory.make_groq_model(), so pin it explicitly.
         'langchain_groq', 'groq', 'openai', 'httpx',
         'apscheduler', 'apscheduler.schedulers.background',
         'docx', 'openpyxl', 'pptx',
@@ -55,6 +55,11 @@ a = Analysis(
         'chromadb', 'onnxruntime',
         # Voice stack (talk-back + listening) — keep so the frozen exe can speak/listen
         'pyttsx3', 'speech_recognition', 'pyaudio',
+        # Local voice workers: the exe re-launches itself with --tom-voice-worker asr|tts
+        # (tom_core.voice.workers.maybe_run_worker), importing these on demand.
+        'tom_core.voice.asr_worker', 'tom_core.voice.tts_worker', 'faster_whisper', 'ctranslate2',
+        'winrt.windows.media.speechsynthesis', 'winrt.windows.storage.streams',
+        'tom_core.tasks', 'tom_core.memory.local_store', 'tom_core.privacy',
     ],
     hookspath=_extra_hooks,
     hooksconfig={},

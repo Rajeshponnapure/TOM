@@ -93,3 +93,22 @@ user decision (ADR-005), not something the refactor should silently flip.
 - Audit-log redaction, CWD-relative log path, dead GUI forward, and concurrency races (D1–D7 in `current-state.md`).
 - Test wall-clock (10 min) leaves little CI margin. Characterization tests added in R1 are designed to run in seconds.
 - No task persistence. A crash or restart loses in-flight work without trace (fails AT-006 / TOM-MIG-005 today).
+
+## 8. Voice pipeline (measured 2026-10-21, after the local-first change)
+
+| Item | Value | Method |
+|---|---|---|
+| Local voices installed | Microsoft David, Zira, Mark (all en-US); **no en-IN voice installed** | WinRT `SpeechSynthesizer.all_voices` |
+| TTS (Windows voice, worker) | 14–42 ms per reply sentence | session probe (not committed); reproduced by `tests/test_voice_core.py` |
+| ASR model | faster-whisper `large-v3-turbo`, from `C:\voice-agent-data\cache\huggingface\hub` (existing cache, no download) | — |
+| ASR on GPU (int8_float16, admitted from measured free VRAM) | load 3.8–4.0 s once; **256–337 ms** per 6 s utterance | same |
+| ASR on CPU (int8, 16 threads) | **3.3 s** per 6 s utterance (large-v3: 4.3 s) | session probe (not committed) |
+| Accuracy (TTS→ASR round trip) | word-exact except homophones ("docx"→"docs", "9 AM"→"9am") | `test_local_voice_round_trip_is_accurate` |
+| `whisper-large-v3-vaani-telugu-ct2` | Unsuitable for English commands: transcribes English speech in Telugu script even with `language=en`; ~10 s/clip on CPU | same probe |
+| WinRT + native ML in one process | access violation (onnxruntime, torch, CTranslate2, TomAgent) when WinRT loads first | session probe (not committed) → ADR-009 |
+| PyAudio before this change | not installed → "No microphone devices detected"; after: Realtek mic, 19 device entries | — |
+
+## 9. PySide6 interface smoke (real TomAgent, offscreen)
+
+Ready in 5.2 s; "system status" 0.1 s (SUCCEEDED, `desktop-qt`); a local `qwen3:8b` chat answer in 8.7 s (SUCCEEDED);
+privacy panel 4 local / 0 cloud.

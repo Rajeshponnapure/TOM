@@ -24,9 +24,11 @@ Design rules
     instantly, even offline.
 
 Configuration (.env)
-  HINDSIGHT_API_KEY    — Hindsight Cloud key (enables Cloud by default)
-  HINDSIGHT_BASE_URL   — default https://api.hindsight.vectorize.io
-                         (use http://localhost:8888 for a self-hosted server)
+  HINDSIGHT_API_KEY    — Hindsight Cloud key (used only once HINDSIGHT_BASE_URL opts in to Cloud)
+  HINDSIGHT_BASE_URL   — unset (default): on-machine SQLite store, tom_brain/hindsight/memory.sqlite3,
+                         seeded once from the journal (tom_core/memory/local_store.py).
+                         https://api.hindsight.vectorize.io opts in to Hindsight Cloud (ADR-005);
+                         http://localhost:8888 uses a self-hosted server.
   HINDSIGHT_BANK_ID    — optional; default "tom-<stable machine id>"
   HINDSIGHT_ENABLED    — set to 0 to switch the layer off
 """
@@ -53,7 +55,9 @@ from tools.project_paths import PROJECT_ROOT
 logger = logging.getLogger(__name__)
 
 CLOUD_URL = "https://api.hindsight.vectorize.io"
+LOCAL_URL = "local"            # sentinel base_url: on-machine SQLite store (tom_core.memory.local_store)
 STATE_DIR = Path(PROJECT_ROOT) / "tom_brain" / "hindsight"
+LOCAL_DB_NAME = "memory.sqlite3"   # lives in STATE_DIR beside the journal it is seeded from
 JOURNAL_FILE = STATE_DIR / "journal.jsonl"
 PENDING_FILE = STATE_DIR / "pending.jsonl"
 BANK_FILE = STATE_DIR / "bank_id.txt"
@@ -147,7 +151,8 @@ class HindsightMemory:
         self.state_dir = Path(state_dir or os.environ.get("TOM_MEMORY_STATE_DIR") or STATE_DIR)
         self.journal_file = self.state_dir / JOURNAL_FILE.name
         self.pending_file = self.state_dir / PENDING_FILE.name
-        self.base_url = (os.environ.get("HINDSIGHT_BASE_URL") or CLOUD_URL).rstrip("/")
+        # ADR-005: memory stays on this machine unless a Hindsight server is chosen explicitly.
+        self.base_url = (os.environ.get("HINDSIGHT_BASE_URL") or "").strip().rstrip("/") or LOCAL_URL
         self.api_key = os.environ.get("HINDSIGHT_API_KEY", "").strip() or None
         self.bank_id = bank_id or os.environ.get("HINDSIGHT_BANK_ID", "").strip() or _default_bank_id()
         self.timeout = float(timeout or os.environ.get("HINDSIGHT_TIMEOUT_SECONDS", "12"))
@@ -172,7 +177,18 @@ class HindsightMemory:
             threading.Thread(target=self.flush_pending, name="hindsight-flush", daemon=True).start()
 
     # ── setup ────────────────────────────────────────────────────────────
+    @property
+    def is_local(self) -> bool:
+        return self.base_url == LOCAL_URL
+
     def _build_client(self) -> Any:
+        if self.is_local:
+            try:
+                from tom_core.memory.local_store import LocalMemoryClient
+                return LocalMemoryClient(self.state_dir / LOCAL_DB_NAME, seed_journal=self.journal_file)
+            except Exception as exc:
+                self.last_error = f"Local memory store unavailable: {exc}"
+                return None
         is_cloud = self.base_url.startswith(CLOUD_URL)
         if is_cloud and not self.api_key:
             self.last_error = ("HINDSIGHT_API_KEY is not set. Add it to .env "
@@ -527,7 +543,8 @@ class HindsightMemory:
             return "Long-term memory: OFF (HINDSIGHT_ENABLED=0)"
         if not self.available:
             return f"Long-term memory: OFFLINE — {self.last_error or 'not configured'}"
-        where = "Hindsight Cloud" if self.base_url.startswith(CLOUD_URL) else f"Hindsight @ {self.base_url}"
+        where = ("local store on this machine" if self.is_local else
+                 "Hindsight Cloud" if self.base_url.startswith(CLOUD_URL) else f"Hindsight @ {self.base_url}")
         pending = self.pending_count()
         if pending:
             # "ONLINE" alone hid the fact that nothing was being stored.

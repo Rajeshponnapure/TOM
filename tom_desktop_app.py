@@ -1080,7 +1080,7 @@ class VoiceUIWindow:
                 voice.output_enabled = True
                 if not voice._recognizer:
                     voice._setup_input()
-                if not (voice._edge_tts_ok or voice._tts_engine):
+                if not (voice._tts_adapter or voice._tts_engine):
                     voice._setup_output()
                 if not voice.input_enabled or not voice._recognizer:
                     err = voice._input_error or "microphone unavailable"
@@ -1089,8 +1089,9 @@ class VoiceUIWindow:
                     return
                 voice.on_audio_level = self._on_audio_level
                 voice.on_state_change = self._on_voice_state
+                voice.warm_up_recognizer()   # speech model loads while the greeting plays
 
-                greeting = "Hey! I'm TOM. What can I help you with?"
+                greeting = "Hello, I'm TOM. How can I help you?"
                 self._enqueue(lambda: self._append_transcript("TOM", greeting))
                 self._enqueue(lambda: self._set_state("speaking"))
                 voice.speak(greeting)
@@ -1136,7 +1137,7 @@ class VoiceUIWindow:
                     lower = heard.lower().strip()
                     if lower in ("stop", "exit", "quit", "goodbye", "bye",
                                  "stop listening", "thanks bye", "that's all"):
-                        farewell = "Alright, talk to you later!"
+                        farewell = "Okay. I'll be here whenever you need me."
                         self._enqueue(lambda: self._append_transcript("TOM", farewell))
                         self._enqueue(lambda: self._set_state("speaking"))
                         voice.speak(farewell)
@@ -1146,7 +1147,7 @@ class VoiceUIWindow:
 
                     try:
                         future = asyncio.run_coroutine_threadsafe(
-                            self.app.agent.execute_task(heard), self.app._loop)
+                            self.app.agent.execute_task(heard, interface="voice"), self.app._loop)
                         self._agent_future = future
                         response = future.result(timeout=120)
                         if isinstance(response, dict):
@@ -1167,6 +1168,10 @@ class VoiceUIWindow:
                 err_msg = f"Error: {e}"
                 self._enqueue(lambda m=err_msg: self._append_transcript("System", m))
             finally:
+                try:
+                    self.app.voice.release_recognizer()   # free the speech model's VRAM (RRM-006)
+                except Exception:
+                    pass
                 self._enqueue(self._on_conversation_end)
 
         threading.Thread(target=_voice_loop, daemon=True).start()
@@ -1211,6 +1216,7 @@ class VoiceUIWindow:
 
     def _on_voice_state(self, state: str, text: str):
         state_map = {"listening": "listening", "processing": "processing",
+                     "transcribing": "processing",
                      "speaking": "speaking", "idle": "idle", "error": "idle",
                      "ready": "listening"}
         new_state = state_map.get(state, "idle")
@@ -2790,7 +2796,7 @@ class TomDesktopApp:
         def work():
             try:
                 fut = asyncio.run_coroutine_threadsafe(
-                    agent.execute_task("what have you learned about me"), self._loop)
+                    agent.execute_task("what have you learned about me", interface="desktop"), self._loop)
                 msg = str(fut.result(timeout=90).get("message", ""))
             except Exception as exc:
                 msg = f"Reflection failed: {exc}"
@@ -3627,7 +3633,7 @@ class TomDesktopApp:
     def _process_message(self, text: str):
         future = None
         try:
-            future = asyncio.run_coroutine_threadsafe(self.agent.execute_task(text), self._loop)
+            future = asyncio.run_coroutine_threadsafe(self.agent.execute_task(text, interface="desktop"), self._loop)
             self._active_task_future = future
             result = future.result(timeout=180)
             if future is not self._active_task_future:
@@ -5552,6 +5558,10 @@ class TomDesktopApp:
 
 
 def main():
+    # Frozen builds re-launch this exe as a voice worker (tom_core.voice.workers); run it and exit.
+    from tom_core.voice.workers import maybe_run_worker
+    if maybe_run_worker():
+        return
     # A3: crash isolation — unhandled errors are logged, the app survives.
     try:
         from tools.crash_guard import install as _cg_install, install_tk as _cg_tk

@@ -244,6 +244,21 @@ class TomAgent:
             self.web_automation = None
             safe_print(f"[WEB_AUTO] Could not initialise: {_web_err}")
 
+        # ── Task service (PRD §S3) ───────────────────────────────────────
+        # One durable task record per request, shared with every other TOM
+        # window/CLI through tom_brain/tasks.sqlite3. TOM_TASK_SERVICE=0 = legacy path.
+        self.tasks = None
+        if (os.environ.get("TOM_TASK_SERVICE") or "1").strip() != "0":
+            try:
+                from tom_core.tasks import TaskService
+                self.tasks = TaskService(self._execute_task_legacy)
+                if self.tasks.recovered:
+                    safe_print(f"[TASKS] {len(self.tasks.recovered)} task(s) interrupted by the last "
+                               "shutdown were marked BLOCKED for review (not replayed).")
+            except Exception as _task_err:
+                self.tasks = None
+                safe_print(f"[TASKS] Task service unavailable, using the legacy path: {_task_err}")
+
         # ── Unified Engine Router ────────────────────────────────────────
         # Routes ML / IoT / VLSI / Hardware / Blender / GameDev / News /
         # Env / Auto-update / Autonomous / Multi-agent commands so the CLI
@@ -760,7 +775,18 @@ class TomAgent:
 
     # ── MAIN TASK EXECUTION ─────────────────────────────────────────────
 
-    async def execute_task(self, command: str) -> Dict[str, Any]:
+    async def execute_task(self, command: str, interface: str = "") -> Dict[str, Any]:
+        """Compatibility facade (PRD §S3, TOM-MIG-002): every request becomes a TaskService task.
+
+        `interface` labels where it came from ("cli", "desktop", "voice", "desktop-qt", ...).
+        TOM_TASK_SERVICE=0 runs the legacy pipeline directly (rollback flag, docs/runbooks/rollback.md).
+        """
+        tasks = getattr(self, "tasks", None)          # absent on agents built without __init__ (tests)
+        if tasks is None:
+            return await self._execute_task_legacy(command)
+        return await tasks.submit_task(command, interface or "unknown")
+
+    async def _execute_task_legacy(self, command: str) -> Dict[str, Any]:
         safe_print(f"\nTOM RECEIVED: {command}\n")
         self.chat_memory.append("user", command)
         task_started_at = time.perf_counter()
@@ -3326,7 +3352,7 @@ class TomAgent:
                                               "organize", "organise", "tidy", "clean up",
                                               "remember", "learned", "learnt")) or \
                 memory_rules.is_preference_statement(command):
-            result = await self.execute_task(command)
+            result = await self.execute_task(command, interface="voice")
             raw = result.get("message", "")
             result["message"] = self._strip_for_speech(raw)
             return result
@@ -3334,9 +3360,10 @@ class TomAgent:
         self._recalled = await self.memory.arecall(command, limit=5) if self.memory.available else []
         memory_context = self._build_memory_context(command)
         voice_system = (
-            "You are TOM in VOICE mode. Keep responses under 2-3 sentences. "
-            "Sound natural and warm. No markdown, no bullet points. "
-            "Just plain spoken English. Talk like a smart friend."
+            "You are TOM in VOICE mode, a calm and professional personal assistant. "
+            "Answer in 1-3 short, complete sentences of clear spoken English that is easy to follow "
+            "for an Indian English listener. Be warm and polite, never slangy. "
+            "No markdown, lists, emojis, code or URLs. Say numbers, dates and times the way a person would."
         )
         prompt = self._safe_prompt([
             ("system", voice_system),
@@ -3499,7 +3526,7 @@ class TomAgent:
         def _job(cmd=command):
             def _runner():
                 try:
-                    asyncio.run(self.execute_task(cmd))
+                    asyncio.run(self.execute_task(cmd, interface="scheduler"))
                 except Exception as _e:
                     self.safety.log_action("WARN", target="scheduled_task",
                                            status="FAILURE", message=str(_e))
@@ -3592,9 +3619,14 @@ class TomAgent:
             preflight = report_text()
         except Exception as _pf:
             preflight = f"(preflight unavailable: {_pf})"
+        try:
+            from tom_core.privacy import disclosure_text
+            privacy = disclosure_text()
+        except Exception as _pv:
+            privacy = f"(privacy routes unavailable: {_pv})"
         return {"status": "success", "response_type": "health",
                 "message": (f"TOM system health:\n{head}\n\n" + "\n".join(checks)
-                            + "\n\n" + preflight)}
+                            + "\n\n" + privacy + "\n\n" + preflight)}
 
     def get_skills_summary(self) -> Dict[str, Any]:
         try:

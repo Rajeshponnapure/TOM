@@ -90,9 +90,11 @@ class SafetyGuards:
 
     def log_action(self, action: str, target: str = "",
                    status: str = "SUCCESS", message: str = ""):
-        """Logs all Tom actions with timestamp"""
+        """Logs all Tom actions with timestamp. Secrets are redacted before anything is written."""
+        from tom_core.observability.redact import redact
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        record = f"[{timestamp}] {action}: [{status.upper()}] | Target: {target} | Note: {message}\n"
+        record = (f"[{timestamp}] {redact(action)}: [{status.upper()}] | Target: {redact(target)} "
+                  f"| Note: {redact(message)}\n")
 
         try:
             # Size-capped rotation: keep safety_log.txt under ~2 MB,

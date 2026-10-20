@@ -1,36 +1,59 @@
 # Refactor Status (PRD v1.1 supplement §S5)
 
+Last updated 2026-10-21.
+
 | Phase | State | Evidence |
 |---|---|---|
-| R0 Repository audit | **Done — awaiting owner approval** | `docs/architecture/current-state.md`, `target-state.md`, `module-matrix.csv`, `baseline.md`, `decisions.md`, `docs/security/tool-permissions.md`, `docs/runbooks/rollback.md` |
-| R1 Characterization tests | **Done** | `tests/characterization/` — 18 pass + 3 strict-xfail gap trackers, ~9 s, offline. Full suite after R1: 471 pass / 15 skip / 3 xfail, 0 fail (227.9 s). Fixed e2e isolation leak D8 |
-| R2 Shared task facade | Not started (blocked on R0 approval) | — |
-| R3 Policy + typed tools | Not started | — |
-| R4 Durable task state | Not started | — |
-| R5–R10 | Not started | — |
+| R0 Repository audit | **Done — approved by owner 2026-10-21** | `docs/architecture/*`, `docs/migration/*`, `docs/security/tool-permissions.md`, `docs/runbooks/rollback.md` |
+| R1 Characterization tests | **Done** | `tests/characterization/` — 21 offline tests (~9 s) |
+| R2 Shared task facade | **Done** | `tom_core/tasks/` — `TomAgent.execute_task()` is a facade over `TaskService.submit_task()`; CLI, Tk chat, Tk voice, voice mode, scheduler and the PySide6 UI all go through it with an `interface` label. Rollback: `TOM_TASK_SERVICE=0` |
+| R3 Policy + typed tools | **Started** — secret redaction only | `tom_core/observability/redact.py`, applied to the audit log and the task store. Policy engine / typed tool registry not started |
+| R4 Durable task state | **Partly done** | SQLite store (`tom_brain/tasks.sqlite3`), restart reconciliation (orphaned tasks → `BLOCKED`, never replayed), cross-process cancel, emergency stop. Not yet: checkpoints, retry ceilings, pause/resume |
+| R5 Memory adapter | **Partly done** | Local SQLite memory behind the Hindsight client surface (ADR-010); cloud opt-in. Not yet: provenance/confidence fields, retention policy, memory editing UI |
+| R6 Resource manager | **Started** | Measured-VRAM admission for the ASR model (ADR-009), CPU/RAM/VRAM panel. Not yet: LLM admission, `num_ctx` profiles, benchmark harness |
+| R8 Voice and interfaces | **Largely done** | Local ASR/TTS adapters in worker processes, Indian-English voice preference, push-to-talk (PySide6), professional voice persona; PySide6 desktop UI |
+| R7, R9, R10 | Not started | — |
 
-## R0 exit gate: decisions the owner must make
+## Owner decisions recorded (2026-10-21)
 
-1. **ADR-005 cloud routes:** keep Groq / Hindsight Cloud / Google ASR as defaults, or make each opt-in? (Recommendation: opt-in + per-task disclosure.)
-2. **ADR-002** `tom_core/` package name and flat layout.
-3. **ADR-003** keep Tkinter instead of porting to PySide6.
-4. **Module matrix:** confirm the REPLACE/DEFER rows (`auto_scaler`, `auto_update`, `self_evolution`, `rag_memory`, `agent_orchestrator`, `iot_engine`).
-5. **`.env` cleanup** (D2/D3): remove the duplicate `TOM_LLM_PROVIDER` line; set `OLLAMA_*_MODEL` to an installed model.
+ADR-002 `tom_core/` ✔ · ADR-003 keep Tkinter **and** add PySide6 ✔ · ADR-005 cloud routes opt-in, local default ✔ ·
+`.env` cleaned (duplicate keys removed, installed models only) ✔.
 
-## Gap trackers (strict xfail — they flip when delivered)
+## Acceptance tests
 
-| Test | Requirement | Closing phase |
+| PRD test | Status | Where |
 |---|---|---|
-| `test_every_result_carries_a_task_id` | FR-003 | R2 |
-| `test_blocked_results_carry_a_status` | result contract | R2 |
-| `test_secrets_never_reach_the_audit_log` | TOM-MIG-009 / AT-010 | R3 |
+| AT-001 Task lifecycle | Partial — id, persisted state, events, final outcome; no plan/steps yet | `test_task_service.py` |
+| AT-003 Approval gate | Characterized (delete, email); Qt dialog shows exact target | `characterization/`, `test_qt_app.py` |
+| AT-005 Cancellation | **Pass** | `test_cancel_requested_from_another_interface_stops_the_task` |
+| AT-006 Recovery | **Pass** (no blind replay) | `test_restart_marks_orphaned_tasks_blocked_and_never_replays` |
+| AT-007 Verification | **Pass** for state labelling (`UNVERIFIED`) | `test_success_is_only_claimed_with_evidence` |
+| AT-010 Secret redaction | **Pass** (audit log + task store) | `test_secrets_never_reach_the_audit_log`, redaction tests |
+| AT-012 Cross-interface state | **Pass** (shared store + remote cancel) | `test_task_service.py`, `test_qt_app.py` |
+| AT-014 Voice interruption | Partial — stop flag + playback stop tested; barge-in during listening not yet | `test_voice_core.py` |
+| TOM-MIG-002 execute_task compatibility | **Pass** | full suite |
+| TOM-MIG-003 Memory continuity | Partial — journal seeding tested; see open item 1 | `test_local_memory.py` |
+| TOM-MIG-007 Rollback | **Pass** for `TOM_TASK_SERVICE=0` | `test_rollback_flag_runs_the_legacy_path` |
+| TOM-MIG-009 Secret handling | **Pass** for logs/tasks | — |
+| TOM-MIG-010 No direct execution bypass | **Open** — Tk engine buttons still call tools directly (R7) | `current-state.md` §2 |
 
-## Acceptance-test coverage today
+## R0 defects
 
-| PRD test | Status |
+| # | Status |
 |---|---|
-| AT-003 Approval gate | Characterized for delete (declined → untouched, asked once); also `tests/test_e2e_agent.py` for email |
-| AT-010 Secret redaction | **Failing** (gap tracker above) |
-| TOM-MIG-001 Interface parity | Seam characterized (CLI, desktop chat, desktop voice all reach `execute_task`); GUI engine buttons are a known bypass |
-| TOM-MIG-008 No regression | Full suite baseline 453 pass / 15 skip |
-| All others | Not yet implementable (need R2–R6) |
+| D1 dead `process_message` forward | open |
+| D2 duplicate `TOM_LLM_PROVIDER` | **fixed** (`.env`) |
+| D3 configured model not installed | **fixed** (`qwen3:8b` / `nomic-embed-text`) |
+| D4 secrets in audit log | **fixed** (redaction) |
+| D5 CWD-relative log path | open |
+| D6 shared `_recalled` / `_last_*` races | open |
+| D7 psutil missing | **fixed** (pinned + installed) |
+| D8 e2e test wrote to real workspace | **fixed** |
+| D9 tests wrote to the real memory journal (retain journals even with `HINDSIGHT_ENABLED=0`) | **fixed for future runs** (`conftest.py` isolates memory + task stores); existing entries: open item 1 |
+| D10 voice input dead: PyAudio never installed | **fixed** (pinned + installed) |
+
+## Open items needing the owner
+
+1. **Test entries in the real memory journal.** ≥358 of 815 `journal.jsonl` entries and ≥200 of 401 `pending.jsonl` entries match test-suite commands (all 206 entries dated 2026-10-20 are test runs). Backups: `tom_brain/backups/hindsight-*-20261021-003731.jsonl`. They will be imported into the new local store on TOM's next start unless removed first.
+2. **Indian-English offline voice:** install Windows "English (India)" speech voices (Settings › Time & language › Speech › Add voices); TOM selects it automatically. Until then the local voice is Microsoft Mark (US).
+3. **Rotate the Hindsight API key** — it was printed in a session log on 2026-10-21.

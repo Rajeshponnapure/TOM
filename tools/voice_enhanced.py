@@ -609,7 +609,8 @@ class VoiceEnhanced:
         self.min_utterance_length = int(os.environ.get("VE_MIN_UTTERANCE", "1"))
         self.emotion_history_size = int(os.environ.get("VE_EMOTION_HISTORY", "50"))
         self.conversation_tts_enabled = os.environ.get("VE_TTS_ENABLED", "true").lower() == "true"
-        self.tts_voice = os.environ.get("VE_TTS_VOICE", "en-US-GuyNeural")
+        # Indian English by default (owner preference); only used when online voices are opted into.
+        self.tts_voice = os.environ.get("VE_TTS_VOICE", "en-IN-PrabhatNeural")
         self.tts_rate = os.environ.get("VE_TTS_RATE", "+0%")
 
         # State
@@ -1459,6 +1460,10 @@ class VoiceEnhanced:
             tts_error = ""
 
             try:
+                from tom_core.voice import load_config
+                if not load_config().tts_is_cloud:
+                    # ADR-005: online voices are opt-in (TOM_TTS_ENGINE=edge); use the local engine below.
+                    raise ImportError("cloud TTS not opted in")
                 import edge_tts
                 import asyncio
                 import base64
@@ -1475,7 +1480,7 @@ class VoiceEnhanced:
                 # Build SSML with prosody
                 ssml = (
                     f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis"'
-                    f' xml:lang="en-US">'
+                    f' xml:lang="{voice[:5]}">'
                     f'<voice name="{voice}">'
                     f'<prosody pitch="{prosody["pitch"]}" rate="{rate_str}"'
                     f' volume="{prosody["volume"]}">'
@@ -1493,8 +1498,8 @@ class VoiceEnhanced:
                 if audio_bytes:
                     audio_data = base64.b64encode(audio_bytes).decode("ascii")
                     engine_used = "edge-tts"
-            except ImportError:
-                tts_error = "edge-tts not installed"
+            except ImportError as exc:
+                tts_error = str(exc) if "opted in" in str(exc) else "edge-tts not installed"
 
             if not audio_data:
                 try:
@@ -1822,9 +1827,8 @@ class VoiceEnhanced:
             if len(audio_buffer) < 256:
                 return ""
 
-            # Try speech_recognition if available
+            # The configured ASR adapter: local faster-whisper unless cloud ASR was opted into.
             try:
-                import speech_recognition as sr
                 import io
                 import wave
 
@@ -1834,12 +1838,11 @@ class VoiceEnhanced:
                     wf.setsampwidth(2)
                     wf.setframerate(self.sample_rate)
                     wf.writeframes(audio_buffer)
-                wav_io.seek(0)
-
-                recognizer = sr.Recognizer()
-                with sr.AudioFile(wav_io) as source:
-                    audio = recognizer.record(source)
-                return recognizer.recognize_google(audio)
+                if getattr(self, "_asr", None) is None:
+                    from tom_core.voice import load_config
+                    from tom_core.voice.asr import make_asr
+                    self._asr = make_asr(load_config())
+                return self._asr.transcribe_wav(wav_io.getvalue()).text
             except ImportError:
                 pass
             except Exception:

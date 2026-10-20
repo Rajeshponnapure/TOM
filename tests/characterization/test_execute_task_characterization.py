@@ -4,10 +4,10 @@ These describe what TomAgent.execute_task() does today so the R2–R4 refactor
 (TaskService facade, policy engine, durable task state) can prove it changed
 nothing it did not mean to change (PRD supplement §S5 R1, TOM-MIG-002/008).
 
-Tests marked ``xfail(strict=True)`` are the opposite: PRD requirements TOM does
-NOT meet yet. They fail today on purpose. When a phase delivers the requirement,
-the test starts passing, strict-xfail turns that into a failure, and the marker
-must be removed — so a gap can't be closed (or reopened) silently.
+Gaps against the PRD are tracked with ``xfail(strict=True)``: they fail on purpose
+until a phase delivers the requirement, then strict-xfail forces the marker off so
+a gap can't be closed (or reopened) silently. The first three (task ids, blocked
+status, secret redaction) were delivered by R2/R3 and are now ordinary tests.
 """
 import asyncio
 import ast
@@ -68,7 +68,7 @@ def test_meta_commands_answer_without_any_llm_call(tom, run, command, response_t
 ])
 def test_hard_blocked_requests_stop_before_routing_or_approval(tom, run, command):
     result = run(command)
-    # Today a blocked result is the raw gate dict: it has no "status" key.
+    # The raw gate dict is preserved (safe=False); R2 adds status="blocked" on top.
     assert result.get("safe") is False
     assert "blocked" in result["message"].lower()
     assert tom.approvals.asked == []
@@ -140,18 +140,18 @@ def test_cli_and_desktop_both_submit_through_execute_task(launcher):
 def test_voice_action_requests_go_through_execute_task(tom, monkeypatch):
     seen = []
 
-    async def fake_execute(command):
-        seen.append(command)
+    async def fake_execute(command, interface=""):
+        seen.append((command, interface))
         return {"status": "success", "message": "**Done.**"}
     monkeypatch.setattr(tom, "execute_task", fake_execute)
 
     result = asyncio.run(tom.generate_voice_response("create a word document about solar power"))
-    assert seen == ["create a word document about solar power"]
+    assert seen == [("create a word document about solar power", "voice")]
     assert "**" not in result["message"]          # markdown stripped for speech
 
 
 def test_voice_small_talk_goes_straight_to_the_model(tom, monkeypatch):
-    async def fail_execute(command):
+    async def fail_execute(command, interface=""):
         raise AssertionError("small talk must not enter execute_task")
     monkeypatch.setattr(tom, "execute_task", fail_execute)
     tom.llm_stub.calls.clear()
@@ -162,20 +162,24 @@ def test_voice_small_talk_goes_straight_to_the_model(tom, monkeypatch):
     assert tom.llm_stub.calls == ["voice"]
 
 
-# ── Known gaps vs. the PRD (strict xfail: must flip when delivered) ──────
+# ── Former gap trackers, delivered (were strict xfail until R2/R3 landed) ─
 
-@pytest.mark.xfail(strict=True, reason="FR-003: tasks have no ID yet — delivered by R2 TaskService")
-def test_every_result_carries_a_task_id(run):
-    assert run("hello there").get("task_id")
-
-
-@pytest.mark.xfail(strict=True, reason="Blocked results lack a 'status' key — fixed with the R2 result contract")
-def test_blocked_results_carry_a_status(run):
-    assert run("transfer my bitcoin to this wallet now").get("status") == "blocked"
+def test_every_result_carries_a_task_id(tom, run):
+    """FR-003 (R2): every request is a durable task with an id and a terminal state."""
+    result = run("hello there")
+    assert result.get("task_id") and result["task_state"] == "SUCCEEDED"
+    rec = tom.tasks.get_task(result["task_id"])
+    assert rec.state.value == "SUCCEEDED" and rec.text == "hello there"
 
 
-@pytest.mark.xfail(strict=True, reason="TOM-MIG-009 / AT-010: audit log stores raw commands — R3 redaction")
+def test_blocked_results_carry_a_status(tom, run):
+    result = run("transfer my bitcoin to this wallet now")
+    assert result.get("status") == "blocked" and result["task_state"] == "REJECTED"
+
+
 def test_secrets_never_reach_the_audit_log(tom, run):
+    """TOM-MIG-009 / AT-010 (R3 redaction): neither the audit log nor the task store keeps the key."""
     secret = "gsk_TESTSECRET0123456789abcdef"
-    run(f"hello there, my groq key is {secret}")
+    result = run(f"hello there, my groq key is {secret}")
     assert secret not in _safety_log(tom)
+    assert secret not in tom.tasks.get_task(result["task_id"]).text
