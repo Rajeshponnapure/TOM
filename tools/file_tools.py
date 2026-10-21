@@ -47,6 +47,9 @@ class FileTools:
             return {"status": "error", "message": str(e)}
 
     def open_file(self, filepath: str):
+        # TOM_NO_AUTO_OPEN=1 (tests, headless checks) keeps created files from popping up on screen.
+        if os.environ.get("TOM_NO_AUTO_OPEN") == "1":
+            return
         try:
             os.startfile(filepath)
         except Exception:

@@ -454,7 +454,7 @@ rationale: [PRODUCT.md](docs/PRODUCT.md)). Opens at **1420×880**.
 │  ◈ Capabil.  │   └─────────────────────────────────────────┘  │
 │  ⚕ Health    │   profiles: Core TOM · Email · Instagram        │
 │  ◉ Memory    │   what TOM has learned · recall · reflect       │
-│  ♪ Voice     │   ▶ Run Agent      ♫ Voice Mode                 │
+│  ♪ Voice     │   ▶ Run Agent      ♪ Push to talk               │
 └──────────────┴───────────────────────────────────────────────┘
 ```
 
@@ -467,8 +467,10 @@ rationale: [PRODUCT.md](docs/PRODUCT.md)). Opens at **1420×880**.
 | **Health** | Runtime capability-health report (`tools/capability_health.py`) |
 | **Memory** | Long-term memory status, *What have you learned?* (reflect), recall search, recently stored rules and outcomes. Answers shaped by memory show a green **Remembering** card in Chat |
 
-**Agent profiles:** Core TOM · Email Agent · Instagram Agent. **Voice Mode** opens a
-push-to-talk window. Shortcuts: `Ctrl+D` Dashboard · `Ctrl+C` Chat.
+**Agent profiles:** Core TOM · Email Agent · Instagram Agent. **Push to talk** (sidebar, the
+🎤 Talk button in Chat, or `Ctrl+Space`) listens for one request, runs it like a typed message
+and reads the answer aloud. **♫ Voice** opens the orb window: push to talk, or **Hands-free** for
+a continuous conversation. Shortcuts: `Ctrl+Space` talk · `Ctrl+D` Dashboard · `Ctrl+C` Chat.
 
 ---
 
@@ -668,8 +670,12 @@ Settings live in `.env` (copy from [.env.example](.env.example)). Nothing is req
   `TOM_ASR_MODEL` (default `large-v3-turbo`), `TOM_ASR_MODEL_DIR` (an existing faster-whisper
   cache — TOM never downloads models), `TOM_ASR_LANGUAGE` (`en`, or `auto`), `TOM_ASR_DEVICE`
   (`auto` uses the GPU only when measured free VRAM allows). Text-to-speech: `TOM_TTS_ENGINE`
-  (`local` Windows voices, English (India) preferred when installed; `edge` = cloud opt-in using
-  `TOM_VOICE`, default `en-IN-PrabhatNeural`), `TOM_TTS_VOICE`, `TOM_TTS_RATE`.
+  (`local` Windows voices, female US English — Zira — by default; `edge` = cloud opt-in using
+  `TOM_VOICE`, default `en-US-JennyNeural`), `TOM_TTS_GENDER` (`female` default, `male`, `any`),
+  `TOM_TTS_VOICE`, `TOM_TTS_RATE` (default `1.15`, a little faster than normal). Both desktop apps
+  use the same push-to-talk: the 🎤 button or `Ctrl+Space` listens until you stop talking
+  (`TOM_VOICE_END_SILENCE`, default 2.5 s of quiet) or press it again (**Done**), up to
+  `TOM_VOICE_MAX_SECONDS` (60).
 - **Workspace & folders:** `TOM_WORKSPACE_DIR` (where deliverables are built — default
   `<Desktop>/TOM Workspace`), `TOM_DOWNLOADS_DIR`, `TOM_BROWSER_HEADLESS`.
 

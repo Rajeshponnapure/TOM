@@ -9,6 +9,24 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Never let a test read or write the user's real state. A leak check on 2026-10-21 (snapshot →
+# full suite → diff) found tests writing the owner's chat history, learning files, RAG store,
+# audit log, file-move undo journal and .env (it set OLLAMA_MODEL to a model that isn't
+# installed). Every runtime-state folder (memories/, tom_brain/, tom_logs/, data/ — see
+# tools/project_paths.STATE_DIRS) and the .env TOM writes settings to now point at a throwaway
+# location for the whole session. Must run before any TOM module is imported.
+if not os.environ.get("TOM_STATE_ROOT"):
+    import tempfile as _tempfile
+    os.environ["TOM_STATE_ROOT"] = _tempfile.mkdtemp(prefix="tom_test_state_")
+if not os.environ.get("TOM_ENV_FILE"):
+    os.environ["TOM_ENV_FILE"] = os.path.join(os.environ["TOM_STATE_ROOT"], ".env")
+# Deliverables a test creates must not land in the owner's Desktop "TOM Workspace" either.
+if not os.environ.get("TOM_WORKSPACE_DIR"):
+    os.environ["TOM_WORKSPACE_DIR"] = os.path.join(os.environ["TOM_STATE_ROOT"], "workspace")
+# Tests must never reach into the owner's real apps (WhatsApp Desktop is read through UI
+# Automation since 2026-10-21); a test that needs it injects a fake instead.
+os.environ["TOM_DISABLE_UI_AUTOMATION"] = "1"
+os.environ["TOM_NO_AUTO_OPEN"] = "1"          # created documents never pop up on the owner's screen
 # Long-term memory is local by default (ADR-005). Never let a test read or write the user's real
 # store in tom_brain/hindsight — every test session gets a throwaway one unless a test sets its own.
 if not os.environ.get("TOM_MEMORY_STATE_DIR"):

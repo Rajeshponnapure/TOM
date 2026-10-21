@@ -414,6 +414,19 @@ CRITICAL RULES:
                 return {"app": app, "target": details["contact"], "message": details["message"]}
         return None
 
+    # A trailing clause addressed to TOM, not part of the message (owner report 2026-10-21):
+    # "text mounish as hi if there are multiple people with the same name ... ask me ... which one".
+    _CHAT_DIRECTIVE = re.compile(
+        r"\s*[,;.]?\s*(?:and\s+|but\s+)?(?:"
+        r"(?:if|in case|when|whenever)\s+(?:there\s+(?:are|is|'?s)|you\s+(?:find|see|get)|(?:more than one|several|"
+        r"multiple|many)\b|the (?:name|contact)\b|it'?s\s+(?:ambiguous|unclear))"
+        r"|(?:please\s+)?(?:ask|check with|confirm with)\s+me\b"
+        r"|(?:and\s+)?show me (?:the )?(?:names|contacts|options|matches)\b"
+        r").*$", re.IGNORECASE)
+    _ASKS_TO_CONFIRM = re.compile(
+        r"\b(?:multiple|several|more than one|same name|prefix|suffix|similar|which one|ask me|confirm|check with me"
+        r"|show me the (?:names|contacts|options|matches))\b", re.IGNORECASE)
+
     def _extract_app_chat_details(self, command: str, app_re: str) -> Dict[str, str]:
         text = (command or "").strip()
         if "User request:" in text:
@@ -428,10 +441,24 @@ CRITICAL RULES:
             clean,
             flags=re.IGNORECASE,
         ).strip()
+        # Peel off instructions for TOM ("if there are several Mounish, ask me which one") so they
+        # are neither sent as text nor mistaken for the recipient; remember that the user wants to
+        # pick when more than one chat matches. A quoted message is never cut.
+        confirm = False
+        directive = self._CHAT_DIRECTIVE.search(clean)
+        if directive and not re.search(r"[\"“][^\"”]*$", clean[:directive.start()]):
+            confirm = bool(self._ASKS_TO_CONFIRM.search(directive.group(0)))
+            clean = clean[:directive.start()].strip().strip(".,")
 
         wa = rf'(?:\s+(?:on|via|through|using|in)\s+{app_re})?'
         verb = r'(?:send|text|message|tell|write|dm)'
         patterns = [
+            # send a (WhatsApp) message to Ravi saying I'll be late / send a text to Ravi: hi
+            rf'^(?:send|write)\s+(?:an?\s+)?(?:{app_re}\s+)?(?:message|msg|text)\s+to\s+(.+?)'
+            rf'{wa}\s*(?:saying|that says|which says|telling (?:him|her|them)|:)\s*(.+)$',
+            # text Mounish as hi / message Ravi with "on my way" / text Ravi with the message hi
+            rf'^{verb}\s+(?:to\s+)?((?:(?!to\b|as\b|with\b)[A-Za-z][\w.\']*)(?:\s+(?!to\b|as\b|with\b|on\b|via\b)'
+            rf'[A-Za-z][\w.\']*){{0,2}}){wa}\s+(?:as|with(?: the)?(?: message| text)?)\s*:?\s*(.+)$',
             # send Madhu a message on WhatsApp saying hello / text Madhu a message: hi
             rf'^{verb}\s+(.+?)\s+(?:an?\s+)?(?:message|msg|text){wa}\s*(?:saying|that says|which says|:)\s*(.+)$',
             # message Madhu on WhatsApp: happy birthday  (a colon marks where the message starts)
@@ -445,8 +472,8 @@ CRITICAL RULES:
             # text Madhu hello / open WhatsApp and text Madhu hello
             r'^(?:send|text|message|tell|write|say)\s+([A-Za-z][A-Za-z0-9_. -]{1,60}?)\s+(.+?)$',
         ]
-        # patterns 0-1 and 3-5 read (contact, message); pattern 2 reads (message, contact)
-        message_first = {2}
+        # pattern 4 reads (message, contact); every other pattern reads (contact, message)
+        message_first = {4}
 
         for idx, pattern in enumerate(patterns):
             match = re.search(pattern, clean, re.IGNORECASE)
@@ -469,8 +496,13 @@ CRITICAL RULES:
                 message = re.sub(r'^that\s+', '', message, flags=re.IGNORECASE)   # "tell Madhu that we're late"
             if contact.lower() in {"the", "a", "an", "my", "our", "your", "this", "that", "it", "them", "everyone"}:
                 continue        # "tell the team ..." is not a contact called "the"
+            if len(message) >= 2 and message[0] in "\"'“" and message[-1] in "\"'”":
+                message = message[1:-1].strip()          # text Ravi "on my way" → on my way
             if contact and message and not re.fullmatch(app_re, contact, re.IGNORECASE):
-                return {"contact": contact, "message": message}
+                out = {"contact": contact, "message": message}
+                if confirm:
+                    out["confirm_contact"] = "1"
+                return out
 
         return {}
 

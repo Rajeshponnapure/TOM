@@ -15,7 +15,6 @@ import html
 import os
 import sys
 import threading
-import time
 from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
@@ -26,7 +25,10 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
+from tom_core.voice import push_to_talk
+
 APP_NAME = os.environ.get("TOM_PRODUCT_NAME", "TOM")      # branding stays configurable (§S8)
+TALK_LABEL = "🎙  Push to talk"
 
 STATE_COLORS = {
     "CREATED": "#8b95a7", "RUNNING": "#4f9dff", "AWAITING_APPROVAL": "#f5a524", "BLOCKED": "#f5a524",
@@ -217,6 +219,7 @@ class TomWindow(QMainWindow):
         self.voice: Any = None
         self._selected_task: Optional[str] = None
         self._speak_next = False          # set when a request came from push-to-talk: answer aloud
+        self._listening = False           # a push-to-talk capture/recognition is running
         self._build_ui()
         self._wire()
         self.host.start()
@@ -286,10 +289,11 @@ class TomWindow(QMainWindow):
         self.input.setEnabled(False)
         self.send_btn = QPushButton("Send", objectName="primary")
         self.send_btn.setEnabled(False)
-        self.talk_btn = QPushButton("🎙  Push to talk", objectName="talk")
+        self.talk_btn = QPushButton(TALK_LABEL, objectName="talk")
         self.talk_btn.setCheckable(True)
         self.talk_btn.setEnabled(False)
-        self.talk_btn.setToolTip("Click, speak one request, TOM answers aloud.  Ctrl+Space")
+        self.talk_btn.setToolTip("Click and speak one request; it ends when you stop talking, or click "
+                                 "again when you're done. TOM answers aloud.  Ctrl+Space")
         self.hush_btn = QPushButton("Stop speaking")
         row.addWidget(self.input, 1)
         row.addWidget(self.send_btn)
@@ -473,6 +477,8 @@ class TomWindow(QMainWindow):
                     cancelled.add(rec.id)
         n = len(cancelled)
         self._hush()
+        if self.voice is not None and hasattr(self.voice, "cancel_listening"):
+            self.voice.cancel_listening()        # an open microphone is dropped, not sent
         self.status_lbl.setText(f"Emergency stop: {n} cancellation(s) requested")
         self._append("System", f"Emergency stop — {n} task cancellation(s) requested; speech stopped.", "#ef5350")
 
@@ -539,39 +545,44 @@ class TomWindow(QMainWindow):
                 os.environ.setdefault("VOICE_OUTPUT_ENABLED", "true")
                 from tools.voice_tools import VoiceTools
                 self.voice = VoiceTools()
-                self.voice.input_enabled = self.voice.output_enabled = True
-                if not self.voice._recognizer:
-                    self.voice._setup_input()
-                if not (self.voice._tts_adapter or self.voice._tts_engine):
-                    self.voice._setup_output()
+                push_to_talk.prepare(self.voice)
         return self.voice
 
     @Slot(bool)
     def _on_talk(self, on: bool) -> None:
         if not on:
+            # Clicked again while listening: the request is complete, recognise it now.
+            if self._listening and self.voice is not None:
+                push_to_talk.finish(self.voice)
+                self.talk_btn.setText("Recognising…")
             return
+        if self._listening:
+            # The previous request is still being recognised; one microphone user at a time.
+            self.talk_btn.setChecked(False)
+            return
+        self._listening = True
+        self.talk_btn.setText("■  Done")
 
         def _listen() -> None:
             try:
                 v = self._voice()
-                self.voice_status.emit("Listening… speak now.")
-                started = time.perf_counter()
-                res = v.listen_neural(timeout=8)
-                if res.get("status") == "success":
-                    self.voice_status.emit(f"Heard in {time.perf_counter() - started:.1f}s "
-                                           f"(recognised locally in {res.get('asr_seconds', 0):.2f}s)")
-                    self.voice_heard.emit(res["text"])
+                error = push_to_talk.prepare(v) if self._voice_factory is None else ""
+                if error:
+                    heard = push_to_talk.Heard("", f"Voice input could not start: {error}")
                 else:
-                    self.voice_status.emit(res.get("message", "Didn't catch that."))
-                    self.voice_heard.emit("")
+                    self.voice_status.emit("Listening… speak now.")
+                    heard = push_to_talk.capture(v)
             except Exception as exc:
-                self.voice_status.emit(f"Voice error: {exc}")
-                self.voice_heard.emit("")
+                heard = push_to_talk.Heard("", f"Voice error: {exc}")
+            self.voice_status.emit(heard.message)
+            self.voice_heard.emit(heard.text)
         threading.Thread(target=_listen, name="tom-qt-listen", daemon=True).start()
 
     @Slot(str)
     def _on_voice_heard(self, text: str) -> None:
+        self._listening = False
         self.talk_btn.setChecked(False)
+        self.talk_btn.setText(TALK_LABEL)
         if text:
             self._speak_next = True
             self.send(text, interface="voice")
@@ -595,6 +606,7 @@ class TomWindow(QMainWindow):
         if self.voice is not None:
             try:
                 self.voice.stop_speaking()
+                self.voice.cancel_listening()
                 self.voice.release_recognizer()
             except Exception:
                 pass

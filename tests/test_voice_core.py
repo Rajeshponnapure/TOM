@@ -14,7 +14,9 @@ from tom_core.voice.tts import SpeechClip, TTSError, choose_voice, speech_text  
 from tom_core.voice.workers import WorkerError, WorkerProcess  # noqa: E402
 
 _VOICE_ENV = ("TOM_ASR_ENGINE", "VOICE_RECOGNITION_ENGINE", "TOM_ASR_LANGUAGE", "TOM_ASR_MODEL",
-              "TOM_ASR_MODEL_DIR", "TOM_TTS_ENGINE", "TOM_TTS_VOICE", "TOM_VOICE", "TOM_EDGE_VOICE")
+              "TOM_ASR_MODEL_DIR", "TOM_TTS_ENGINE", "TOM_TTS_VOICE", "TOM_VOICE", "TOM_EDGE_VOICE",
+              "TOM_TTS_GENDER", "TOM_TTS_RATE", "TOM_VOICE_RATE", "TOM_VOICE_END_SILENCE",
+              "TOM_VOICE_MAX_SECONDS")
 
 
 @pytest.fixture
@@ -31,8 +33,11 @@ def test_defaults_are_local(clean_env):
     assert cfg.asr_engine == "local" and not cfg.asr_is_cloud
     assert cfg.tts_engine == "local" and not cfg.tts_is_cloud
     assert cfg.asr_language == "en"
-    assert cfg.tts_voice_preference[0] == "en-IN"          # Indian English voice first
-    assert cfg.edge_voice == "en-IN-PrabhatNeural"
+    assert cfg.tts_voice_preference[0] == "en-US"          # US English voice first (owner, 2026-10-21)
+    assert cfg.tts_gender == "female"                       # owner preference, 2026-10-21
+    assert cfg.edge_voice == "en-US-JennyNeural"
+    assert cfg.tts_rate == 1.15 and cfg.edge_rate == "+15%"  # "a bit" faster than normal
+    assert cfg.listen_end_silence == 2.5 and cfg.listen_max_seconds == 60.0
 
 
 def test_cloud_engines_need_an_explicit_choice(clean_env):
@@ -58,7 +63,7 @@ def test_language_auto_and_voice_preferences(clean_env):
     clean_env.setenv("TOM_VOICE", "en-IN-NeerjaNeural")     # legacy edge voice setting still honoured
     cfg = vconfig.load_config()
     assert cfg.asr_language is None
-    assert cfg.tts_voice_preference[:3] == ["Heera", "Ravi", "en-IN"]
+    assert cfg.tts_voice_preference[:3] == ["Heera", "Ravi", "en-US"]
     assert cfg.edge_voice == "en-IN-NeerjaNeural"
 
 

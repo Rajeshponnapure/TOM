@@ -456,40 +456,35 @@ def test_open_routing():
 # Desktop UI Tests
 # ════════════════════════════════════════════════════════════════
 
-@test("Desktop UI: voice toggle contract", "Core-DesktopUI", 10)
-def test_desktop_voice_toggle():
+@test("Desktop UI: push-to-talk contract", "Core-DesktopUI", 10)
+def test_desktop_push_to_talk():
+    from tom_core.voice.push_to_talk import Heard
     from tom_desktop_app import TomDesktopApp
 
     app = TomDesktopApp.__new__(TomDesktopApp)
     app.voice_mode_enabled = False
-    app.agent_ready = False
-    app.agent = None
+    app.agent_ready = True
+    app.processing = False
+    app._voice_ui_window = None
+    app.activity_counts = {"voice": 0}
+    app.recent_events = []
     app.voice_btn = type("MockButton", (), {
         "configure": lambda self, **kwargs: setattr(self, "last_config", kwargs),
     })()
-    app.voice = type("MockVoice", (), {
-        "input_enabled": False,
-        "output_enabled": False,
-        "conversation_active": False,
-        "status": lambda self: {"voice_input_enabled": True, "voice_input_error": ""},
-        "_setup_input": lambda self: None,
-        "_setup_output": lambda self: None,
-        "start_conversation_mode": lambda self, process_fn, on_status: None,
-        "stop_conversation_mode": lambda self: {"status": "stopped"},
-    })()
+    app.voice = object()
     app._append_chat = lambda *args, **kwargs: None
     app._refresh_dashboard = lambda *args, **kwargs: None
     app._set_status = lambda *args, **kwargs: None
+    app._show_view = lambda *args, **kwargs: None
+    app._enqueue = lambda *args: None            # the listening thread's result is dropped here
+    sent = []
+    app.send_message = lambda text=None, interface="desktop": sent.append((text, interface))
 
-    TomDesktopApp._toggle_voice_mode(app)
-    assert app.voice_mode_enabled is True, "Voice mode should become enabled"
-    assert app.voice.input_enabled is True, "Voice input should be enabled"
-    assert app.voice.output_enabled is True, "Voice output should be enabled"
-
-    TomDesktopApp._toggle_voice_mode(app)
-    assert app.voice_mode_enabled is False, "Voice mode should become disabled"
-    assert app.voice.input_enabled is False, "Voice input should be disabled"
-    assert app.voice.output_enabled is False, "Voice output should be disabled"
+    TomDesktopApp._push_to_talk(app)
+    assert app.voice_mode_enabled is True, "Push-to-talk should be listening"
+    TomDesktopApp._on_push_to_talk_heard(app, Heard("open chrome", "Heard"))
+    assert app.voice_mode_enabled is False, "Listening should end after one request"
+    assert sent == [("open chrome", "voice")], "Heard words must go out as a voice task"
 
 
 # ════════════════════════════════════════════════════════════════

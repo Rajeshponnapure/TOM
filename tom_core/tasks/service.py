@@ -16,6 +16,19 @@ from tom_core.tasks.store import TaskStore, open_store
 
 _current_task: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("tom_current_task", default=None)
 
+
+_current_interface: contextvars.ContextVar[str] = contextvars.ContextVar("tom_current_interface", default="")
+
+
+def current_task_id() -> Optional[str]:
+    """Id of the task whose handler is running in this context (None outside a task)."""
+    return _current_task.get()
+
+
+def current_interface() -> str:
+    """Interface ("desktop", "voice", "autonomous", …) of the task running in this context."""
+    return _current_interface.get()
+
 # Response types whose "success" is the answer itself (read-only, nothing outside TOM changed),
 # so delivering it is the verification. Everything else that claims success without evidence is
 # UNVERIFIED (FR-008: never mark a side effect successful just because a handler returned).
@@ -23,6 +36,8 @@ OBSERVATION_TYPES = frozenset({
     "chat", "voice_chat", "capabilities", "health", "capability_health", "skill_usage", "logs",
     "voice_check", "memory", "memory_status", "memory_recall", "memory_reflect", "feedback",
     "explanation", "web_search", "screen_read",
+    # read-only answers added with the quick-action modes (2026-10-21)
+    "skill_list", "skill_route", "engine_news", "engine_websafety", "engine_voiceplus", "port_scan",
 })
 FAILED_STATUSES = frozenset({"error", "unsupported", "unhandled", "failed", "timeout"})
 
@@ -68,6 +83,7 @@ class TaskService:
         """Run one request as a task. Returns the handler's result plus task_id / task_state."""
         rec = self.store.create(text, interface, parent_id=_current_task.get())
         token = _current_task.set(rec.id)
+        iface_token = _current_interface.set(interface)
         task = asyncio.current_task()
         loop = asyncio.get_running_loop()
         try:
@@ -98,6 +114,7 @@ class TaskService:
             with self._lock:
                 self._running.pop(rec.id, None)
             _current_task.reset(token)
+            _current_interface.reset(iface_token)
 
     def get_task(self, task_id: str) -> Optional[TaskRecord]:
         return self.store.get(task_id)

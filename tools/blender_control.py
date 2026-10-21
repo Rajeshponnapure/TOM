@@ -3,6 +3,7 @@ TOM Blender Control — Automates Blender 3D modeling via Python API.
 Generates and executes Blender Python scripts for 3D creation.
 """
 import os
+import re
 import json
 import subprocess
 import sys
@@ -26,17 +27,16 @@ class BlenderControl:
             self._bpy = None
 
     def _find_blender(self) -> Optional[str]:
-        candidates = [
-            r"C:\Program Files\Blender Foundation\Blender 4.3\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 4.0\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 3.6\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 3.5\blender.exe",
-        ]
-        for path in candidates:
-            if os.path.exists(path):
-                return path
+        configured = (os.environ.get("BLENDER_PATH") or "").strip().strip('"')
+        if configured and os.path.isfile(configured):
+            return configured
+        # Any installed version, newest first (the fixed 3.5–4.3 list missed newer releases).
+        import glob
+        found = sorted(glob.glob(r"C:\Program Files\Blender Foundation\Blender *\blender.exe"),
+                       key=lambda p: [int(x) for x in re.findall(r"\d+", os.path.basename(os.path.dirname(p)))],
+                       reverse=True)
+        if found:
+            return found[0]
         try:
             kwargs = {"capture_output": True, "text": True, "timeout": 5}
             if os.name == "nt":

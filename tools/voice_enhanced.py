@@ -609,9 +609,10 @@ class VoiceEnhanced:
         self.min_utterance_length = int(os.environ.get("VE_MIN_UTTERANCE", "1"))
         self.emotion_history_size = int(os.environ.get("VE_EMOTION_HISTORY", "50"))
         self.conversation_tts_enabled = os.environ.get("VE_TTS_ENABLED", "true").lower() == "true"
-        # Indian English by default (owner preference); only used when online voices are opted into.
-        self.tts_voice = os.environ.get("VE_TTS_VOICE", "en-IN-PrabhatNeural")
-        self.tts_rate = os.environ.get("VE_TTS_RATE", "+0%")
+        # Female US English, a bit faster than normal (owner preference); only used when online
+        # voices are opted into.
+        self.tts_voice = os.environ.get("VE_TTS_VOICE", "en-US-JennyNeural")
+        self.tts_rate = os.environ.get("VE_TTS_RATE", "+15%")
 
         # State
         self._conversation_history: List[Dict[str, Any]] = []

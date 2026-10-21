@@ -56,24 +56,53 @@ _DO_IT_NOW = re.compile(r"\b(?:now|right now|then|and then)\b\s*[.!]?\s*$|\b(?:d
                         re.IGNORECASE)
 
 
+_QUESTION_START = re.compile(
+    r"^(?:what|how|why|when|where|who|whom|whose|which|is|are|am|was|were|do|does|did|can|could|should"
+    r"|would|will|shall|may|might|have|has|had)\b", re.IGNORECASE)
+# A request or question aimed at TOM anywhere in the sentence ("Instead of explaining, can you play it?").
+_ASKS_TOM = re.compile(r"\b(?:can|could|would|will|do|did|are|have) you\b|\bare you able\b|\bdo you know\b",
+                       re.IGNORECASE)
+_STANDING_REQUEST = re.compile(r"\b(?:can|could|would|will) you (?:please )?(?:always|never)\b", re.IGNORECASE)
+
+
+def is_question(text: str) -> bool:
+    """True for a question or a request put to TOM — something to answer or do, never a rule to store.
+
+    Owner report 2026-10-21: "Instead of explaining me the instructions, can you actually play the
+    Minecraft game?" was stored as a standing instruction because "instead of" looked like a rule.
+    "Can you always / never …" is the exception: that *is* a standing request.
+    """
+    body = _LEAD.sub("", text or "", count=1).strip()
+    if not body or _STANDING_REQUEST.search(body):
+        return False
+    return body.endswith("?") or bool(_QUESTION_START.match(body)) or bool(_ASKS_TOM.search(body))
+
+
 def is_correction(text: str) -> bool:
-    return bool(_CORRECTION_START.search(text or ""))
+    return bool(_CORRECTION_START.search(text or "")) and not is_question(text)
 
 
 def _stated_rule(text: str) -> bool:
     """A declarative rule with no task verb up front ("PDFs always go in Invoices")."""
     body = _LEAD.sub("", text or "", count=1).strip()
-    if re.match(r"^(?:what|how|why|when|where|who|which|is|are|do|does|did|can|could|should|would|will|shall)\b",
-                body, re.IGNORECASE):
+    if _QUESTION_START.match(body):
         # Questions are not rules — except "can you always / never …" requests.
-        return bool(re.match(r"^(?:can|could|would|will) you (?:please )?(?:always|never)\b", body, re.IGNORECASE))
+        return bool(_STANDING_REQUEST.match(body))
+    if is_question(body):
+        return False
     return bool(body and _RULE_WORDS.search(body) and not _TASK_START.search(body))
 
 
 def is_preference_statement(text: str) -> bool:
-    """True when the message states a rule/preference/correction worth keeping."""
+    """True when the message states a rule/preference/correction worth keeping.
+
+    Explicit markers ("from now on", "always …", "remember that") count even inside a question
+    ("From now on, can you keep emails short?"); otherwise a question is never a preference.
+    """
     t = text or ""
-    return bool(_PREF_START.search(t) or _PREF_ANYWHERE.search(t) or is_correction(t) or _stated_rule(t))
+    if _PREF_START.search(t) or _PREF_ANYWHERE.search(t):
+        return True
+    return bool(is_correction(t) or _stated_rule(t))
 
 
 def is_pure_preference(text: str) -> bool:
@@ -81,7 +110,9 @@ def is_pure_preference(text: str) -> bool:
     t = (text or "").strip()
     if not t or _DO_IT_NOW.search(t):
         return False
-    return bool(_PREF_START.search(t) or _stated_rule(t))
+    if _PREF_START.search(t):
+        return True
+    return _stated_rule(t)
 
 
 # ── Task categories ──────────────────────────────────────────────────────

@@ -1,7 +1,8 @@
 """Text-to-speech adapters. Each turns text into an audio file the caller plays (and can interrupt).
 
-LocalWindowsTTS — Windows OneCore voices via a WinRT worker process; prefers English (India). Default.
-EdgeTTS         — Microsoft online neural voices (en-IN-PrabhatNeural by default); text leaves the machine (opt-in).
+LocalWindowsTTS — Windows OneCore voices via a WinRT worker process; prefers a female US English
+                  voice (Zira). Default.
+EdgeTTS         — Microsoft online neural voices (en-US-JennyNeural by default); text leaves the machine (opt-in).
 """
 from __future__ import annotations
 
@@ -27,24 +28,37 @@ class TTSError(RuntimeError):
     pass
 
 
-def choose_voice(voices: Sequence[Tuple[str, str]], preference: Sequence[str]) -> Optional[int]:
+def choose_voice(voices: Sequence[Tuple[str, ...]], preference: Sequence[str],
+                 gender: Optional[str] = None) -> Optional[int]:
     """Index of the best voice. Each preference matches a language tag ("en-IN") or a name part ("Mark").
 
-    Falls back to the first English voice, then to any voice. None only when there are no voices.
+    Voices are (name, language) or (name, language, gender). With a gender, the whole search runs
+    first over voices of that gender only, so a female voice of any preference beats a male voice of
+    a better one. Falls back to the first English voice, then to any voice. None only when there
+    are no voices.
     """
     if not voices:
         return None
-    for pref in preference:
-        p = pref.strip().lower()
-        if not p:
-            continue
-        for i, (name, lang) in enumerate(voices):
-            if (lang or "").lower() == p or p in (name or "").lower():
-                return i
-    for i, (_name, lang) in enumerate(voices):
-        if (lang or "").lower().startswith("en"):
-            return i
-    return 0
+    want = (gender or "").strip().lower()
+
+    def _search(pool: List[int]) -> Optional[int]:
+        for pref in preference:
+            p = pref.strip().lower()
+            if not p:
+                continue
+            for i in pool:
+                name, lang = voices[i][0], voices[i][1]
+                if (lang or "").lower() == p or p in (name or "").lower():
+                    return i
+        return next((i for i in pool if (voices[i][1] or "").lower().startswith("en")), None)
+
+    if want:
+        matching = [i for i, v in enumerate(voices) if len(v) > 2 and (v[2] or "").lower() == want]
+        found = _search(matching)
+        if found is not None:
+            return found
+    found = _search(list(range(len(voices))))
+    return 0 if found is None else found
 
 
 _MD = [
@@ -99,19 +113,17 @@ class LocalWindowsTTS(TTSEngine):
     def voices(self) -> List[Dict[str, str]]:
         return list(self._ensure_worker().start().get("voices", []))
 
-    def has_indian_english_voice(self) -> bool:
-        return any(str(v.get("language", "")).lower() == "en-in" for v in self.voices())
-
     def synthesize(self, text: str) -> SpeechClip:
         try:
             reply = self._ensure_worker().request(
                 "synth", timeout=30.0, text=text, preference=self.config.tts_voice_preference,
-                rate=self.config.tts_rate)
+                gender=self.config.tts_gender, rate=self.config.tts_rate)
         except Exception as exc:
             raise TTSError(f"Windows voice failed: {exc}") from None
         self.voice = reply.get("voice", "")
         return SpeechClip(path=reply["wav"], engine=self.name, voice=self.voice,
-                          details={"language": reply.get("language", ""), "seconds": reply.get("seconds")})
+                          details={"language": reply.get("language", ""), "gender": reply.get("gender", ""),
+                                   "seconds": reply.get("seconds")})
 
     def status(self) -> Dict[str, Any]:
         return {"engine": self.name, "cloud": False, "voice": self.voice}

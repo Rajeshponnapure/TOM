@@ -21,8 +21,9 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
 from typing import Any
+
+from tools.project_paths import env_file
 
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 # Reasoning models spend part of the token budget on hidden reasoning; a tiny
@@ -49,7 +50,7 @@ def groq_vision_model() -> str:
 
 def _env_file_value(key: str) -> str:
     """Value for `key` as written in the project's .env ("" when absent)."""
-    path = Path(__file__).resolve().parents[1] / ".env"
+    path = env_file()
     try:
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
@@ -113,7 +114,7 @@ def persist_provider(name: str, env_path=None) -> None:
     """
     try:
         if env_path is None:
-            env_path = Path(__file__).resolve().parents[1] / ".env"
+            env_path = env_file()            # TOM_ENV_FILE in tests
         lines: list = env_path.read_text(encoding="utf-8").splitlines() \
             if env_path.is_file() else []
         pattern = re.compile(r"^\s*(?:export\s+)?TOM_LLM_PROVIDER\s*=")

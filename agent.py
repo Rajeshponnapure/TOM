@@ -3,7 +3,7 @@ import json
 import os
 import re
 import subprocess
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -34,8 +34,9 @@ from tools.nlp_parser import CommandParser
 from tools.rag_memory import get_rag, RAGMemory
 from tools.self_evolution import get_evolution, SelfEvolution
 from tools.file_analyzer import FileAnalyzer
-from tools.project_paths import PROJECT_ROOT, project_path_str
+from tools.project_paths import PROJECT_ROOT, env_file, project_path_str, workspace_path
 from tools.skill_manager import SkillManager, SkillRoute
+from tom_core import skill_modes
 from tools.capability_resolver import CapabilityResolver
 from tools.hindsight_memory import get_memory, MemoryHit, TAG_PREFERENCE, TAG_CORRECTION, TAG_TASK
 from tools import memory_rules
@@ -362,7 +363,7 @@ class TomAgent:
         """
         try:
             if env_path is None:
-                env_path = PROJECT_ROOT / ".env"
+                env_path = env_file()            # TOM_ENV_FILE in tests
             lines: list = env_path.read_text(encoding="utf-8").splitlines() \
                 if env_path.is_file() else []
             keys = (f"{env_prefix}_MODEL", f"{env_prefix}_FAST_MODEL", f"{env_prefix}_CODE_MODEL")
@@ -467,13 +468,20 @@ class TomAgent:
         return "\n".join(lines)[:max_chars]
 
     def _relevant_preferences(self, command: str, limit: int = 3) -> list:
-        """Recalled preferences worth showing the user for this request."""
+        """Recalled preferences worth showing the user for this request.
+
+        Only for a recognisable kind of task (email, files, documents …). Casual chat is "general",
+        and every recalled preference matched it, so "I'm not telling you something but I'm asking"
+        was answered with an unrelated remembered instruction (owner report 2026-10-21).
+        """
         category = memory_rules.categorize(command)
+        if category == "general":
+            return []
         shown = []
         for h in getattr(self, "_recalled", None) or []:
             if not h.is_preference:
                 continue
-            if category != "general" and memory_rules.categorize(h.text) not in (category, "general"):
+            if memory_rules.categorize(h.text) not in (category, "general"):
                 continue
             shown.append(h.text)
             if len(shown) >= limit:
@@ -787,7 +795,12 @@ class TomAgent:
         return await tasks.submit_task(command, interface or "unknown")
 
     async def _execute_task_legacy(self, command: str) -> Dict[str, Any]:
-        safe_print(f"\nTOM RECEIVED: {command}\n")
+        # A quick-action mode arrives as a tag on the text (tom_core.skill_modes); the user's own
+        # words are what get stored, parsed and remembered.
+        command, mode = skill_modes.split(command)
+        if mode is not None:
+            command = skill_modes.compose(mode, command)
+        safe_print(f"\nTOM RECEIVED: {command}" + (f"  [mode: {mode.label}]" if mode else "") + "\n")
         self.chat_memory.append("user", command)
         task_started_at = time.perf_counter()
         telemetry_skill_route = None
@@ -876,6 +889,11 @@ class TomAgent:
                             "message": f"Voice stack failed to load: {_vt_err}. "
                                        f"Fix: pip install SpeechRecognition pyttsx3 pyaudio edge-tts pygame"}
 
+            # ── An answer to a question TOM just asked ("which Mounish?") ──
+            answered = await self._answer_pending_choice(command)
+            if answered is not None:
+                return answered
+
             # ── Long-term memory: meta commands, preferences, recall ──────
             mem_result = await self._memory_command(command)
             if mem_result is not None:
@@ -886,18 +904,20 @@ class TomAgent:
                 if memory_rules.is_pure_preference(command):
                     saved = await self._memory_write_settled(retained_before)
                     return self._acknowledge_preference(command, saved=saved)
-            if self.memory.available:
-                # Runs while the request is being parsed — no added latency.
-                recall_task = asyncio.create_task(self.memory.arecall(command, limit=8))
+            mode_result = await self._run_skill_mode(mode, command) if mode is not None else None
+            if mode_result is None:
+                if self.memory.available:
+                    # Runs while the request is being parsed — no added latency.
+                    recall_task = asyncio.create_task(self.memory.arecall(command, limit=8))
 
-            safe_print("[STEP 1] Understanding your request...")
-            try:
-                parsed = await self.understand_command(command)
-            finally:
-                if recall_task is not None:
-                    self._recalled = await recall_task
-                    if self._recalled:
-                        safe_print(f"[MEMORY] Recalled {len(self._recalled)} relevant memories.")
+                safe_print("[STEP 1] Understanding your request...")
+                try:
+                    parsed = await self.understand_command(command)
+                finally:
+                    if recall_task is not None:
+                        self._recalled = await recall_task
+                        if self._recalled:
+                            safe_print(f"[MEMORY] Recalled {len(self._recalled)} relevant memories.")
             command_lower = command.lower().strip()
             intent = parsed.get("intent", "")
             safe_print(f"[STEP 2] Detected intent: {intent}")
@@ -909,14 +929,14 @@ class TomAgent:
 
             # ── Feedback handling ─────────────────────────────────────────
             # User says "that was wrong", "too long", "more detail", etc.
-            if intent == "give_feedback" or any(
+            if mode_result is None and (intent == "give_feedback" or any(
                 kw in command_lower for kw in (
                     "that was wrong", "incorrect answer", "bad response",
                     "too long", "too short", "more detail", "be more concise",
                     "be more casual", "be more professional", "use bullet",
                     "no bullets", "in prose", "bad job", "not helpful",
                 )
-            ):
+            )):
                 if self.evolution:
                     msg = self.evolution.learn_from_feedback(
                         command, self._last_command, self._last_response
@@ -931,7 +951,10 @@ class TomAgent:
             # e.g. "check my github repos", "list slack channels",
             #      "post to slack #general: hello", "get weather in London"
             chat_request = self.nlp_parser.extract_chat_request(command)
-            if self._is_delete_request(command_lower):
+            if mode_result is not None:
+                result = mode_result
+
+            elif self._is_delete_request(command_lower):
                 # File/folder deletion — always warns and asks before removing.
                 result = await self.execute_delete(command, parsed)
 
@@ -1514,15 +1537,9 @@ class TomAgent:
                         "message": f"**{d.get('city','')}: {d.get('temperature_c')}°C** — {d.get('condition','')}. "
                                    f"Humidity {d.get('humidity_pct')}%, Wind {d.get('wind_kph')} km/h"}
             elif connector == "websearch":
-                q = command.lower().replace("search the web for ", "").replace("look up online ", "").replace("google ", "")
-                res = await self.mcp.call("websearch", "search", {"query": q})
-                d   = res.get("data", {}) or {}
-                abstract = d.get("abstract", "")
-                related  = d.get("related", [])[:4]
-                msg = abstract if abstract else "No instant answer found."
-                if related:
-                    msg += "\n\nRelated:\n" + "\n".join(f"• {r['title']}" for r in related if r.get("title"))
-                return {"status": "success", "message": msg}
+                # Real results (tools.web_search); the DuckDuckGo Instant Answer API this used only
+                # returns encyclopedia abstracts, so most searches said "No instant answer found."
+                return await self._web_search(command, parsed)
             elif connector == "slack":
                 return await self._mcp_slack(command, command_lower, parsed)
             elif connector == "calendar":
@@ -1732,6 +1749,62 @@ class TomAgent:
                 c = c[:-len(suffix)]
         return c.strip()
 
+    # ── Structured (JSON) content from the model ────────────────────────
+    @staticmethod
+    def _parse_model_json(text: str) -> Any:
+        """The JSON object in a model reply, tolerating fences, chatter, comments and trailing commas.
+
+        Word/Excel/PowerPoint/PDF content used plain json.loads; one stray comma from a small local
+        model turned a requested document into a placeholder (owner report 2026-10-21).
+        """
+        s = (text or "").strip()
+        if "```" in s:
+            fenced = re.search(r"```(?:json)?\s*(.*?)```", s, re.S)
+            if fenced:
+                s = fenced.group(1).strip()
+        start = min([i for i in (s.find("{"), s.find("[")) if i >= 0], default=-1)
+        if start > 0:
+            s = s[start:]
+        # Cut after the matching closing bracket (ignores trailing chatter).
+        depth, in_str, esc, end = 0, False, False, len(s)
+        for i, ch in enumerate(s):
+            if in_str:
+                esc = (ch == "\\" and not esc)
+                if ch == '"' and not esc:
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch in "{[":
+                depth += 1
+            elif ch in "}]":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        s = s[:end]
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError:
+            repaired = re.sub(r"//[^\n]*", "", s)                     # // comments
+            repaired = re.sub(r",\s*([}\]])", r"\1", repaired)        # trailing commas
+            repaired = re.sub(r"[“”]", '"', repaired)       # smart quotes
+            return json.loads(repaired)
+
+    async def _model_json(self, prompt, payload: Dict[str, Any], label: str, llm=None) -> Any:
+        """Ask for JSON; on a parse error ask once more with the error, then give up (raises)."""
+        resp = await self._invoke_llm(prompt, payload, label, llm)
+        try:
+            return self._parse_model_json(resp.content)
+        except (json.JSONDecodeError, ValueError) as first_error:
+            retry = self._safe_prompt([
+                ("system", "You fix JSON. Return ONLY the corrected, valid JSON — no explanation."),
+                ("user", "This JSON is invalid ({error}). Correct it and return valid JSON only:\n\n{bad}"),
+            ])
+            resp2 = await self._invoke_llm(retry, {"error": str(first_error), "bad": resp.content[:8000]},
+                                           f"{label}_json_retry", llm)
+            return self._parse_model_json(resp2.content)
+
     # ── PROFESSIONAL WORD DOCUMENT ──────────────────────────────────────
 
     async def _create_word_doc(self, command: str, parsed: Dict) -> Dict[str, Any]:
@@ -1754,15 +1827,9 @@ class TomAgent:
             ("user", "Conversation memory:\n{memory}\n\nCreate document content for:\n{command}\n\nSubject: {subject}\nPerson: {person}"),
         ])
         try:
-            resp = await self._invoke_llm(prompt, {"memory": memory_context, "command": command,
-                                                     "subject": subject, "person": person},
-                                           "word_doc", self.code_llm)
-            content = resp.content.strip()
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            structure = json.loads(content)
+            structure = await self._model_json(prompt, {"memory": memory_context, "command": command,
+                                                        "subject": subject, "person": person},
+                                               "word_doc", self.code_llm)
             result = await self.file_tools.create_word_document(
                 file_name,
                 title=structure.get("title", subject),
@@ -1806,14 +1873,8 @@ class TomAgent:
             ("user", "Conversation memory:\n{memory}\n\nCreate spreadsheet for:\n{command}\n\nSubject: {subject}"),
         ])
         try:
-            resp = await self._invoke_llm(prompt, {"memory": memory_context, "command": command, "subject": subject},
-                                           "excel", self.code_llm)
-            content = resp.content.strip()
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            sheets = json.loads(content).get("sheets", [])
+            sheets = (await self._model_json(prompt, {"memory": memory_context, "command": command,
+                                                       "subject": subject}, "excel", self.code_llm)).get("sheets", [])
             result = await self.file_tools.create_excel_workbook(file_name, sheets=sheets)
             if result["status"] == "success":
                 self.file_tools.open_file(result["path"])
@@ -1873,16 +1934,10 @@ class TomAgent:
         ])
         try:
             safe_print(f"[PPT] Generating slide content with LLM...")
-            resp = await self._invoke_llm(prompt, {"memory": memory_context, "command": command,
-                                                     "subject": subject, "internet_content": internet_content[:3000],
-                                                     "slide_count": str(requested_slides)},
-                                           "presentation", self.llm)
-            content = resp.content.strip()
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            deck = json.loads(content)
+            deck = await self._model_json(prompt, {"memory": memory_context, "command": command,
+                                                   "subject": subject, "internet_content": internet_content[:3000],
+                                                   "slide_count": str(requested_slides)},
+                                          "presentation", self.llm)
             # An explicitly requested theme ("gaming theme", "floral", "bright
             # colours", "gradient") overrides whatever style the LLM guessed.
             theme = deck.get("theme")
@@ -1951,14 +2006,8 @@ class TomAgent:
             ("user", "Conversation memory:\n{memory}\n\nCommand: {command}\n\nSubject: {subject}"),
         ])
         try:
-            resp = await self._invoke_llm(prompt, {"memory": memory_context, "command": command, "subject": subject},
-                                           "pdf")
-            content = resp.content.strip()
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            report = json.loads(content)
+            report = await self._model_json(prompt, {"memory": memory_context, "command": command,
+                                                     "subject": subject}, "pdf")
             result = await self.file_tools.create_pdf_report(
                 file_name, title=report.get("title", subject),
                 author="TOM AI", sections=report.get("sections", []),
@@ -2026,7 +2075,7 @@ class TomAgent:
                     "unit_price": _np.round(rng.uniform(1.5, 90.0, n), 2),
                 })
                 df_s["revenue"] = _np.round(df_s["units_sold"] * df_s["unit_price"], 2)
-                _dir = project_path_str("output", "analysis")
+                _dir = str(workspace_path("analysis"))
                 os.makedirs(_dir, exist_ok=True)
                 real_path = os.path.join(_dir, "sample_sales_data.csv")
                 df_s.to_csv(real_path, index=False)
@@ -2462,14 +2511,7 @@ class TomAgent:
         # JSON and, when a model answered in any other shape, "drafted" the internal prompt
         # (memory dump included) as the email body.
         resp = await self._invoke_llm(draft_prompt, {"brief": brief}, "email_draft", self.llm)
-        content = (getattr(resp, "content", "") or "").strip()
-        draft_subject, draft_body = "", content
-        if "BODY:" in content:
-            head, draft_body = content.split("BODY:", 1)
-            for line in head.splitlines():
-                if line.upper().startswith("SUBJECT:"):
-                    draft_subject = line.split(":", 1)[1].strip()
-            draft_body = draft_body.strip()
+        draft_subject, draft_body = self._split_subject_body(getattr(resp, "content", "") or "")
         if not draft_body:
             return {"status": "error", "message": "I couldn't draft that email - the model returned nothing. Try again."}
         draft_subject = draft_subject or subject or "Message from TOM"
@@ -2488,6 +2530,24 @@ class TomAgent:
             saved = await self.email_tools.draft_email(recipient, draft_subject, draft_body)
             result["draft"] = saved
         return result
+
+    @staticmethod
+    def _split_subject_body(content: str):
+        """(subject, body) from a "SUBJECT: … BODY: …" reply.
+
+        Models often skip "BODY:"; the SUBJECT line then ended up inside the body as well
+        ("Subject: … SUBJECT: Moving Tomorrow's Meeting … Dear Ravi").
+        """
+        text = (content or "").strip()
+        subject = ""
+        m = re.search(r"^\s*\**subject\**\s*:\s*(.+)$", text, re.IGNORECASE | re.MULTILINE)
+        if m:
+            subject = m.group(1).strip().strip("*").strip()
+        if re.search(r"^\s*\**body\**\s*:", text, re.IGNORECASE | re.MULTILINE):
+            body = re.split(r"^\s*\**body\**\s*:\s*", text, maxsplit=1, flags=re.IGNORECASE | re.MULTILINE)[1]
+        else:
+            body = text[m.end():] if m else text
+        return subject, body.strip()
 
     async def execute_email_send_flow(self, command: str, parsed: Dict) -> Dict[str, Any]:
         """Send an email with LLM-generated content and async approval."""
@@ -2523,17 +2583,7 @@ class TomAgent:
                 {"memory": memory_context, "command": command, "recipient": recipient},
                 "email_draft_for_send", self.llm,
             )
-            content = resp.content.strip()
-            subject = ""
-            body = ""
-            for line in content.splitlines():
-                if line.upper().startswith("SUBJECT:"):
-                    subject = line.split(":", 1)[1].strip()
-                elif line.upper().startswith("BODY:"):
-                    body = content.split("BODY:", 1)[-1].split("BODY:\n", 1)[-1].strip()
-                    break
-            if not body:
-                body = content  # fallback: use the whole LLM output as body
+            subject, body = self._split_subject_body(resp.content)
             if not subject:
                 subject = parsed_subject or "Message from TOM"
         else:
@@ -2675,50 +2725,116 @@ class TomAgent:
         if not contact or not message:
             return {"status": "error", "message": f"Could not determine WhatsApp contact or message from: {command}"}
 
+        return await self._send_whatsapp(contact, message, confirm=bool(details.get("confirm_contact")))
+
+    async def _send_whatsapp(self, contact: str, message: str, confirm: bool = False) -> Dict[str, Any]:
         safe_print(f"\n[WhatsApp] To: {contact} | Message: {message[:80]}...")
         self.safety.log_action("WHATSAPP_SEND", target=contact, status="ATTEMPTING", message=message[:100])
-        result = await self.whatsapp_tools.send_message(contact, message)
+        # `confirm` only when set, so senders with the older (contact, message) signature still work.
+        result = await (self.whatsapp_tools.send_message(contact, message, confirm=True) if confirm
+                        else self.whatsapp_tools.send_message(contact, message))
         self.safety.log_action("WHATSAPP_SEND", target=contact,
-                               status={"success": "SUCCESS", "unconfirmed": "UNCONFIRMED"}.get(
-                                   result.get("status"), "FAILURE"),
+                               status={"success": "SUCCESS", "unconfirmed": "UNCONFIRMED",
+                                       "needs_input": "NEEDS_INPUT"}.get(result.get("status"), "FAILURE"),
                                message=result.get("message", ""))
+        if result.get("status") == "needs_input" and result.get("options"):
+            # Remember the question so the user's next message ("2", "Mounish Sai") answers it.
+            self._pending_choice = {"kind": "whatsapp", "options": list(result["options"]),
+                                    "message": message, "at": time.time()}
         return result
+
+    _ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "1st": 1, "2nd": 2,
+                 "3rd": 3, "4th": 4, "5th": 5, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+
+    @classmethod
+    def _match_choice(cls, reply: str, options: List[str]) -> Optional[int]:
+        """Index of the option the user picked ("2", "the second one", "Mounish Sai"), else None."""
+        text = re.sub(r"[^\w\s']", " ", (reply or "").lower()).strip()
+        if not text:
+            return None
+        m = re.fullmatch(r"(?:(?:send|it|to|the|number|no|option|choose|pick|go with)\s+)*(\d{1,2})"
+                         r"(?:\s+(?:one|please))*", text)
+        if m:
+            n = int(m.group(1))
+            return n - 1 if 1 <= n <= len(options) else None
+        for word, n in cls._ORDINALS.items():
+            if re.search(rf"\b{word}\b", text) and len(text.split()) <= 5 and n <= len(options):
+                return n - 1
+        exact = [i for i, o in enumerate(options) if o.lower() == text]
+        if exact:
+            return exact[0]
+        partial = [i for i, o in enumerate(options) if text in o.lower() or o.lower() in text]
+        return partial[0] if len(partial) == 1 else None
+
+    async def _answer_pending_choice(self, command: str) -> Optional[Dict[str, Any]]:
+        """Finish a task that stopped to ask "which one?" when this message answers it."""
+        pending = getattr(self, "_pending_choice", None)
+        if not pending:
+            return None
+        self._pending_choice = None                       # one answer only, whatever it is
+        if time.time() - pending.get("at", 0) > 15 * 60:
+            return None
+        if re.fullmatch(r"\s*(?:cancel|none|neither|no|stop|never ?mind|don'?t send( it)?)\s*[.!]?\s*", command,
+                        re.IGNORECASE):
+            return {"status": "cancelled", "response_type": "whatsapp_choose_contact",
+                    "message": "Okay, I won't send it."}
+        index = self._match_choice(command, pending["options"])
+        if index is None:
+            return None                                   # not an answer: handle as a new request
+        chosen, text = pending["options"][index], pending["message"]
+        approved = await asyncio.to_thread(
+            self.approval_manager.request_approval,
+            ApprovalRequest(action="whatsapp_message", summary=f"Send WhatsApp message to {chosen}: \"{text[:300]}\"",
+                            details={"to": chosen, "message": text}, risk_level="high"))
+        if not approved:
+            return {"status": "cancelled", "message": f"Cancelled. Nothing was sent to {chosen}."}
+        return await self._send_whatsapp(chosen, text, confirm=True)
 
     # ── WEB SEARCH / RESEARCH ───────────────────────────────────────────
 
+    @staticmethod
+    def _search_query(command: str, parsed: Dict) -> str:
+        q = parsed.get("search_topic") or ""
+        if not q:
+            q = re.sub(r"^\s*(?:please\s+)?(?:search(?:\s+the\s+web|\s+online|\s+google)?(?:\s+for)?|look\s+up(?:\s+online)?"
+                       r"|google|find(?:\s+out)?(?:\s+online)?)\s*:?\s*", "", command, flags=re.IGNORECASE).strip()
+        return q or command
+
     async def _web_search(self, command: str, parsed: Dict) -> Dict[str, Any]:
-        search_topic = parsed.get("search_topic") or parsed.get("subject") or command
-        result = await self._research_topic(search_topic)
-        return {"status": "success", "message": f"Research results for '{search_topic}':\n\n{result[:2000]}",
-                "response_type": "web_search", "full_content": result}
+        """Live search (tools.web_search) and an answer grounded only in what it returned."""
+        from tools import web_search
+        query = self._search_query(command, parsed)
+        hits = await asyncio.to_thread(web_search.search, query)
+        if not hits:
+            return {"status": "error", "response_type": "web_search",
+                    "message": f"I couldn't reach any search source for '{query}' just now (no results came "
+                               "back — check the internet connection). I won't guess an answer."}
+        prompt = self._safe_prompt([
+            ("system", "You answer a web search for the user using ONLY the numbered results given. "
+                       "Write 3-6 short sentences or bullets in American English, citing results like [1]. "
+                       "If the results don't answer the question, say what they do cover. Never add facts "
+                       "that are not in the results."),
+            ("user", "Search: {query}\n\nResults:\n{results}"),
+        ])
+        try:
+            resp = await self._invoke_llm(prompt, {"query": query, "results": web_search.context_text(hits)},
+                                          "web_search", self.fast_llm)
+            answer = resp.content.strip()
+        except Exception as exc:
+            answer = f"(Could not summarize the results: {exc})"
+        return {"status": "success", "response_type": "web_search",
+                "message": f"{answer}\n\nSources:\n{web_search.sources_text(hits)}",
+                "sources": [h.url for h in hits]}
 
     async def _research_topic(self, topic: str) -> str:
-        """Search the web for information about a topic."""
-        try:
-            # Try using googlesearch library first
-            from googlesearch import search
-            results = []
-            for i, url in enumerate(search(topic, num_results=5)):
-                if i >= 5:
-                    break
-                try:
-                    import requests
-                    from bs4 import BeautifulSoup
-                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                    r = requests.get(url, timeout=5, headers=headers)
-                    soup = BeautifulSoup(r.text, 'html.parser')
-                    text = soup.get_text()[:1000]
-                    results.append(f"Source: {url}\n{text.strip()[:500]}")
-                except Exception:
-                    results.append(f"Source: {url} (content unavailable)")
-            if results:
-                return "\n\n".join(results)
-        except ImportError:
-            pass
-        except Exception as e:
-            safe_print(f"[WEB] Search error: {e}")
+        """Live web material about a topic (news + Wikipedia); the model's own knowledge only as a
+        clearly labelled fallback when no source answers."""
+        from tools import web_search
+        hits = await asyncio.to_thread(web_search.search, topic)
+        if hits:
+            return (web_search.context_text(hits) + "\n\nSources:\n" + web_search.sources_text(hits))
 
-        # Fallback: use LLM to generate content based on its knowledge
+        # Fallback: the model's own knowledge, labelled as such
         memory_context = self._build_memory_context(topic)
         prompt = self._safe_prompt([
             ("system", "You are TOM researching '{topic}'. Provide comprehensive, factual information. "
@@ -2727,7 +2843,8 @@ class TomAgent:
         ])
         try:
             resp = await self._invoke_llm(prompt, {"topic": topic, "memory": memory_context}, "research", self.llm)
-            return resp.content.strip()
+            return ("(No live sources were reachable — this is from TOM's own knowledge and may be out of date.)\n\n"
+                    + resp.content.strip())
         except Exception:
             return f"Could not research '{topic}'. Please check internet connection."
 
@@ -3248,12 +3365,85 @@ class TomAgent:
             return False
         if route.category != "chat" or route.handler != "generate_chat_response":
             return False
-        explicit = any(token in command_lower for token in (
-            "skill", "using skill", "based on skill", "can tom", "can you",
-            "how do i", "how to", "guide me", "explain", "build", "create",
-            "design", "develop", "implement",
-        ))
+        # "can you …" is a question about TOM's abilities, not a request for skill knowledge:
+        # "can you actually play the Minecraft game?" was sent to the game-dev skill, which then
+        # role-played playing the game (owner report 2026-10-21). Chat answers it honestly.
+        # Whole words: "Instead of explaining me the instructions…" is not a request to explain.
+        def _has(*tokens):
+            return any(re.search(rf"\b{t}\b", command_lower) for t in tokens)
+        work = _has("skill", "using skill", "based on skill", "explain", "build", "create",
+                    "design", "develop", "implement")
+        explicit = work or _has("how do i", "how to", "guide me")
+        if not work and re.search(r"\b(?:can|could|will|would)\s+you\b|\bare\s+you\s+able\b|\bdo\s+you\s+know\b",
+                                  command_lower):
+            return False          # a question about what TOM can do → honest chat answer
         return explicit or skill_route.confidence >= 0.45
+
+    _FILE_IN_TEXT = re.compile(r"(?:\"([^\"]+\.\w{1,5})\"|([A-Za-z]:[\\/][^\n\"<>|?*]+?\.\w{1,5}))(?=\s|$)")
+
+    async def _run_skill_mode(self, mode, command: str) -> Optional[Dict[str, Any]]:
+        """Handle a request made in a quick-action mode (tom_core.skill_modes). None = normal routing.
+
+        1. A file the mode needs ("File Anal", "Data Anal") → real file analysis.
+        2. The engine router recognises the request as one of the mode's engines → that engine.
+        3. Otherwise the mode's fallback: its engine, its skill's knowledge, or normal routing.
+           An engine never answers with demo output for a request it did not recognise.
+        """
+        router = self.engine_router
+        if mode.key == "skill":
+            return await self._run_skill_question(command)
+        if mode.needs_file in ("any", "data"):
+            m = self._FILE_IN_TEXT.search(command)
+            if m:
+                path = (m.group(1) or m.group(2)).strip()
+                question = (command[:m.start()] + command[m.end():]).strip(" :\n") or \
+                    "Analyze this in detail and summarize the key points."
+                return await self.analyze_file(path, question)
+            return None
+        detected = router.detect(command.lower()) if router else None
+        engines = tuple(e for e in (mode.engine, *mode.engines) if e)
+        engine_note = ""
+        if router and detected and detected in engines:
+            result = await router.execute(command, key=detected)
+            status = result.get("status")
+            if status == "needs_input" and mode.skill:
+                engine_note = str(result.get("message", ""))      # answer from the skill, plus the hint
+            elif status != "unhandled":
+                return result
+        if router and mode.engine and mode.fallback == "engine" and not engine_note:
+            result = await router.execute(command, key=mode.engine)
+            if result.get("status") not in ("unhandled", "error", "needs_input") or not mode.skill:
+                return result
+            engine_note = str(result.get("message", ""))
+        if mode.skill and mode.fallback in ("skill", "engine"):
+            record = self.skill_manager.get_record(mode.skill)
+            if record is not None:
+                route = SkillRoute(matched=True, skill_name=record.name, confidence=1.0,
+                                   execution_mode=record.execution_mode,
+                                   context=self.skill_manager._trim_context(record),
+                                   required_tools=record.required_tools, limitations=record.limitations)
+                result = await self._handle_skill_routed_task(command, route)
+                if engine_note:
+                    result["message"] = f"{result.get('message', '')}\n\n{mode.label} engine: {engine_note[:300]}"
+                result["mode"] = mode.key
+                return result
+        return None
+
+    async def _run_skill_question(self, command: str) -> Optional[Dict[str, Any]]:
+        """The Skill quick action: list the skills that are really loaded, or answer with the best one.
+
+        It used to go to free chat, which invented a skill list ("TensorFlow, PyTorch, …").
+        """
+        if re.search(r"\b(what|which|list|show|how many)\b.*\bskills?\b|\bskills?\b.*\b(loaded|available|have)\b",
+                     command, re.IGNORECASE):
+            records = sorted(self.skill_manager.records(), key=lambda r: r.name)
+            names = [re.sub(r"^\d+-", "", r.name).replace("-", " ") for r in records]
+            return {"status": "success", "response_type": "skill_list",
+                    "message": f"{len(names)} skills are loaded:\n" + "\n".join(f"  • {n}" for n in names)}
+        route = self.skill_manager.route_task(command)
+        if not route.matched:
+            return None
+        return await self._handle_skill_routed_task(command, route)
 
     async def _handle_skill_routed_task(self, command: str, skill_route: SkillRoute) -> Dict[str, Any]:
         decision = self.capability_resolver.resolve(skill_route)
@@ -3262,7 +3452,10 @@ class TomAgent:
             ("system", compose_system_prompt(
                 "You are TOM executing a skill-routed task. Use the selected skill context as the primary source. "
                 "Be direct. If the skill is guidance-only or external-tool-backed, state that truth and provide the usable path. "
-                "If local tools are available, give implementation-level steps or code-ready output. No emoji.",
+                "If local tools are available, give implementation-level steps or code-ready output. No emoji. "
+                "Never pretend to do something you have not done: no role-play, no invented results, scans, "
+                "files or numbers. If the user asks you to do something you cannot do from here (e.g. play a "
+                "video game for them), say so plainly and offer the closest real help. Use American English.",
                 "TOM",
                 include_ui=True,
             )),
@@ -3300,7 +3493,27 @@ class TomAgent:
             "required_tools": decision.required_tools,
         }
 
+    # The user says TOM misunderstood their last message ("I'm not telling you something but I'm
+    # asking" — owner report 2026-10-21). A prompt rule alone did not make the local model go back.
+    _CLARIFICATION = re.compile(
+        r"\b(?:i'?m|i am|i was)\s+(?:just\s+|only\s+)?asking\b|\bi\s+(?:just\s+)?asked\b|\bi\s+meant\b"
+        r"|\bthat'?s\s+not\s+what\s+i\s+(?:asked|meant|said)\b|\bnot\s+(?:telling|saying)\s+you\b"
+        r"|\bmy\s+question\s+(?:is|was)\b|\byou\s+(?:misunderstood|got\s+it\s+wrong)\b|\bi\s+was\s+asking\b",
+        re.IGNORECASE)
+
+    def _previous_user_message(self) -> str:
+        """The user's message before the current one in this chat ("" if none)."""
+        try:
+            users = [m for m in self.chat_memory.messages if m.get("role") == "user"]
+            return str(users[-2].get("text", "")) if len(users) >= 2 else ""
+        except Exception:
+            return ""
+
     async def generate_chat_response(self, command: str) -> Dict[str, Any]:
+        previous = self._previous_user_message() if self._CLARIFICATION.search(command) else ""
+        if previous:
+            command = (f"{command}\n\n[The user is clarifying. Their previous message was: \"{previous}\" — "
+                       "apologise in a few words, then answer THAT message directly and honestly.]")
         # For short casual messages, skip expensive RAG retrieval
         if len(command.split()) <= 8:
             memory_context = self.chat_memory.build_context(
@@ -3308,22 +3521,32 @@ class TomAgent:
         else:
             memory_context = self._build_memory_context(command)
 
-        # Base personality — potentially enriched by evolution adaptive prompt
+        # Base personality — potentially enriched by evolution adaptive prompt.
+        # Rules below answer the owner's live-chat report (2026-10-21): invented CPU/RAM/disk numbers
+        # and "tasks lined up", a greeting repeated mid-conversation, "yes I can" to playing a game,
+        # and a clarification ("I'm asking") answered as if it were a new topic.
         chat_system = (
             "You are TOM, the user's personal AI assistant running on their Windows laptop. "
-            "You have REAL capabilities: image/vision analysis (attach images via the button), "
-            "camera capture, screen reading, document creation (Word/Excel/PPT/PDF), "
-            "email, WhatsApp, web search, file analysis, voice mode, and app launching. "
-            "You also have specialized engines reachable by plain language: ML training "
-            "(regression/classification/clustering/forecasting), IoT firmware generation "
-            "(ESP32/Arduino/MicroPython), VLSI/Verilog/RTL design, hardware control "
-            "(mouse/keyboard/volume), game-dev scaffolding, Blender 3D, news briefings, "
-            "Python environment management, autonomous multi-step tasks, and multi-agent "
-            "orchestration. "
-            "When asked if you can do something, say YES and explain how. "
-            "Never say you cannot analyze images or files — you CAN. "
-            "Keep replies short and natural — 1-3 sentences for casual chat. "
-            "Be friendly, direct, and concise. Talk like a helpful friend."
+            "Things you can really do (each through a dedicated tool): image/vision analysis "
+            "(attach images via the button), camera capture, screen reading, document creation "
+            "(Word/Excel/PPT/PDF), email, WhatsApp, web search, file analysis and organizing, "
+            "voice conversation, opening apps and websites, ML training, IoT firmware, VLSI/Verilog, "
+            "mouse/keyboard/volume control, game-dev scaffolding, Blender 3D, news briefings, Python "
+            "environment management, network diagnostics of this PC, and scheduling tasks.\n"
+            "Rules:\n"
+            "1. Be honest about ability. If asked whether you can do something that is not in that list "
+            "(for example playing a video game for the user, or doing something in the physical world), "
+            "say plainly that you can't, then offer the closest thing you really can do (e.g. open the "
+            "game, explain how to play, find guides). Never claim an action happened unless a tool did it.\n"
+            "2. Never invent facts about the user's computer, inbox, schedule, tasks, messages or files. "
+            "Only state such facts if they appear in 'Live facts' below; otherwise offer to check.\n"
+            "3. Greet only when the conversation is new (see 'Conversation state'). In an ongoing "
+            "conversation never start with 'Hi'/'Hello' or the user's name — just answer.\n"
+            "4. If the user's message clarifies or corrects their previous message (e.g. 'I'm asking', "
+            "'I meant…', 'no, I asked whether…'), apologise briefly and answer that previous question "
+            "properly using the conversation so far.\n"
+            "5. Keep replies short and natural — 1-3 sentences for casual chat. Be warm and direct. "
+            "Use American English."
         )
         if self.evolution:
             try:
@@ -3338,10 +3561,54 @@ class TomAgent:
 
         prompt = self._safe_prompt([
             ("system", chat_system),
-            ("user", "Conversation memory:\n{memory}\n\nUser says:\n{message}"),
+            ("user", "Live facts (checked just now — the only facts about this computer/schedule you may state):\n"
+                     "{facts}\n\nConversation state: {state}\n\n"
+                     "Conversation so far (oldest first):\n{memory}\n\nUser says:\n{message}"),
         ])
-        resp = await self._invoke_llm(prompt, {"message": command, "memory": memory_context}, "chat", self.chat_llm)
+        resp = await self._invoke_llm(
+            prompt, {"message": command, "memory": memory_context, "facts": self._live_facts(command),
+                     "state": self._conversation_state()}, "chat", self.chat_llm)
         return {"status": "success", "message": resp.content.strip(), "response_type": "chat"}
+
+    def _conversation_state(self) -> str:
+        """'new' unless the user and TOM exchanged messages in this chat within the last 30 minutes."""
+        try:
+            messages = list(self.chat_memory.messages)[:-1]      # the current message is already stored
+            last = max((int(m.get("ts") or 0) for m in messages), default=0)
+            if messages and time.time() - last < 30 * 60:
+                return "ongoing — do not greet; just answer"
+        except Exception:
+            pass
+        return "new — a short greeting is fine"
+
+    def _live_facts(self, current: str = "") -> str:
+        """Real, just-checked facts the chat model may state (date/time, scheduled jobs, open tasks)."""
+        lines = [f"- Now: {time.strftime('%A %d %B %Y, %I:%M %p')}"]
+        try:
+            from tools.scheduler import get_scheduler
+            jobs = get_scheduler().get_scheduled_jobs() or {}
+            if jobs:
+                for job_id, info in list(jobs.items())[:5]:
+                    nxt = info.get("next_run") if isinstance(info, dict) else None
+                    lines.append(f"- Scheduled job '{job_id}'" + (f", next run {nxt}" if nxt else ""))
+            else:
+                lines.append("- Scheduled jobs: none")
+        except Exception:
+            lines.append("- Scheduled jobs: unknown (scheduler unavailable)")
+        try:
+            from tom_core.tasks.service import current_task_id
+            me = current_task_id()
+            # Exclude the task answering this very message (it used to be listed as "in progress",
+            # and the model then claimed the request was "still running in the background").
+            others = [r for r in self.tasks.store.list(50, active_only=True)
+                      if r.id != me and skill_modes.split(r.text)[0] != current]
+            lines.append(f"- Other tasks in progress or waiting: {len(others)}"
+                         + "".join(f"\n  - [{r.state.value}] {skill_modes.split(r.text)[0][:80]}"
+                                   for r in others[:3]))
+        except Exception:
+            pass
+        lines.append("- System load, inbox, messages, calendar: NOT checked — offer to check, never guess")
+        return "\n".join(lines)
 
     async def generate_voice_response(self, command: str) -> Dict[str, Any]:
         command_lower = command.lower().strip()
@@ -3361,8 +3628,8 @@ class TomAgent:
         memory_context = self._build_memory_context(command)
         voice_system = (
             "You are TOM in VOICE mode, a calm and professional personal assistant. "
-            "Answer in 1-3 short, complete sentences of clear spoken English that is easy to follow "
-            "for an Indian English listener. Be warm and polite, never slangy. "
+            "Answer in 1-3 short, complete sentences of clear, natural spoken American English "
+            "(US spelling and phrasing). Be warm and polite, never slangy. "
             "No markdown, lists, emojis, code or URLs. Say numbers, dates and times the way a person would."
         )
         prompt = self._safe_prompt([
@@ -3540,7 +3807,7 @@ class TomAgent:
         # Persist a registry of user schedules (informational; jobs re-register
         # on demand — surviving restarts ships in Phase C).
         try:
-            reg_path = os.path.join(os.getcwd(), "tom_logs", "scheduled_user_tasks.json")
+            reg_path = project_path_str("tom_logs", "scheduled_user_tasks.json")
             entries = {}
             if os.path.isfile(reg_path):
                 with open(reg_path, encoding="utf-8") as f:

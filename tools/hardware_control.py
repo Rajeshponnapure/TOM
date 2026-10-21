@@ -8,7 +8,7 @@ import sys
 import time
 from datetime import datetime
 from typing import List, Optional, Tuple
-from tools.project_paths import project_path_str
+from tools.project_paths import workspace_path
 
 try:
     import pyautogui
@@ -197,7 +197,7 @@ class HardwareControl:
                 img = pyautogui.screenshot(region=region)
             else:
                 img = pyautogui.screenshot()
-            path = project_path_str("output", f"screenshot_{int(time.time())}.png")
+            path = str(workspace_path("screenshots", f"screenshot_{int(time.time())}.png"))
             os.makedirs(os.path.dirname(path), exist_ok=True)
             img.save(path)
             return {"status": "success", "path": path, "size": img.size}

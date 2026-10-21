@@ -50,13 +50,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tools.project_paths import PROJECT_ROOT
+from tools.project_paths import project_path
 
 logger = logging.getLogger(__name__)
 
 CLOUD_URL = "https://api.hindsight.vectorize.io"
 LOCAL_URL = "local"            # sentinel base_url: on-machine SQLite store (tom_core.memory.local_store)
-STATE_DIR = Path(PROJECT_ROOT) / "tom_brain" / "hindsight"
+STATE_DIR = project_path("tom_brain", "hindsight")     # follows TOM_STATE_ROOT
 LOCAL_DB_NAME = "memory.sqlite3"   # lives in STATE_DIR beside the journal it is seeded from
 JOURNAL_FILE = STATE_DIR / "journal.jsonl"
 PENDING_FILE = STATE_DIR / "pending.jsonl"

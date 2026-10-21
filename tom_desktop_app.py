@@ -71,6 +71,8 @@ if getattr(sys, "frozen", False):
 os.environ.setdefault("VOICE_INPUT_ENABLED", "true")
 os.environ.setdefault("VOICE_OUTPUT_ENABLED", "true")
 
+from tom_core import skill_modes  # noqa: E402  (after .env: nothing here reads the environment)
+
 # ── New v3 tool imports ───────────────────────────────────────────────
 try:
     from tools.data_analysis import DataAnalysisEngine
@@ -777,7 +779,12 @@ class VoiceUIWindow:
     Dedicated voice conversation window with 3D animated orb.
     Opens when user clicks the Voice button.
     Shows Tom's logo with reactive animations for listening/speaking/thinking states.
+
+    Push to talk (default, same flow as the PySide6 app): one press = one request.
+    Hands-free: the continuous listen → answer loop until Stop or "bye".
     """
+
+    _TALK_LABEL = "\U0001F3A4  Push to talk"
 
     def __init__(self, parent: tk.Tk, desktop_app):
         self.parent = parent
@@ -800,7 +807,8 @@ class VoiceUIWindow:
         self._state = "idle"  # idle, listening, processing, speaking
         self._audio_level = 0.0
         self._running = True
-        self._conversation_active = False
+        self._conversation_active = False      # hands-free loop running
+        self._ptt_active = False               # a push-to-talk turn is running
         self._agent_future = None
 
         self._particles = []
@@ -842,7 +850,7 @@ class VoiceUIWindow:
                 pass
 
         # Status label
-        self.status_var = tk.StringVar(value="Press the button to start")
+        self.status_var = tk.StringVar(value="Press Push to talk and speak")
         self.status_label = tk.Label(w, textvariable=self.status_var,
                                      bg=C["bg"], fg=C["cyan"],
                                      font=("Segoe UI", 13, "bold"))
@@ -869,14 +877,24 @@ class VoiceUIWindow:
         btn_frame = tk.Frame(w, bg=C["bg"])
         btn_frame.pack(pady=(20, 0))
 
-        self.start_btn = tk.Button(btn_frame, text="\u25b6  Start Conversation",
+        self.talk_btn = tk.Button(btn_frame, text=self._TALK_LABEL,
+                                  command=self._push_to_talk,
+                                  bg=C["blue"], fg="#ffffff",
+                                  activebackground="#2563eb",
+                                  activeforeground="#ffffff",
+                                  relief="flat", bd=0,
+                                  padx=18, pady=10,
+                                  font=("Segoe UI", 11, "bold"), cursor="hand2")
+        self.talk_btn.pack(side="left", padx=(0, 10))
+
+        self.start_btn = tk.Button(btn_frame, text="\u25b6  Hands-free",
                                    command=self._start_conversation,
-                                   bg=C["blue"], fg="#ffffff",
-                                   activebackground="#2563eb",
-                                   activeforeground="#ffffff",
+                                   bg=C["surface2"], fg=C["text"],
+                                   activebackground=C["border2"],
+                                   activeforeground=C["text"],
                                    relief="flat", bd=0,
-                                   padx=24, pady=10,
-                                   font=("Segoe UI", 11, "bold"), cursor="hand2")
+                                   padx=14, pady=10,
+                                   font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.start_btn.pack(side="left", padx=(0, 10))
 
         self.stop_btn = tk.Button(btn_frame, text="\u25a0  Stop",
@@ -885,8 +903,8 @@ class VoiceUIWindow:
                                   activebackground=C["border2"],
                                   activeforeground=C["red"],
                                   relief="flat", bd=0,
-                                  padx=20, pady=10,
-                                  font=("Segoe UI", 11, "bold"),
+                                  padx=14, pady=10,
+                                  font=("Segoe UI", 10, "bold"),
                                   cursor="hand2", state="disabled")
         self.stop_btn.pack(side="left")
 
@@ -919,8 +937,8 @@ class VoiceUIWindow:
 
     def _bind_shortcuts(self):
         self.window.bind("<Escape>", lambda e: self._on_close())
-        self.window.bind("<Return>", lambda e: self._start_conversation()
-                         if not self._conversation_active else None)
+        self.window.bind("<Return>", lambda e: self._push_to_talk())
+        self.window.bind("<Control-space>", lambda e: self._push_to_talk())
 
     def _animate(self):
         if not self._running:
@@ -1053,19 +1071,101 @@ class VoiceUIWindow:
         except Exception:
             pass
 
-    def _start_conversation(self):
-        if self._conversation_active:
-            return
+    def _ready_to_listen(self) -> bool:
+        if self._conversation_active or self._ptt_active:
+            return False
         if not self.app.voice:
             self._append_transcript("System", "Voice tools not available.")
-            return
+            return False
         if not self.app.agent_ready:
             self._append_transcript("System", "TOM is still initializing...")
+            return False
+        if self.app.voice_mode_enabled or self.app.processing:
+            self._append_transcript("System", "TOM's main window is still busy with a request.")
+            return False
+        return True
+
+    def _set_buttons(self, busy: bool):
+        state = "disabled" if busy else "normal"
+        self.talk_btn.configure(state=state)
+        self.start_btn.configure(state=state)
+        self.stop_btn.configure(state="normal" if busy else "disabled")
+
+    def _ask(self, heard: str) -> str:
+        """Run one spoken request through TaskService (interface="voice") and return the reply text."""
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self.app.agent.execute_task(heard, interface="voice"), self.app._loop)
+            self._agent_future = future
+            response = future.result(timeout=120)
+            if isinstance(response, dict):
+                response = response.get("message", str(response))
+            response = str(response).strip()
+        except Exception as e:
+            response = f"Sorry, I hit an error: {e}"
+        return response or "I didn't have a good answer for that."
+
+    def _push_to_talk(self):
+        """One spoken request per press — the same flow as the PySide6 window.
+
+        Pressing again while listening ("Done") ends the request immediately.
+        """
+        from tom_core.voice import push_to_talk
+        if self._ptt_active:
+            push_to_talk.finish(self.app.voice)
+            return
+        if not self._ready_to_listen():
+            return
+        self._ptt_active = True
+        self._set_buttons(busy=True)
+        self.talk_btn.configure(text="■  Done", state="normal")
+        self._set_state("listening")
+
+        def _turn():
+            voice = self.app.voice
+            try:
+                error = push_to_talk.prepare(voice)      # this window is for talking: voice on
+                if error:
+                    self._enqueue(lambda e=error: self._append_transcript(
+                        "System", f"Voice input could not start: {e}"))
+                    return
+                voice.on_audio_level = self._on_audio_level
+                voice.on_state_change = self._on_voice_state
+                heard = push_to_talk.capture(voice)
+                self._enqueue(lambda: self.talk_btn.configure(text=self._TALK_LABEL, state="disabled"))
+                self._enqueue(lambda m=heard.message: self._append_transcript("System", m))
+                if not heard.text or not self._ptt_active:
+                    return
+                self._enqueue(lambda t=heard.text: self._append_transcript("You", t))
+                self._enqueue(lambda: self._set_state("processing"))
+                response = self._ask(heard.text)
+                if not self._ptt_active:
+                    return                               # Stop was pressed while TOM was thinking
+                self._enqueue(lambda r=response: self._append_transcript("TOM", r))
+                self._enqueue(lambda: self._set_state("speaking"))
+                voice.speak(response[:500])
+            except Exception as e:
+                self._enqueue(lambda m=f"Error: {e}": self._append_transcript("System", m))
+            finally:
+                self._enqueue(self._on_ptt_end)
+
+        threading.Thread(target=_turn, name="tom-tk-voice-turn", daemon=True).start()
+
+    def _on_ptt_end(self):
+        self._ptt_active = False
+        if not self._running:
+            return                                       # window already closed
+        self._set_state("idle")
+        self._set_buttons(busy=False)
+        self.talk_btn.configure(text=self._TALK_LABEL)
+        self.sub_status_var.set("Press Push to talk (Enter) for the next request")
+
+    def _start_conversation(self):
+        if not self._ready_to_listen():
             return
 
         self._conversation_active = True
-        self.start_btn.configure(state="disabled")
-        self.stop_btn.configure(state="normal")
+        self._set_buttons(busy=True)
         self._set_state("listening")
 
         def _voice_loop():
@@ -1144,21 +1244,7 @@ class VoiceUIWindow:
                         break
 
                     self._enqueue(lambda: self._set_state("processing"))
-
-                    try:
-                        future = asyncio.run_coroutine_threadsafe(
-                            self.app.agent.execute_task(heard, interface="voice"), self.app._loop)
-                        self._agent_future = future
-                        response = future.result(timeout=120)
-                        if isinstance(response, dict):
-                            response = response.get("message", str(response))
-                        response = str(response).strip()
-                    except Exception as e:
-                        response = f"Sorry, I hit an error: {e}"
-
-                    if not response:
-                        response = "I didn't have a good answer for that."
-
+                    response = self._ask(heard)
                     self._enqueue(lambda r=response: self._append_transcript("TOM", r))
                     self._enqueue(lambda: self._set_state("speaking"))
                     voice.speak(response[:500])
@@ -1178,6 +1264,7 @@ class VoiceUIWindow:
 
     def _stop_conversation(self):
         self._conversation_active = False
+        self._ptt_active = False
         if self._agent_future is not None and not self._agent_future.done():
             self._agent_future.cancel()
         if self.app.voice:
@@ -1187,11 +1274,12 @@ class VoiceUIWindow:
 
     def _on_conversation_end(self):
         self._conversation_active = False
+        if not self._running:
+            return                                       # window already closed
         self._set_state("idle")
-        self.start_btn.configure(state="normal")
-        self.stop_btn.configure(state="disabled")
+        self._set_buttons(busy=False)
         self.status_var.set("Conversation ended")
-        self.sub_status_var.set("Press Start to begin again")
+        self.sub_status_var.set("Press Push to talk or Hands-free to begin again")
 
     def _set_state(self, state: str):
         self._state = state
@@ -1251,9 +1339,17 @@ class VoiceUIWindow:
     def _on_close(self):
         self._running = False
         self._conversation_active = False
-        if self.app.voice:
+        self._ptt_active = False
+        voice = self.app.voice
+        if voice:
             try:
-                self.app.voice.stop_conversation_mode()
+                voice.stop_speaking()
+                voice.stop_conversation_mode()
+                # Detach this window's callbacks so later listening elsewhere doesn't drive a dead orb.
+                if voice.on_state_change == self._on_voice_state:
+                    voice.on_state_change = None
+                if voice.on_audio_level == self._on_audio_level:
+                    voice.on_audio_level = None
             except Exception:
                 pass
         try:
@@ -1647,7 +1743,7 @@ class TomDesktopApp:
         act_wrap.pack(fill="x")
         tk.Label(act_wrap, text="ACTIONS", bg=C["bg"], fg=C["text2"], font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 6))
 
-        self.voice_btn = tk.Button(act_wrap, text="  \u266a  Voice Mode", command=self._toggle_voice_mode,
+        self.voice_btn = tk.Button(act_wrap, text=self._TALK_LABEL, command=self._push_to_talk,
             bg=C["surface2"], fg=C["text"], activebackground=C["blue"], activeforeground=C["text"],
             relief="flat", bd=0, padx=12, pady=9, anchor="w", font=("Segoe UI", 9, "bold"), cursor="hand2")
         self.voice_btn.pack(fill="x", pady=(0, 6))
@@ -1658,16 +1754,12 @@ class TomDesktopApp:
         self.run_btn.pack(fill="x")
 
         v2_actions = [
-            # These actions need task-specific input.  Calling their handlers
-            # directly used to raise a missing ``detail`` argument error.
-            ("  \u2699  Web Auto",    lambda: self._prompt_and_run(
-                "Enter URL or localhost port to verify:", self._handle_web_automation), C["cyan"]),
-            ("  \u25c6  Auto-Debug",  lambda: self._prompt_and_run(
-                "Enter URL or localhost port to debug:", self._handle_auto_debug), C["orange"]),
-            ("  \u2606  Multi-Agent", lambda: self._prompt_and_run(
-                "Describe the multi-agent task:", self._handle_multi_agent), C["purple"]),
-            ("  \u2714  Security",    lambda: self._prompt_and_run(
-                "Enter URL to check safety:", self._handle_security_check), C["red"]),
+            # Each switches TOM into a mode (tom_core.skill_modes); these used to open raw
+            # "Enter URL:" dialogs and call handlers directly, bypassing the agent.
+            ("  \u2699  Web Auto",    lambda: self._enter_skill_mode("webauto"), C["cyan"]),
+            ("  \u25c6  Auto-Debug",  lambda: self._enter_skill_mode("webauto"), C["orange"]),
+            ("  \u2606  Multi-Agent", lambda: self._enter_skill_mode("multiagent"), C["purple"]),
+            ("  \u2714  Security",    lambda: self._enter_skill_mode("security"), C["red"]),
             ("  \u25ce  System Check", self._run_system_verification, C["emerald"]),
         ]
         for text, cmd, color in v2_actions:
@@ -2163,6 +2255,24 @@ class TomDesktopApp:
         self.attach_label.pack(side="left", padx=8, pady=6)
         self.attach_display.pack_forget()
 
+        # ── Active quick-action mode (tom_core.skill_modes) ──────────────
+        self._skill_mode = None
+        self._mode_file = ""
+        self.mode_bar = tk.Frame(self.attach_frame, bg="#132036", padx=10, pady=6)
+        self.mode_title = tk.Label(self.mode_bar, text="", bg="#132036", fg=C["cyan"],
+                                   font=("Segoe UI", 9, "bold"), anchor="w")
+        self.mode_title.grid(row=0, column=0, sticky="w")
+        tk.Button(self.mode_bar, text="✕  Exit mode", command=self._exit_skill_mode,
+                  bg="#132036", fg=C["muted"], activebackground=C["border2"], activeforeground=C["text"],
+                  relief="flat", bd=0, padx=8, pady=0, font=("Segoe UI", 8), cursor="hand2"
+                  ).grid(row=0, column=1, sticky="e")
+        self.mode_hint = tk.Label(self.mode_bar, text="", bg="#132036", fg=C["text2"],
+                                  font=("Segoe UI", 8), anchor="w", justify="left", wraplength=760)
+        self.mode_hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 4))
+        self.mode_examples = tk.Frame(self.mode_bar, bg="#132036")
+        self.mode_examples.grid(row=2, column=0, columnspan=2, sticky="w")
+        self.mode_bar.columnconfigure(0, weight=1)
+
         bottom_bar = tk.Frame(parent, bg=C["bg"], padx=24, pady=12)
         bottom_bar.grid(row=3, column=0, sticky="ew")
         bottom_bar.columnconfigure(0, weight=1)
@@ -2243,9 +2353,11 @@ class TomDesktopApp:
             relief="flat", bd=0, padx=14, pady=8, font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.mute_btn.grid(row=0, column=2)
 
-        self.mic_btn = tk.Button(input_row, text="\u266a", command=self._on_mic_click,
+        # Push-to-talk: one spoken request, sent as a voice task and answered aloud (Ctrl+Space)
+        self.mic_btn = tk.Button(input_row, text=self._MIC_LABEL, command=self._push_to_talk,
             bg=C["surface2"], fg=C["text2"], activebackground=C["surface"], activeforeground=C["blue"],
-            relief="flat", bd=0, padx=14, pady=8, font=("Segoe UI", 13), cursor="hand2")
+            disabledforeground=C["cyan"],
+            relief="flat", bd=0, padx=14, pady=8, font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.mic_btn.grid(row=0, column=3)
 
         self.send_btn = tk.Button(input_row, text="Send  \u25b6", command=self.send_message,
@@ -2440,11 +2552,18 @@ class TomDesktopApp:
                 font=("Segoe UI", 8, "italic"), wraplength=540, justify="center").pack()
 
         self._chat_bubbles.append(bubble)
+        if not self._rendering_chat_history:
+            # One layout pass per message the user sees arrive. While a saved chat is being
+            # rendered this is done once at the end — per-bubble layout made switching to a
+            # 500-message chat take 7.7 s (measured 2026-10-21).
+            self._finish_chat_layout()
+            if role == "assistant":
+                self._refresh_chat_history()
+
+    def _finish_chat_layout(self, to_top: bool = False):
         self.chat_inner.update_idletasks()
         self.chat_canvas.configure(scrollregion=self.chat_canvas.bbox("all"))
-        self.chat_canvas.yview_moveto(1.0)
-        if role == "assistant" and not self._rendering_chat_history:
-            self._refresh_chat_history()
+        self.chat_canvas.yview_moveto(0.0 if to_top else 1.0)
 
     def _refresh_chat_history(self):
         """Refresh the left chat list without reading or changing old sessions."""
@@ -2490,21 +2609,40 @@ class TomDesktopApp:
             self._render_active_chat_session()
             self.chat_subtitle_var.set("Viewing saved chat. Send a message to continue it.")
 
-    def _render_active_chat_session(self):
+    # Messages drawn when a saved chat is opened; older ones load on request ("Show earlier").
+    _HISTORY_PAGE = 30
+
+    def _render_active_chat_session(self, limit: int = 0):
         memory = getattr(self.agent, "chat_memory", None)
         if memory is None:
             return
+        limit = limit or self._HISTORY_PAGE
         self._rendering_chat_history = True
         try:
             for bubble in self._chat_bubbles:
                 bubble.destroy()
             self._chat_bubbles = []
-            for message in memory.messages:
-                role = message.get("role", "assistant")
-                if role in ("user", "assistant"):
-                    self._append_chat(role, str(message.get("text", "")))
+            shown = [m for m in memory.messages if m.get("role") in ("user", "assistant")]
+            hidden = len(shown) - limit
+            if hidden > 0:
+                self._add_show_earlier(hidden, limit)
+                shown = shown[-limit:]
+            for message in shown:
+                self._append_chat(message.get("role", "assistant"), str(message.get("text", "")))
         finally:
             self._rendering_chat_history = False
+        self._finish_chat_layout(to_top=limit > self._HISTORY_PAGE)
+
+    def _add_show_earlier(self, hidden: int, limit: int):
+        bubble = tk.Frame(self.chat_inner, bg=C["surface"])
+        bubble.pack(fill="x", padx=16, pady=(8, 4))
+        more = min(hidden, self._HISTORY_PAGE)
+        tk.Button(bubble, text=f"↑  Show {more} earlier message{'s' if more != 1 else ''}"
+                               f"  ({hidden} not shown)",
+                  command=lambda: self._render_active_chat_session(limit + self._HISTORY_PAGE),
+                  bg=C["surface2"], fg=C["text2"], activebackground=C["border2"], activeforeground=C["text"],
+                  relief="flat", bd=0, padx=12, pady=4, font=("Segoe UI", 8), cursor="hand2").pack()
+        self._chat_bubbles.append(bubble)
 
     def _delete_chat_session(self):
         """Delete the currently selected chat session."""
@@ -3155,9 +3293,18 @@ class TomDesktopApp:
             pass
         self.root.after(1000, self._tick_clock)
 
-    def _animate_orb(self):
+    def _ui_hidden(self) -> bool:
         try:
-            if self.orb_canvas.winfo_exists():
+            return self.root.state() == "iconic"
+        except Exception:
+            return False
+
+    def _animate_orb(self):
+        # 3.9 ms per frame (measured 2026-10-21): 30 fps forever cost ~12 % of the UI thread in
+        # every view. Animate smoothly only while TOM is working, slowly when idle, not when minimized.
+        busy = self.processing or not self.agent_ready or self.voice_mode_enabled
+        try:
+            if not self._ui_hidden() and self.orb_canvas.winfo_exists():
                 w = self.orb_canvas.winfo_width()
                 h = self.orb_canvas.winfo_height()
                 if w > 10 and h > 10:
@@ -3167,7 +3314,7 @@ class TomDesktopApp:
                 self.orb.draw()
         except Exception:
             pass
-        self.root.after(33, self._animate_orb)
+        self.root.after(40 if busy else 100, self._animate_orb)
 
     def _on_agent_progress(self, message: str):
         """Show agent progress in the status bar and update the last thinking bubble."""
@@ -3206,18 +3353,20 @@ class TomDesktopApp:
         """30 fps animation loop driving the holographic dashboard canvas."""
         if not getattr(self, "_holo_anim_running", False):
             return
-        if hasattr(self, "_holo") and self.active_view == "dashboard":
+        if hasattr(self, "_holo") and self.active_view == "dashboard" and not self._ui_hidden():
             try:
                 self._holo.draw()
             except Exception:
                 pass
-        self.root.after(33, self._holo_anim_loop)
+        # 15.6 ms per frame (measured): 30 fps used half the UI thread on the dashboard. 15 fps.
+        self.root.after(66, self._holo_anim_loop)
 
     def _refresh_dashboard(self):
         """Push current stats into the holo dashboard and update legacy metric_vars."""
         # Legacy vars (used by charts view)
         self.metric_vars.get("messages", tk.StringVar()).set(str(self.activity_counts["messages"]))
-        self.metric_vars.get("voice",    tk.StringVar()).set("On" if self.voice_mode_enabled else "Off")
+        self.metric_vars.get("voice",    tk.StringVar()).set(
+            "Listening" if self.voice_mode_enabled else ("Ready" if self.voice else "Off"))
         self.metric_vars.get("agent",    tk.StringVar()).set(self.agent_profiles[self.active_agent_key]["label"])
         self.metric_vars.get("focus",    tk.StringVar()).set(self.active_view.title())
         self.metric_vars.get("docs",     tk.StringVar()).set(str(self.activity_counts["documents"]))
@@ -3334,53 +3483,86 @@ class TomDesktopApp:
                 self.root.after(33, self._render_chart_canvas)
 
     def _quick_action(self, cmd_prefix: str):
-        # Dispatch on the action's label: several command texts don't contain
-        # their keyword ("Check website safety: " vs "Security"), which sent
-        # those actions to the plain chat prefill instead of their prompt.
-        key = next((qa["label"] for qa in self.quick_actions if qa["cmd"] == cmd_prefix), cmd_prefix)
-        if "Web Auto" in key:
-            self._prompt_and_run("Enter URL or localhost port to verify:", self._handle_web_automation)
-        elif "Multi-Agent" in key:
-            self._prompt_and_run("Describe the multi-agent task:", self._handle_multi_agent)
-        elif "Security" in key:
-            self._prompt_and_run("Enter URL to check safety:", self._handle_security_check)
-        elif "File Anal" in key:
-            self._prompt_and_run("Enter file path to analyze:", self._handle_file_analysis)
-        elif "Data Anal" in key:
-            self._prompt_and_run("Enter file path or description for data analysis:", self._handle_data_analysis)
-        elif "Autonomous" in key:
-            self._prompt_and_run("Describe the autonomous task to execute:", self._handle_autonomous)
-        elif "Hardware" in key:
-            self._prompt_and_run("Describe hardware action (e.g., 'move mouse to 500 500', 'click', 'type Hello'):", self._handle_hardware)
-        elif "Skill" in key:
-            self._prompt_and_run("Enter skill name or question (e.g., 'design', 'data engineering', 'what skills are loaded?'):", self._handle_skill_query)
-        elif "ML" in key:
-            self._prompt_and_run("ML task (e.g., 'regression linear X=[1,2,3] y=[2,4,6]', 'classify knn', 'auto_ml', 'cluster kmeans', 'ts arima'):", self._handle_ml)
-        elif "IoT" in key:
-            self._prompt_and_run("IoT task (e.g., 'esp32 dht11 mqtt', 'micropython esp8266', 'protocol mqtt broker', 'sensor bme280'):", self._handle_iot)
-        elif "VLSI" in key:
-            self._prompt_and_run("VLSI task (e.g., 'verilog counter width=8', 'rtl fsm states=4', 'embedded stm32 gpio', 'freertos tasks=3'):", self._handle_vlsi)
-        elif "Env" in key:
-            self._prompt_and_run("Env task (e.g., 'create venv', 'install flask', 'update all', 'migrate 3.11', 'check conflicts', 'analyze project'):", self._handle_env)
-        elif "News" in key:
-            self._prompt_and_run("News task (e.g., 'daily briefing', 'tech roundup', 'world events', 'search AI advances', 'trending'):", self._handle_news)
-        elif "Voice+" in key:
-            self._prompt_and_run("Voice+ task (e.g., 'analyze emotion text: I feel sad', 'start conversation', 'assess mental state', 'speak Hello world'):", self._handle_voice_enhanced)
-        elif "Game Dev" in key:
-            self._prompt_and_run("Game dev command (e.g., 'scaffold pygame my_game platformer', 'script unity player movement', 'engines', 'installed'):", self._handle_game_dev)
-        elif "Blender" in key:
-            self._prompt_and_run("Blender command (e.g., 'cube', 'sphere', 'terrain', 'house', 'lights', 'render', 'animation', 'list'):", self._handle_blender)
-        elif "Media Edit" in key or "Media" in key:
-            self._prompt_and_run("Media edit (e.g., 'trim video C:/clip.mp4 from 5s for 10s', 'apply sepia filter to photo C:/pic.png', 'resize photo C:/pic.png to 800x600'):", self._handle_media)
-        elif "Auto Scaler" in key or "Scaler" in key:
-            self._prompt_and_run("Auto scaler (e.g., 'status', 'system resources', 'performance report', 'simulate load with 20 tasks', 'optimal workers for io-bound tasks'):", self._handle_scaler)
-        elif "Auto-Update" in key:
-            self._prompt_and_run("Auto-update command (e.g., 'check', 'pull', 'pip', 'full', 'research <topic>', 'trending', 'history'):", self._handle_auto_update)
-        else:
-            self._show_view("chat")
-            self.input_var.set(cmd_prefix)
+        """A quick action switches TOM into that kind of work (tom_core.skill_modes).
+
+        It used to open a dialog asking for a raw URL / fixed syntax and call a handler directly,
+        bypassing the agent (owner report 2026-10-21). Now the next message — typed, clicked from
+        the examples, or spoken — goes through the agent with the mode as a hint.
+        """
+        label = next((qa["label"] for qa in self.quick_actions if qa["cmd"] == cmd_prefix), "")
+        mode_key = skill_modes.BY_LABEL.get(label)
+        if mode_key:
+            self._enter_skill_mode(mode_key)
+            return
+        self._legacy_quick_action(cmd_prefix)
+
+    def _enter_skill_mode(self, mode_key: str):
+        mode = skill_modes.MODES[mode_key]
+        self._skill_mode = mode
+        self._mode_file = ""
+        self._show_view("chat")
+        self.mode_title.configure(text=f"●  {mode.label} mode")
+        self.mode_hint.configure(text=mode.hint + ("  Click an example or type your own request." if mode.examples
+                                                    else ""))
+        for child in self.mode_examples.winfo_children():
+            child.destroy()
+        for example in mode.examples:
+            tk.Button(self.mode_examples, text=example, command=lambda e=example: self._send_mode_example(e),
+                      bg=C["surface2"], fg=C["text"], activebackground=C["border2"], activeforeground=C["text"],
+                      relief="flat", bd=0, padx=8, pady=3, font=("Segoe UI", 8), cursor="hand2"
+                      ).pack(side="left", padx=(0, 6))
+        self.mode_bar.pack(fill="x", pady=(0, 4))
+        if mode.needs_file:
+            self._pick_mode_file(mode)
+        try:
             self.input_entry.focus_set()
-            self.input_entry.icursor(tk.END)
+        except Exception:
+            pass
+
+    _MODE_FILE_TYPES = {
+        "data": [("Data files", "*.csv *.xlsx *.xls *.json *.tsv"), ("All files", "*.*")],
+        "media": [("Video and photos", "*.mp4 *.mov *.avi *.mkv *.webm *.png *.jpg *.jpeg *.gif *.bmp *.webp"),
+                  ("All files", "*.*")],
+        "any": [("All files", "*.*")],
+    }
+
+    def _pick_mode_file(self, mode):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(parent=self.root, title=f"TOM — choose a file for {mode.label}",
+                                          filetypes=self._MODE_FILE_TYPES.get(mode.needs_file, [("All files", "*.*")]))
+        if path:
+            self._mode_file = os.path.normpath(path)
+            self.mode_title.configure(text=f"●  {mode.label} mode  —  {os.path.basename(path)}")
+            self._append_chat("meta", f"{mode.label}: using {self._mode_file}. Ask what you want to know or do.")
+        else:
+            self._append_chat("meta", f"{mode.label}: no file chosen. Use \U0001F4CE File to pick one, "
+                                      "or type the file's full path in your request.")
+
+    def _exit_skill_mode(self):
+        self._skill_mode = None
+        self._mode_file = ""
+        self.mode_bar.pack_forget()
+
+    def _send_mode_example(self, example: str):
+        if self.processing:
+            return
+        self.send_message(text=example)
+
+    def _mode_text(self, text: str) -> str:
+        """The text sent to the agent for the active mode (tag + the chosen file, if any)."""
+        mode = self._skill_mode
+        if mode is None:
+            return text
+        if self._mode_file:
+            text = f"{text} \"{self._mode_file}\""
+        return skill_modes.tag(text, mode.key)
+
+    def _legacy_quick_action(self, cmd_prefix: str):
+        """An action without a mode: put its text in the chat box for the user to complete."""
+        self._show_view("chat")
+        self.input_var.set(cmd_prefix)
+        self.input_entry.focus_set()
+        self.input_entry.icursor(tk.END)
 
     def _ask_approval(self, request) -> bool:
         """Approval dialog for the agent; callable from any thread.
@@ -3422,69 +3604,79 @@ class TomDesktopApp:
             # _append_chat/_enqueue, which are safe from any thread.
             threading.Thread(target=handler, args=(result.strip(),), daemon=True).start()
 
-    def _toggle_voice_mode(self):
+    # \u2500\u2500 Push-to-talk (PRD \u00a77) \u2014 the same flow as the PySide6 app \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # One press = one spoken request: listen until the user stops talking (or presses again = Done),
+    # recognise it on this machine by default, run the words through TaskService exactly like a
+    # typed message but with interface="voice", and read the reply aloud unless Mute is on.
+    # voice_mode_enabled is True from the press until the words are recognised.
+    _TALK_LABEL = "  \U0001F3A4  Push to talk"
+    _MIC_LABEL = "\U0001F3A4  Talk"
+
+    def _push_to_talk(self):
         if not self.voice:
             reason = getattr(self, "voice_init_error", "")
             self._append_chat("meta", "Voice tools are not available"
                               + (f": {reason}" if reason else " in this environment.")
                               + " Type 'voice check' in chat for a full diagnosis.")
             return
-        if not self.voice_mode_enabled:
-            self.voice.input_enabled = True
-            self.voice.output_enabled = True
-            self.voice._setup_input()
-            self.voice._setup_output()
-            status = self.voice.status()
-            if not status["voice_input_enabled"]:
-                self._append_chat("meta", f"Voice mode could not start: {status.get('voice_input_error', 'unknown error')}")
-                return
-            self.voice_mode_enabled = True
-            self.voice_btn.configure(text="  \u266a  Voice: ON", bg=C["blue"], fg="#ffffff")
-
-            if self.agent_ready and self.agent:
-                self._show_view("chat")
-
-                def _on_voice_status(state, text):
-                    self._enqueue(self._append_chat, "meta", f"[{state.upper()}] {text}")
-                    if state == "listening":
-                        self._enqueue(self._set_status, "Listening...")
-                        self._enqueue(setattr, self.orb, "status", "loading")
-                    elif state == "processing":
-                        self._enqueue(self._set_status, "Processing...")
-                        self._enqueue(setattr, self.orb, "status", "loading")
-                    elif state == "speaking":
-                        self._enqueue(self._set_status, "Speaking...")
-                        self._enqueue(setattr, self.orb, "status", "ready")
-                    elif state in ("idle", "error"):
-                        self._enqueue(self._set_status, "Ready")
-                        self._enqueue(self._stop_voice_ui)
-                        self._enqueue(setattr, self.orb, "status", "ready")
-
-                self.voice.start_conversation_mode(
-                    process_fn=self.agent.generate_voice_response,
-                    on_status=_on_voice_status,
-                )
-                self._append_chat("assistant",
-                    "Voice mode activated! I'm listening. Speak naturally \u2014 say 'stop' or 'bye' to end the conversation.")
-            else:
-                self._append_chat("meta", "Voice mode enabled. TOM is still initializing...")
-        else:
-            self._stop_voice_ui()
+        if not self.agent_ready:
+            self._append_chat("meta", "TOM is still initializing. Please wait.")
+            return
+        if self.voice_mode_enabled:
+            from tom_core.voice import push_to_talk
+            push_to_talk.finish(self.voice)           # pressed again: the request is complete
+            self._set_status("Recognising...")
+            return
+        if self.processing:
+            self._append_chat("meta", "TOM is still answering the last request. Press Talk when it's done.")
+            return
+        window = self._voice_ui_window
+        if window is not None and (window._conversation_active or window._ptt_active):
+            self._append_chat("meta", "The Voice window is using the microphone right now.")
+            return
+        self.voice_mode_enabled = True
+        self._set_talk_buttons(listening=True)
+        self._show_view("chat")
+        self._set_status("Listening...")
+        self._append_chat("meta", "Listening\u2026 speak now. Take your time; press Talk again when you're done.")
         self._refresh_dashboard()
 
-    def _stop_voice_ui(self):
+        def _listen():
+            from tom_core.voice import push_to_talk
+            try:
+                error = push_to_talk.prepare(self.voice, speak=False)    # keep the Mute setting
+                heard = (push_to_talk.Heard("", f"Voice input could not start: {error}") if error
+                         else push_to_talk.capture(self.voice))
+            except Exception as exc:
+                heard = push_to_talk.Heard("", f"Voice error: {exc}")
+            self._enqueue(self._on_push_to_talk_heard, heard)
+
+        threading.Thread(target=_listen, name="tom-tk-listen", daemon=True).start()
+
+    def _on_push_to_talk_heard(self, heard):
         self.voice_mode_enabled = False
-        if self.voice:
-            self.voice.stop_conversation_mode()
-            # Restore the flags from startup (env/.env controlled) instead of
-            # hard-disabling: forcing output off here also silenced spoken
-            # chat replies for the rest of the session after one toggle.
-            self.voice.input_enabled = os.environ.get(
-                "VOICE_INPUT_ENABLED", "true").lower() == "true"
-            self.voice.output_enabled = os.environ.get(
-                "VOICE_OUTPUT_ENABLED", "true").lower() == "true"
-        self.voice_btn.configure(text="  \u266a  Voice Mode", bg=C["surface2"], fg=C["text"])
+        self._set_talk_buttons(listening=False)
         self._set_status("Ready")
+        self._append_chat("meta", heard.message)
+        if heard.text and self.processing:
+            # A typed message was sent while the microphone was open.
+            self._append_chat("meta", f"Not sent (TOM is busy): \u201c{heard.text}\u201d")
+        elif heard.text:
+            self.activity_counts["voice"] += 1
+            self.recent_events.append(f"Voice: {heard.text[:60]}")
+            self.send_message(text=heard.text, interface="voice")
+            return
+        self._refresh_dashboard()
+
+    def _set_talk_buttons(self, listening: bool):
+        # While listening the same buttons read "Done": pressing them ends the request.
+        if listening:
+            self.voice_btn.configure(text="  \u25a0  Done talking", bg=C["blue"], fg="#ffffff")
+        else:
+            self.voice_btn.configure(text=self._TALK_LABEL, bg=C["surface2"], fg=C["text"])
+        mic = getattr(self, "mic_btn", None)
+        if mic is not None:
+            mic.configure(text="\u25a0  Done" if listening else self._MIC_LABEL)
 
     def _run_active_agent_action(self):
         if self.processing:
@@ -3512,100 +3704,69 @@ class TomDesktopApp:
         self._voice_ui_window = VoiceUIWindow(self.root, self)
         self._show_view("chat")
 
-    def _on_mic_click(self):
-        if not self.voice:
-            self._append_chat("meta", "Voice tools not available.")
-            return
-        if not getattr(self.voice, "input_enabled", False):
-            err = getattr(self.voice, "_input_error", "Voice input disabled.")
-            self._append_chat("meta", f"Voice input unavailable: {err}")
-            return
-        if self.processing:
-            return
-        self._append_chat("meta", "Listening for your voice...")
-        try:
-            self.mic_btn.configure(state="disabled")
-        except Exception:
-            pass
-
-        def listen_and_insert():
-            try:
-                out = self.voice.listen_once()
-                if out.get("status") == "success" and out.get("text"):
-                    recognized = out["text"]
-                    self.activity_counts["voice"] += 1
-                    self.recent_events.append(f"Voice: {recognized}")
-                    self._enqueue(self._refresh_dashboard)
-                    self._enqueue(self._append_chat, "meta", f"Voice captured: {recognized}")
-                    self._enqueue(self.input_var.set, recognized)
-                else:
-                    self._enqueue(self._append_chat, "meta", f"Voice: {out.get('message')}")
-            except Exception as exc:
-                self._enqueue(self._append_chat, "meta", f"Voice listen failed: {exc}")
-            finally:
-                self._enqueue(lambda: self.mic_btn.configure(state="normal"))
-
-        self.input_entry.focus_set()
-        threading.Thread(target=listen_and_insert, daemon=True).start()
-
     _VOICE_TRIGGER_WORDS = (
         "talk", "voice mode", "talk to me", "let's talk", "lets talk",
         "voice chat", "conversation mode", "hey tom let's talk",
         "start voice", "start talking",
     )
 
-    def send_message(self):
+    def send_message(self, text: str | None = None, interface: str = "desktop"):
+        """Send the chat box (typed), or `text` heard by push-to-talk with interface="voice"."""
         if self.processing:
             return
         if not self.agent_ready:
             self._append_chat("meta", "TOM is still initializing. Please wait.")
             return
-        text = self.input_var.get().strip()
-        if not text or (hasattr(self, '_input_has_placeholder') and self._input_has_placeholder):
-            return
+        if text is None:
+            text = self.input_var.get().strip()
+            if not text or (hasattr(self, '_input_has_placeholder') and self._input_has_placeholder):
+                return
 
-        if text.lower().strip() in self._VOICE_TRIGGER_WORDS:
+            if text.lower().strip() in self._VOICE_TRIGGER_WORDS:
+                self.input_var.set("")
+                self._push_to_talk()
+                return
+
             self.input_var.set("")
-            self._toggle_voice_mode()
-            return
-
-        self.input_var.set("")
         self.last_user_message = text
 
-        # Handle attachments — route images/files to analyze_file
+        # Handle attachments — an image/file goes to the agent's file analysis, through the agent
+        # like every other request (task record, safety, memory); this used to call
+        # agent.analyze_file straight from the UI.
         attached_files = list(self._attachments) if self._attachments else []
         self._clear_attachments()
+        attachment_path = ""
+        text_shown = False
 
         if attached_files:
             # Show image previews in chat for image attachments
             for atype, apath in attached_files:
                 if atype == "image":
                     self._append_chat_image("user", apath, text)
+                    text_shown = True
 
-            # Route to analyze_file for image/file attachments
             image_paths = [p for t, p in attached_files if t == "image"]
             file_paths = [p for t, p in attached_files if t == "file"]
             link_paths = [p for t, p in attached_files if t == "link"]
 
             if image_paths or file_paths:
-                analyze_path = (image_paths + file_paths)[0]
-                question = text if text else "Analyze this in detail. Describe what you see."
-                if not any(ap[0] == "image" for ap in attached_files):
-                    self._append_chat("user", text if text else f"Analyze: {os.path.basename(analyze_path)}")
-                self._append_chat("meta", f"TOM is analyzing {os.path.basename(analyze_path)}...")
-                self.send_btn.configure(state="disabled")
-                self.stop_btn.configure(state="normal")
-                self.orb.status = "loading"
-                self.processing = True
-                threading.Thread(target=self._process_file_analysis,
-                                 args=(analyze_path, question), daemon=True).start()
-                return
+                attachment_path = (image_paths + file_paths)[0]
+                if not text:
+                    text = "Analyze this in detail. Describe what you see."
             elif link_paths:
                 text = f"Analyze this web page: {link_paths[0]}" + (f"\n{text}" if text else "")
 
         full_text = text
         prefix = self.agent_profiles[self.active_agent_key]["prefix"].strip()
-        routed = f"{prefix}\n\nUser request: {full_text}" if prefix else full_text
+        mode = getattr(self, "_skill_mode", None)       # set when the chat view is built
+        if attachment_path and not (mode is not None and mode.needs_file):
+            routed = skill_modes.tag(f'{full_text} "{attachment_path}"', "file")
+        elif mode is not None:                                # a quick-action mode takes precedence
+            if attachment_path:
+                self._mode_file = attachment_path              # e.g. Media Edit on the attached clip
+            routed = self._mode_text(full_text)
+        else:
+            routed = f"{prefix}\n\nUser request: {full_text}" if prefix else full_text
 
         self.activity_counts["messages"] += 1
         if self.active_agent_key == "email":
@@ -3615,14 +3776,15 @@ class TomDesktopApp:
 
         self.recent_events.append(f"{self.agent_profiles[self.active_agent_key]['label']}: {text[:60]}")
         self._refresh_dashboard()
-        self._append_chat("user", text)
+        if not text_shown:
+            self._append_chat("user", text)
         self._append_chat("meta", f"TOM is thinking...")
 
         self.send_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.orb.status = "loading"
         self.processing = True
-        threading.Thread(target=self._process_message, args=(routed,), daemon=True).start()
+        threading.Thread(target=self._process_message, args=(routed, interface), daemon=True).start()
 
         # Update header
         self._status_phrases = ["Processing...", "Thinking...", "Analyzing...", "Working..."]
@@ -3630,10 +3792,10 @@ class TomDesktopApp:
         self._status_char_idx = 0
         self._status_direction = 1
 
-    def _process_message(self, text: str):
+    def _process_message(self, text: str, interface: str = "desktop"):
         future = None
         try:
-            future = asyncio.run_coroutine_threadsafe(self.agent.execute_task(text, interface="desktop"), self._loop)
+            future = asyncio.run_coroutine_threadsafe(self.agent.execute_task(text, interface=interface), self._loop)
             self._active_task_future = future
             result = future.result(timeout=180)
             if future is not self._active_task_future:
@@ -3662,9 +3824,7 @@ class TomDesktopApp:
         future = self._active_task_future
         if future is not None and not future.done():
             future.cancel()
-        if self.voice_mode_enabled:
-            self._stop_voice_ui()
-        elif self.voice:
+        if self.voice:
             self.voice.stop_speaking()
             self.voice.stop_conversation_mode()
         self._active_task_future = None
@@ -4971,7 +5131,9 @@ class TomDesktopApp:
 
     def _bind_keyboard_shortcuts(self):
         self.root.bind("<Control-Return>", lambda e: self.send_message())
-        self.root.bind("<Control-v>", lambda e: self._toggle_voice_mode())
+        # Same push-to-talk shortcut as the PySide6 app. (Ctrl+V used to toggle voice mode, which
+        # also fired on every paste into the chat box.)
+        self.root.bind("<Control-space>", lambda e: self._push_to_talk())
         self.root.bind("<Control-d>", lambda e: self._switch_view("dashboard"))
         self.root.bind("<Control-c>", lambda e: self._switch_view("chat"))
         self.root.bind("<Control-s>", lambda e: self._switch_view("system"))
@@ -5071,13 +5233,6 @@ class TomDesktopApp:
             self._enqueue(self._append_chat, "meta", f"Failed to initialize TOM: {exc_detail}")
 
     def _update_voice_and_dashboard_state(self):
-        if self.voice:
-            status = self.voice.status()
-            self.voice_mode_enabled = bool(status.get("voice_input_enabled") or status.get("voice_output_enabled"))
-            if self.voice_mode_enabled:
-                self.voice_btn.configure(text="  \u266a  Voice: ON", bg=C["blue"], fg="#ffffff")
-            else:
-                self.voice_btn.configure(text="  \u266a  Voice Mode", bg=C["surface2"], fg=C["text"])
         if hasattr(self, "run_btn"):
             self.run_btn.configure(text=f"  \u25b6  Run {self.agent_profiles[self.active_agent_key]['label']}")
         self._refresh_dashboard()

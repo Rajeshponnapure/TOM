@@ -25,7 +25,9 @@ class ChatMemory:
 
     MAX_MESSAGES = 500
 
-    def __init__(self, file_path: str = "memories/lifetime_chat.json"):
+    def __init__(self, file_path: Optional[str] = None):
+        # TOM_CHAT_MEMORY_FILE lets tests (tests/conftest.py) keep their chats out of the user's history.
+        file_path = file_path or os.environ.get("TOM_CHAT_MEMORY_FILE") or "memories/lifetime_chat.json"
         self.file_path = file_path if os.path.isabs(file_path) else project_path_str(file_path)
         os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
         self._lock = threading.RLock()
@@ -180,6 +182,10 @@ class ChatMemory:
                 continue
             seen.add(key)
             merged.append(item)
+        # Oldest first. Relevant-but-older turns used to be appended AFTER the recent ones, so the
+        # model read an old exchange as the latest thing said and lost the thread of the chat.
+        order = {id(m): i for i, m in enumerate(self.messages)}
+        merged.sort(key=lambda m: order.get(id(m), -1))
 
         lines = []
         for item in merged:

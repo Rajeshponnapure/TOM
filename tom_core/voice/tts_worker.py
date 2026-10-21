@@ -27,7 +27,9 @@ def main() -> None:
 
     synth = SpeechSynthesizer()
     voices = list(SpeechSynthesizer.all_voices)
-    catalogue = [{"name": v.display_name, "language": v.language, "gender": str(v.gender)} for v in voices]
+    # VoiceGender is an IntEnum: str() gives "0"/"1" on Python 3.11, so use the member name.
+    catalogue = [{"name": v.display_name, "language": v.language,
+                  "gender": getattr(v.gender, "name", str(v.gender)).lower()} for v in voices]
     out_dir = tempfile.mkdtemp(prefix="tom_tts_")
     counter = [0]
 
@@ -44,7 +46,8 @@ def main() -> None:
             return {"voices": catalogue}
         if op != "synth":
             raise ValueError(f"unknown op {op!r}")
-        chosen = choose_voice([(c["name"], c["language"]) for c in catalogue], args.get("preference") or [])
+        chosen = choose_voice([(c["name"], c["language"], c["gender"]) for c in catalogue],
+                              args.get("preference") or [], args.get("gender"))
         if chosen is None:
             raise RuntimeError("No Windows voices are installed.")
         voice = voices[chosen]
@@ -61,7 +64,7 @@ def main() -> None:
         with open(path, "wb") as fh:
             fh.write(data)
         return {"wav": path, "voice": voice.display_name, "language": voice.language,
-                "seconds": round(time.perf_counter() - started, 3)}
+                "gender": catalogue[chosen]["gender"], "seconds": round(time.perf_counter() - started, 3)}
 
     serve(handle, {"voices": catalogue, "pid": os.getpid()})
 

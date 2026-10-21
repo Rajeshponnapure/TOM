@@ -17,10 +17,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from tom_core.observability.redact import redact
+from tools.project_paths import project_path
 from tom_core.tasks.models import TERMINAL_STATES, TaskRecord, TaskState, can_transition
 
 SCHEMA_VERSION = 1
-DEFAULT_DB = Path(__file__).resolve().parents[2] / "tom_brain" / "tasks.sqlite3"
+DEFAULT_DB = project_path("tom_brain", "tasks.sqlite3")      # follows TOM_STATE_ROOT
 MAX_TEXT = 2000
 
 

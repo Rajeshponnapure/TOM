@@ -10,14 +10,14 @@ import re
 from typing import Any, Dict, List
 from urllib.parse import unquote, urlparse
 
-from tools.project_paths import project_path_str
+from tools.project_paths import workspace_path
 
 MAX_DOWNLOAD_MB = 200
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TOM-Assistant/1.0"}
 
 
 def _out_dir(sub: str) -> str:
-    d = project_path_str("output", sub)
+    d = str(workspace_path(sub))   # downloads/scrapes are deliverables, not repo files
     os.makedirs(d, exist_ok=True)
     return d
 

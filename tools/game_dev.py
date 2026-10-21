@@ -8,11 +8,11 @@ import json
 import shutil
 import subprocess
 from typing import Any, Dict, List, Optional
-from tools.project_paths import project_path_str
+from tools.project_paths import workspace_path
 
 class GameDevEngine:
     def __init__(self, output_dir: str = None):
-        self.output_dir = output_dir or project_path_str("output", "games")
+        self.output_dir = output_dir or str(workspace_path("games"))   # user deliverables never go in the repo
         os.makedirs(self.output_dir, exist_ok=True)
         self._engines = {
             "unity": "C#",

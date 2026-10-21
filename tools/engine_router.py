@@ -60,6 +60,65 @@ def _extract_quoted(command: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+_HIDDEN_KEYS = frozenset({"status", "raw", "success"})
+
+
+def _fmt_scalar(value: Any) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, float):
+        return f"{value:.4g}"
+    return str(value)
+
+
+def humanize(value: Any, limit: int = 2400) -> str:
+    """An engine's result (nested dicts/lists) as readable lines instead of a Python repr.
+
+    Owner report 2026-10-21: answers like "Hardware: {'status': 'success', 'info': {...}}".
+    Code and other multi-line text are kept verbatim.
+    """
+    lines: List[str] = []
+
+    def label(key: str) -> str:
+        return key.replace("_", " ").strip().capitalize()
+
+    def walk(v: Any, indent: int, key: Optional[str]) -> None:
+        pad = "  " * indent
+        head = f"{label(key)}: " if key else ""
+        if isinstance(v, dict):
+            items = [(k, x) for k, x in v.items() if str(k) not in _HIDDEN_KEYS]
+            if key:
+                lines.append(f"{pad}{label(key)}:")
+            for k, x in items:
+                walk(x, indent + (1 if key else 0), str(k))
+        elif isinstance(v, (list, tuple)):
+            if not v:
+                lines.append(f"{pad}{head}none")
+            elif all(not isinstance(x, (dict, list, tuple)) for x in v):
+                shown = ", ".join(_fmt_scalar(x) for x in v[:12])
+                lines.append(f"{pad}{head}{shown}" + (f" … (+{len(v) - 12} more)" if len(v) > 12 else ""))
+            else:
+                if key:
+                    lines.append(f"{pad}{label(key)}:")
+                for x in v[:10]:
+                    walk(x, indent + 1, None)
+                    lines.append("")
+                if len(v) > 10:
+                    lines.append(f"{pad}  … {len(v) - 10} more")
+        else:
+            text = _fmt_scalar(v)
+            if "\n" in text:
+                lines.append(f"{pad}{head}\n{text}")
+            else:
+                lines.append(f"{pad}{head}{text}")
+
+    walk(value, 0, None)
+    out = "\n".join(line for i, line in enumerate(lines) if line or (i and lines[i - 1])).strip()
+    return out if len(out) <= limit else out[:limit] + " …"
+
+
 _VIDEO_EXT = r"[\w:\\/.\-]+\.(?:mp4|mov|avi|mkv|webm|flv|wmv)"
 _PHOTO_EXT = r"[\w:\\/.\-]+\.(?:png|jpe?g|gif|bmp|webp|tiff?)"
 
@@ -227,15 +286,25 @@ class EngineRouter:
                      r"trending topics|latest news)\b", c):
             return "news"
         if re.search(r"\b(create|make)\b.*\bvenv\b", c) or \
-           re.search(r"\b(check (dependency |package )?conflicts|migrate (to )?(python ?)?3\.11)\b", c):
+           re.search(r"\b(check (dependency |package )?conflicts|migrate (to )?(python ?)?3\.11)\b", c) or \
+           re.search(r"\b(dependency|package|version|pip)\s+conflicts?\b", c) or \
+           re.search(r"\b(outdated|installed)\s+(packages|dependencies)\b", c):
             return "deps"
         if re.search(r"\bupdate (tom|yourself|the system)\b", c) or c.startswith("auto-update"):
             return "autoupdate"
         if re.search(r"\b(analy[sz]e|detect)\b.*\bemotion\w*\b", c) or "emotional state" in c:
             return "voiceplus"
-        if re.search(r"\bwebsite safety\b|\bis (this|that) (web)?site safe\b", c):
+        if re.search(r"\bwebsite safety\b|\bis (this|that) (web)?site safe\b", c) or (
+                re.search(r"\b(safe|safety|scam|phishing|legit(imate)?|trust(worthy)?|malicious|fraud\w*)\b", c)
+                and re.search(r"(https?://\S+|www\.\S+|\b[a-z0-9-]+\.(?:com|in|org|net|io|co|ai|app|dev|info|xyz"
+                              r"|biz|me|ly)\b)", command_lower)):       # c has addresses removed
             return "websafety"
-        if re.search(r"\b(verify|check)\b.*\b(localhost|web ?app|webapp)\b", c) or \
+        # The URL itself is removed from `c`, so look for it in the original text.
+        if re.search(r"\b(verify|check|test|debug|diagnose)\b.*\b(localhost|web ?app|webapp)\b", c) or \
+           re.search(r"\b(verify|check|test|debug|diagnose|auto[- ]?debug)\b.*(localhost|127\.0\.0\.1|\bport\s*\d{2,5}\b)",
+                     command_lower) or \
+           re.search(r"\b(verify|check|test)\b.*https?://\S+.*\b(loads?|works?|is up|is running|responds?)\b",
+                     command_lower) or \
            c.startswith("verify website"):
             return "webauto"
         if re.search(r"\b(revert|undo|roll ?back|restore)\b.*\b(downloads|folder|files|changes|what you (?:have )?done)\b", c) or \
@@ -269,6 +338,7 @@ class EngineRouter:
            re.search(r"\b(my )?(network|ip)\b.*\b(info|overview|address|details)\b", c) or \
            re.search(r"\bwhat'?s my (ip|local ip|network)\b", c) or \
            re.search(r"\b(scan|check)\b.*\bports?\b", c) or \
+           re.search(r"\b(open|listening)\s+ports?\b|\bports?\b.*\b(open|listening)\b", c) or \
            re.search(r"\bnetwork\b.*\b(overview|diagnostics?|scan)\b", c):
             return "network"
         return None
@@ -419,6 +489,26 @@ class EngineRouter:
             r"\b(linear|ridge|lasso|logistic|knn|svm|tree|forest|random_forest|"
             r"kmeans|dbscan|arima|holt|naive_bayes|gradient|adaboost)\b", c)
         algo = algo_match.group(1) if algo_match else None
+        series = _extract_kv_list(command, "data")
+
+        # No data, no run: a question ("how would I forecast monthly sales?") used to be answered
+        # with a model trained on built-in demo numbers (owner report 2026-10-21). Demo runs only
+        # when asked for explicitly.
+        if not (X or series) and not re.search(r"\b(demo|example|sample)\b", c):
+            return {"status": "needs_input", "response_type": "engine_ml",
+                    "message": "To train or run a model I need data: give values like X=[[1],[2],[3]] "
+                               "y=[2,4,6] (or data=[...] for a forecast), attach a CSV with Data Anal, "
+                               "or say 'demo' to see it on sample numbers."}
+
+        # The engine's own names ("linearregression", "decisiontreeregressor", …).
+        regression_names = {"linear": "linearregression", "tree": "decisiontreeregressor",
+                            "forest": "randomforestregressor", "random_forest": "randomforestregressor",
+                            "gradient": "gradientboostingregressor", "adaboost": "adaboostregressor",
+                            "svm": "svr"}
+        classifier_names = {"logistic": "logisticregression", "svm": "svc", "tree": "decisiontreeclassifier",
+                            "forest": "randomforestclassifier", "random_forest": "randomforestclassifier",
+                            "gradient": "gradientboostingclassifier", "adaboost": "adaboostclassifier",
+                            "naive_bayes": "naivebayes"}
 
         if "auto" in c and "ml" in c:
             dX, dy = X or self._DEMO_XY[0], y or self._DEMO_XY[1]
@@ -427,19 +517,21 @@ class EngineRouter:
             res = eng.cluster(algo or "kmeans", X or self._DEMO_CLUSTER)
         elif re.search(r"\bclassif", c):
             dX, dy = (X or self._DEMO_CLS[0]), (y or self._DEMO_CLS[1])
-            res = eng.classify(algo or "knn", dX, dy)
+            res = eng.classify(classifier_names.get(algo, algo or "knn"), dX, dy)
         elif re.search(r"\banomal", c):
             res = eng.detect_anomalies(algo or "isolation_forest", X or self._DEMO_ANOM)
         elif re.search(r"time[- ]series|forecast|arima|holt", c):
-            series = _extract_kv_list(command, "data") or self._DEMO_SERIES
-            res = eng.time_series(algo or "arima", series)
+            res = eng.time_series(algo or "arima", series or self._DEMO_SERIES)
         else:  # regression default
             dX, dy = (X or self._DEMO_XY[0]), (y or self._DEMO_XY[1])
-            res = eng.regression(algo or "linear", dX, dy)
+            res = eng.regression(regression_names.get(algo, algo or "linearregression"), dX, dy)
 
-        note = "" if (X and y) or (X and "cluster" in c) else \
-            "\n(Demo data used — supply X=[[...]] y=[...] or a CSV for real runs.)"
-        return self._ok("engine_ml", f"ML result:\n{str(res)[:1800]}{note}", raw=res)
+        note = "" if (X and y) or (X and "cluster" in c) or series else \
+            "\n(Demo data used, as you asked — supply X=[[...]] y=[...] or a CSV for real runs.)"
+        if isinstance(res, dict) and str(res.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_ml", "raw": res,
+                    "message": f"The ML engine could not run this: {res.get('message', res)}"}
+        return self._ok("engine_ml", f"ML result:\n{humanize(res)}{note}", raw=res)
 
     # ── IoT ──────────────────────────────────────────────────────────────
     def _run_iot(self, command: str) -> Dict[str, Any]:
@@ -459,9 +551,12 @@ class EngineRouter:
         elif proto_m and ("protocol" in c or "broker" in c or not comps):
             res = eng.generate_protocol_code(proto_m.group(1), "client")
         else:
-            res = eng.generate_esp_code(board, comps or ["dht11"],
-                                        protocol=proto_m.group(1) if proto_m else "mqtt")
-        return self._ok("engine_iot", f"IoT code generated:\n{str(res)[:1800]}", raw=res)
+            res = eng.generate_esp_code(board, comps or ["dht11"],      # the engine reads "protocols"
+                                        protocols=[proto_m.group(1) if proto_m else "mqtt"])
+        if isinstance(res, dict) and str(res.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_iot", "raw": res,
+                    "message": f"IoT: {res.get('message', 'failed')}"}
+        return self._ok("engine_iot", f"IoT code generated:\n{humanize(res, limit=4000)}", raw=res)
 
     # ── VLSI ─────────────────────────────────────────────────────────────
     def _run_vlsi(self, command: str) -> Dict[str, Any]:
@@ -542,11 +637,15 @@ class EngineRouter:
         elif "system info" in c:
             r = eng.get_system_info()
         else:
-            return self._ok("engine_hardware",
-                            "Hardware commands: move mouse to X Y · click [at X Y] · double/right click · "
-                            "type text <...> · press key <k> · screenshot · volume up/down/to N · "
-                            "mute/unmute · system info")
-        return self._ok("engine_hardware", f"Hardware: {str(r)[:600]}", raw=r)
+            return {"status": "needs_input", "response_type": "engine_hardware",
+                    "message": "Hardware commands: move mouse to X Y · click [at X Y] · double/right click · "
+                               "type text <...> · press key <k> · screenshot · volume up/down/to N · "
+                               "mute/unmute · system info"}
+        if isinstance(r, dict) and str(r.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_hardware", "raw": r,
+                    "message": f"Hardware: {r.get('message', 'failed')}"}
+        extra = {"path": r["path"]} if isinstance(r, dict) and r.get("path") else {}
+        return self._ok("engine_hardware", humanize(r), raw=r, **extra)
 
     # ── Auto-scaler (resource management, parallel execution) ────────────
     def _run_scaler(self, command: str) -> Dict[str, Any]:
@@ -570,7 +669,7 @@ class EngineRouter:
             res = eng.detect_resources()
         body = res.get("result", res) if isinstance(res, dict) else res
         return self._ok("engine_scaler",
-                        f"Auto-scaler: {res.get('message', '')}\n{str(body)[:1500]}", raw=res)
+                        f"Auto-scaler: {res.get('message', '')}\n{humanize(body)}", raw=res)
 
     # ── Network diagnostics (own LAN / this host, read-only) ─────────────
     def _run_network(self, command: str) -> Dict[str, Any]:
@@ -579,7 +678,8 @@ class EngineRouter:
             return self._unavailable("Network diagnostics", "")
         c = command.lower()
         # Port scan: "scan ports on 192.168.1.10" / "scan my ports".
-        if re.search(r"\b(scan|check)\b.*\bports?\b", c):
+        if re.search(r"\b(scan|check)\b.*\bports?\b", c) or \
+                re.search(r"\b(open|listening)\s+ports?\b|\bports?\b.*\b(open|listening)\b", c):
             host_m = re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", command)
             host = host_m.group(1) if host_m else "127.0.0.1"
             return eng.scan_ports(host)
@@ -711,7 +811,11 @@ class EngineRouter:
             genre_m = re.search(r"\b(platformer|shooter|puzzle|runner|rpg)\b", c)
             res = eng.scaffold_pygame(name_m.group(1) if name_m else "my_game",
                                       genre_m.group(1) if genre_m else "platformer")
-        return self._ok("engine_gamedev", f"Game dev:\n{str(res)[:1500]}", raw=res)
+        if isinstance(res, dict) and str(res.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_gamedev", "raw": res,
+                    "message": f"Game dev: {res.get('message', 'failed')}"}
+        extra = {"path": res["path"]} if isinstance(res, dict) and res.get("path") else {}
+        return self._ok("engine_gamedev", humanize(res, limit=4000), raw=res, **extra)
 
     # ── Blender ──────────────────────────────────────────────────────────
     def _run_blender(self, command: str) -> Dict[str, Any]:
@@ -719,8 +823,10 @@ class EngineRouter:
         if not eng:
             return self._unavailable("Blender", "", "blender")
         if not eng.is_available():
-            return self._ok("engine_blender",
-                            "Blender is not installed (or not found). Install Blender and retry.")
+            return {"status": "error", "response_type": "engine_blender",
+                    "message": "Blender is not installed (or TOM can't find it), so nothing was built. "
+                               "Install Blender from blender.org, or set BLENDER_PATH to blender.exe, "
+                               "and ask again."}
         task = re.sub(r"^blender\s*", "", command, flags=re.I).strip() or "cube"
         res = eng.generate_and_execute(task)
         # _ok() hardcodes status="success" -- it used to be returned unconditionally
@@ -737,7 +843,7 @@ class EngineRouter:
             extra["path"] = res["path"]
         if res.get("paths"):
             extra["paths"] = res["paths"]
-        return self._ok("engine_blender", f"Blender:\n{str(res)[:1200]}", **extra)
+        return self._ok("engine_blender", f"Blender:\n{humanize(res)}", **extra)
 
     # ── News ─────────────────────────────────────────────────────────────
     def _run_news(self, command: str) -> Dict[str, Any]:
@@ -756,8 +862,14 @@ class EngineRouter:
             res = eng.search_news(q)
         else:
             res = eng.daily_briefing()
-        msg = res.get("briefing") or res.get("summary") or res.get("message") or str(res)
-        return self._ok("engine_news", str(msg)[:2000], raw=res)
+        if isinstance(res, dict) and str(res.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_news", "raw": res,
+                    "message": f"News: {res.get('message', 'failed')}"}
+        # The headlines themselves, not just "61 stories across 5 sections".
+        payload = res.get("result") if isinstance(res, dict) and isinstance(res.get("result"), dict) else {}
+        msg = (payload.get("markdown") or res.get("briefing") or res.get("summary")
+               or res.get("message") or humanize(res))
+        return self._ok("engine_news", str(msg)[:3500], raw=res)
 
     # ── Dependencies / Env ───────────────────────────────────────────────
     def _run_deps(self, command: str) -> Dict[str, Any]:
@@ -778,7 +890,10 @@ class EngineRouter:
             r = eng.install_package(pkg)
         else:
             r = eng.list_installed()
-        return self._ok("engine_deps", f"Env/Deps: {str(r)[:1500]}", raw=r)
+        if isinstance(r, dict) and str(r.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_deps", "raw": r,
+                    "message": f"Env/Deps: {r.get('message', 'failed')}"}
+        return self._ok("engine_deps", f"Env/Deps:\n{humanize(r)}", raw=r)
 
     # ── Auto-update ──────────────────────────────────────────────────────
     def _run_autoupdate(self, command: str) -> Dict[str, Any]:
@@ -796,7 +911,13 @@ class EngineRouter:
             r = eng.get_update_history()
         else:
             r = eng.check_git_updates()  # safest default — never auto full_update
-        return self._ok("engine_autoupdate", f"Auto-update: {str(r)[:1200]}", raw=r)
+        if isinstance(r, list) and not r:
+            return self._ok("engine_autoupdate", "No updates have been applied yet (the update history is empty).",
+                            raw=r)
+        if isinstance(r, dict) and str(r.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_autoupdate", "raw": r,
+                    "message": f"Auto-update: {r.get('message', 'failed')}"}
+        return self._ok("engine_autoupdate", f"Auto-update:\n{humanize(r)}", raw=r)
 
     # ── Voice+ (text emotion only — audio needs the GUI/voice mode) ─────
     def _run_voiceplus(self, command: str) -> Dict[str, Any]:
@@ -806,7 +927,19 @@ class EngineRouter:
         m = re.search(r"(?:text\s*:\s*)(.+)$", command, flags=re.I | re.S)
         text = m.group(1).strip() if m else command
         r = eng.analyze_emotional_state(text)
-        return self._ok("engine_voiceplus", f"Emotion analysis: {str(r)[:1200]}", raw=r)
+        result = r.get("result", r) if isinstance(r, dict) else r
+        if isinstance(result, dict):
+            scores = {k: v for k, v in (result.get("emotion_scores") or {}).items() if v}
+            lines = [f"Main emotion: {result.get('dominant_emotion', 'unknown')} "
+                     f"(confidence {_fmt_scalar(result.get('emotion_confidence'))})"]
+            if scores:
+                lines.append("Detected: " + ", ".join(f"{k} {_fmt_scalar(v)}" for k, v in
+                                                      sorted(scores.items(), key=lambda kv: -kv[1])))
+            if result.get("crisis_detected"):
+                lines.append("Crisis language detected — if you are in danger, please contact local "
+                             "emergency services or a crisis line now.")
+            return self._ok("engine_voiceplus", "\n".join(lines), raw=r)
+        return self._ok("engine_voiceplus", f"Emotion analysis:\n{humanize(r)}", raw=r)
 
     # ── Autonomous (async) ───────────────────────────────────────────────
     async def _run_autonomous(self, command: str) -> Dict[str, Any]:
@@ -835,15 +968,24 @@ class EngineRouter:
             return self._unavailable("Web automation", "Playwright must be installed.", "webauto")
         m = re.search(r"(https?://\S+|localhost:?\d*|\b\d{2,5}\b)", command, re.I)
         if not m:
-            return self._ok("engine_webauto",
-                            "Give me a URL or localhost port, e.g. 'verify web app on localhost:3000'.")
+            return {"status": "needs_input", "response_type": "engine_webauto",
+                    "message": "Give me a URL or localhost port, e.g. 'verify web app on localhost:3000'."}
         target = m.group(1).rstrip(".,:;")
         if target.isdigit():
             target = f"http://localhost:{target}"
         elif not target.startswith("http"):
             target = "http://" + target
+        if re.search(r"\b(debug|fix|diagnose)\b", command, re.I) and hasattr(wa, "auto_debug_loop"):
+            res = await wa.auto_debug_loop(target, max_iterations=3)
+            return self._ok("engine_webauto",
+                            f"Auto-debug ({target}): {res.get('message', 'done')} "
+                            f"({res.get('total_iterations', 0)} iterations)", raw=res)
         res = await wa.wait_and_verify(target)
-        return self._ok("engine_webauto", f"Web verification ({target}): {str(res)[:1200]}", raw=res)
+        ok = isinstance(res, dict) and str(res.get("status", "")).lower() in ("success", "ok", "passed")
+        if isinstance(res, dict) and not ok:
+            return {"status": "error", "response_type": "engine_webauto", "raw": res,
+                    "message": f"Web verification of {target} failed:\n{humanize(res)}"}
+        return self._ok("engine_webauto", f"Web verification of {target}:\n{humanize(res)}", raw=res)
 
     # ── Website safety analysis (SafetyGuards) ───────────────────────────
     def _run_websafety(self, command: str) -> Dict[str, Any]:
@@ -852,10 +994,18 @@ class EngineRouter:
             return self._unavailable("Website safety analyzer", "")
         m = re.search(r"(https?://\S+|www\.\S+|[a-z0-9-]+(?:\.[a-z0-9-]+)+\S*)", command, re.I)
         if not m:
-            return self._ok("engine_websafety",
-                            "Give me a URL to check, e.g. 'check website safety: example.com'.")
+            return {"status": "needs_input", "response_type": "engine_websafety",
+                    "message": "Give me a URL to check, e.g. 'is example.com safe?'."}
         res = safety.analyze_website(m.group(1).rstrip(".,:;"))
-        return self._ok("engine_websafety", f"Website safety: {str(res)[:1200]}", raw=res)
+        if isinstance(res, dict):
+            flags = ", ".join(str(f).replace("_", " ") for f in res.get("flags") or []) or "none"
+            verdict = str(res.get("recommendation", "unknown")).replace("_", " ")
+            text = (f"Website safety for {res.get('domain', m.group(1))}:\n"
+                    f"Trust level: {res.get('trust_level', 'unknown')} (score {res.get('score', '?')}/100)\n"
+                    f"Warning signs: {flags}\nRecommendation: {verdict}\n"
+                    "(This is a heuristic check of the address — it does not open or scan the page.)")
+            return self._ok("engine_websafety", text, raw=res)
+        return self._ok("engine_websafety", f"Website safety:\n{humanize(res)}", raw=res)
 
     # ── Code runner (subprocess + timeout, ALWAYS behind approval) ───────
     async def _run_coderun(self, command: str) -> Dict[str, Any]:
@@ -866,8 +1016,8 @@ class EngineRouter:
         js_m = re.search(r"([\w\-./\\:]+\.js)\b", command)
         m = re.search(r"([\w\-./\\:]+\.py)\b", command)
         if not (shell_m or js_m or m):
-            return self._ok("engine_coderun",
-                            "Tell me what to run: a .py/.js file, or 'run shell: <command>'.")
+            return {"status": "needs_input", "response_type": "engine_coderun",
+                    "message": "Tell me what to run: a .py/.js file, or 'run shell: <command>'."}
         path = (js_m or m).group(1) if (js_m or m) else ""
         run_kind = "shell" if shell_m else ("node" if js_m else "python")
         agent = self._agent

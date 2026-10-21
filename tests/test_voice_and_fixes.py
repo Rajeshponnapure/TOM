@@ -41,10 +41,12 @@ def test_unique_tts_filenames():
     assert '"tom_voice.mp3"' not in src + tts
     assert "pygame.mixer.music.unload()" in src
 
-def test_calibration_once_per_session():
+def test_noise_floor_is_carried_between_listens():
+    """Was "calibrate once per session" (re-calibrating ratcheted the threshold up). The capture
+    recorder now tracks the floor itself and VoiceTools hands it from one listen to the next."""
     src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "tools", "voice_tools.py"), encoding="utf-8").read()
-    assert "_calibrated" in src
+    assert "noise_floor=self._noise_floor" in src and "self._noise_floor = rec.noise_floor" in src
 
 def test_gui_has_global_scroll_dispatcher():
     src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

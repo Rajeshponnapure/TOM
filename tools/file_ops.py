@@ -18,11 +18,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from tools.project_paths import project_path
+
 SKIP_DIRS = {"windows", "program files", "program files (x86)", "$recycle.bin",
              "appdata", "node_modules", "__pycache__", ".git", "venv",
              "system volume information"}
 MAX_FILES = 5000
-JOURNAL_PATH = Path(__file__).resolve().parents[1] / "data" / "file_ops_journal.json"
+JOURNAL_PATH = project_path("data", "file_ops_journal.json")   # follows TOM_STATE_ROOT
 
 TYPE_GROUPS = {
     "Images":      {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".heic"},

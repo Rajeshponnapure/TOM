@@ -22,12 +22,11 @@ import sys
 import threading
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeout
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tools.project_paths import PROJECT_ROOT
+from tools.project_paths import PROJECT_ROOT, project_path
 
-LOG_DIR = Path(PROJECT_ROOT) / "tom_logs"
+LOG_DIR = project_path("tom_logs")
 WORKER_FLAG = "--tom-voice-worker"
 
 

@@ -20,6 +20,7 @@ Status values: **Proposed** (awaiting owner approval at the R0 gate) · **Accept
 **Status:** Accepted (owner, 2026-10-21: "keep my UI and also create a PySide6 too")
 **Context:** PRD §12.4 *suggests* PySide6. `tom_desktop_app.py` is 5,580 lines of working Tkinter; a port would be a rewrite of the largest file.
 **Decision:** Keep the Tkinter app unchanged as an interface. Build a second desktop interface in PySide6 (`tom_core/interfaces/qt_app.py`, launched by `tom_qt_app.py` / `launch_tom_qt.bat`) as a pure TaskService client: task list across all interfaces, timeline, approvals dialog, resource panel, privacy panel, push-to-talk, emergency stop (PRD §14). Neither UI has its own agent logic (§12.2).
+**Amendment (owner, 2026-10-21):** the Tkinter voice mode now uses the same push-to-talk as the PySide6 app (`tom_core/voice/push_to_talk.py`): the sidebar button, the chat 🎤 button, `Ctrl+Space` and the Voice window each take one request per press and run it as a `voice` task. The Voice window keeps the continuous loop as "Hands-free". The old sidebar voice mode (`VoiceTools.start_conversation_mode` + `generate_voice_response`, which skipped TaskService for most requests) is no longer reachable from the UI. `Ctrl+V` no longer toggles voice; it fired on every paste.
 
 ## ADR-004 — SQLite (stdlib `sqlite3`, WAL mode) for task state
 **Status:** Proposed (PRD §9.2 and §12.4 already recommend it)
@@ -35,7 +36,7 @@ Status values: **Proposed** (awaiting owner approval at the R0 gate) · **Accept
 | LLM | Ollama, installed models only (`qwen3:8b` for every chat slot) | `TOM_LLM_PROVIDER=groq` (GUI toggle sets it) |
 | Memory | SQLite store `tom_brain/hindsight/memory.sqlite3`, seeded from the journal | `HINDSIGHT_BASE_URL=https://api.hindsight.vectorize.io` |
 | Speech-to-text | faster-whisper `large-v3-turbo` from `C:\voice-agent-data\cache\huggingface\hub` | `VOICE_RECOGNITION_ENGINE=google` (uses `en-IN`) |
-| Text-to-speech | Windows voices; English (India) preferred, else Mark | `TOM_TTS_ENGINE=edge` (`en-IN-PrabhatNeural`) |
+| Text-to-speech | Windows voices; female US English (owner, 2026-10-21): Zira, rate 1.15 | `TOM_TTS_ENGINE=edge` (`en-US-JennyNeural`, +15%) |
 
 `tom_core/privacy.py` reports the live routing; it is shown in "system status" and the PySide6 privacy panel.
 **Supersedes:** the earlier llm_factory rule "Groq whenever GROQ_API_KEY is set" (tests updated accordingly).

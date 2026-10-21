@@ -674,7 +674,8 @@ def create_presentation(
     fpath = _output_path(fname)
     prs.save(fpath)
     return {"status": "success", "path": fpath,
-            "message": f"Presentation saved: {fpath} ({len(slides_content) + 2} slides)"}
+            "message": (f"Presentation saved: {fpath} ({len(slides_content)} content slide"
+                        f"{'' if len(slides_content) == 1 else 's'} plus a title and a closing slide)")}
 
 
 # ─── Presentation Helpers ────────────────────────────────────────────────────
