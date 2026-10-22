@@ -26,6 +26,7 @@ if not os.environ.get("TOM_WORKSPACE_DIR"):
 # Tests must never reach into the owner's real apps (WhatsApp Desktop is read through UI
 # Automation since 2026-10-21); a test that needs it injects a fake instead.
 os.environ["TOM_DISABLE_UI_AUTOMATION"] = "1"
+os.environ.setdefault("TOM_LLM_ADMISSION", "0")         # no nvidia-smi / Ollama probing in unit tests
 os.environ["TOM_NO_AUTO_OPEN"] = "1"          # created documents never pop up on the owner's screen
 # Long-term memory is local by default (ADR-005). Never let a test read or write the user's real
 # store in tom_brain/hindsight — every test session gets a throwaway one unless a test sets its own.

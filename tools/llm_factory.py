@@ -358,7 +358,8 @@ def resolve_model(slot: str = "primary") -> str:
     return resolved
 
 
-def make_chat_model(model: str, max_tokens: int = 4096, temperature: float = 0.1) -> Any:
+def make_chat_model(model: str, max_tokens: int = 4096, temperature: float = 0.1,
+                    profile: str = "chat") -> Any:
     """Build a chat model for the active provider.
 
     `model` is the Ollama model name; it is ignored on Groq (the Groq model is
@@ -400,9 +401,40 @@ def make_chat_model(model: str, max_tokens: int = 4096, temperature: float = 0.1
     # Qwen 3.x models emit their reasoning separately. With TOM's compact
     # chat budget, the reasoning can consume every generated token and leave
     # the visible response empty. Disable it for normal assistant responses.
+    # R6 (RRM-002/003): fit the model into the VRAM measured free now, or pick a fallback.
+    if os.environ.get("TOM_LLM_ADMISSION", "1") != "0":
+        try:
+            from tom_core.resources.llm_admission import cached_admit
+            adm = cached_admit(model, profile)
+            if adm.model != model:
+                print(f"[LLM_FACTORY] {adm.reason}")
+                kwargs["model"] = model = adm.model
+            elif adm.decision not in ("gpu", "unmeasured"):
+                print(f"[LLM_FACTORY] {model}: {adm.reason}")
+            kwargs["num_ctx"] = adm.num_ctx
+            if adm.num_gpu is not None:
+                kwargs["num_gpu"] = adm.num_gpu
+        except Exception:
+            pass  # admission is advisory; never block model construction
     if "qwen3" in model.lower():
         kwargs["reasoning"] = False
     return ChatOllama(**kwargs)
+
+
+def oom_fallback_model(model_obj: Any) -> "tuple[Any, str]":
+    """AT-009: the single retry after an out-of-memory failure. Returns (new model, reason), or
+    (None, reason) when there is nothing smaller to try (e.g. a cloud model)."""
+    name = getattr(model_obj, "model", "")
+    if not name or provider() == "groq":
+        return None, "out of memory, and no local fallback applies"
+    from tom_core.resources.llm_admission import fallback_after_oom
+    adm = fallback_after_oom(name, getattr(model_obj, "num_ctx", None))
+    try:
+        new = model_obj.model_copy(update={"model": adm.model, "num_ctx": adm.num_ctx,
+                                           **({"num_gpu": adm.num_gpu} if adm.num_gpu is not None else {})})
+    except Exception:
+        return None, f"out of memory; could not build the fallback ({adm.reason})"
+    return new, adm.reason
 
 
 def make_groq_model(model: str, max_tokens: int = 4096, temperature: float = 0.1) -> Any:

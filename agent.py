@@ -821,6 +821,23 @@ class TomAgent:
             raise RuntimeError(
                 f"Model timeout while running '{task_name}' after {self.model_timeout_seconds}s."
             )
+        except Exception as exc:
+            from tom_core.resources.llm_admission import is_oom
+            if not is_oom(exc):
+                raise
+            # AT-009 / PRD §6.3: one retry with a smaller profile, then report — never a loop.
+            from tools.llm_factory import oom_fallback_model
+            fallback, reason = oom_fallback_model(model)
+            safe_print(f"[LLM] {task_name}: {reason}")
+            self.last_llm_fallback = reason
+            if fallback is None:
+                raise RuntimeError(f"The model ran out of memory during '{task_name}' ({reason}).") from exc
+            try:
+                return await asyncio.wait_for((chain | fallback).ainvoke(payload),
+                                              timeout=self.model_timeout_seconds)
+            except Exception as exc2:
+                raise RuntimeError(f"The model ran out of memory during '{task_name}'; the one retry "
+                                   f"({reason}) also failed: {type(exc2).__name__}: {exc2}") from exc2
 
     # ── NLP-BASED UNDERSTANDING ─────────────────────────────────────────
 
