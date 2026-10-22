@@ -1019,6 +1019,10 @@ class TomAgent:
             safe_print(f"[NLP] Action: {nlp_data.get('action')} | Target: {nlp_data.get('target')} | Topic: {nlp_data.get('topic')}")
             safe_print(f"[NLP] Sentence: {nlp_data.get('sentence_type')} | Entities: {nlp_data.get('entities', [])}")
         safe_print(f"[NLP] Context: {parsed.get('context_summary')}")
+        u = parsed.get("understanding")
+        if u:
+            from tom_core.understanding import Understanding
+            safe_print(f"[UNDERSTOOD] {Understanding(**u).summary()}")
         return parsed
 
     # ── MAIN TASK EXECUTION ─────────────────────────────────────────────

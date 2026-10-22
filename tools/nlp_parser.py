@@ -314,11 +314,12 @@ CRITICAL RULES:
         analysis = deep_analyze(command)
         fallback = self.parse(command)
 
-        if not self.llm:
-            return fallback
-
-        # Skip expensive LLM parse for simple chat — regex is sufficient
-        if fallback.get("intent") == "chat" and len(command.split()) <= 12:
+        # Understand first (tom_core.understanding): action, target, content, conditions, constraints.
+        # A clear, complete request is acted on straight away; only an unclear one costs a model call.
+        from tom_core.understanding import analyze as _understand
+        understood = _understand(command, fallback)
+        fallback["understanding"] = understood.to_dict()
+        if not self.llm or understood.confident:
             return fallback
 
         from langchain_core.messages import SystemMessage, HumanMessage
@@ -377,7 +378,7 @@ CRITICAL RULES:
             # Attach deep analysis
             if analysis.get("available"):
                 parsed["nlp_analysis"] = fallback.get("nlp_analysis", {})
-
+            parsed["understanding"] = _understand(command, parsed).to_dict()
             return parsed
         except Exception as exc:
             logger.warning("LLM parse failed (%s), using regex fallback.", exc)
