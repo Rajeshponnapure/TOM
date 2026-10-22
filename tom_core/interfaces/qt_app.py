@@ -15,6 +15,7 @@ import html
 import os
 import sys
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
@@ -226,8 +227,10 @@ class TomWindow(QMainWindow):
         self.sampler_thread: Optional[QThread] = None
         if start_sampler:
             self._start_sampler()
+        self._busy_since: Optional[float] = None
         self.task_timer = QTimer(self)
         self.task_timer.timeout.connect(self.refresh_tasks)
+        self.task_timer.timeout.connect(self._tick_elapsed)
         self.task_timer.start(1000)
 
     # layout ----------------------------------------------------------------
@@ -413,12 +416,25 @@ class TomWindow(QMainWindow):
         self.input.clear()
         self._append("You", text, "#7fb2ff")
         self.status_lbl.setText("Working…")
+        self._busy_since = time.monotonic()
         from tom_core.policy import get_policy
         get_policy().resume()            # a new request from the user lifts an emergency stop
         self.host.submit(text, interface)
 
     @Slot(str, dict)
+    def _tick_elapsed(self) -> None:
+        """FR-018: elapsed time and the latest step while a request runs."""
+        if self._busy_since is None:
+            return
+        from tom_core.policy import get_policy
+        if get_policy().paused:
+            return
+        secs = int(time.monotonic() - self._busy_since)
+        step = self.progress_lbl.text().strip()
+        self.status_lbl.setText(f"Working… {secs}s" + (f" — {step[:90]}" if step else ""))
+
     def _on_result(self, request: str, result: dict) -> None:
+        self._busy_since = None
         state = str(result.get("task_state", result.get("status", "")))
         color = STATE_COLORS.get(state, "#e6e9ef")
         message = str(result.get("message", "")) or "(no message)"

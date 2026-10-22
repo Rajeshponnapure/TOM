@@ -12,6 +12,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -24,6 +25,27 @@ def _wav_16k(pcm: bytes, sample_rate: int, sample_width: int) -> bytes:
     """Microphone PCM → the 16 kHz 16-bit mono WAV every ASR adapter takes."""
     import speech_recognition as sr
     return sr.AudioData(pcm, sample_rate, sample_width).get_wav_data(convert_rate=16000, convert_width=2)
+
+
+def wake_word() -> str:
+    """The configured wake word ("hey tom"), or "" when hands-free mode needs none (the default)."""
+    return re.sub(r"\s+", " ", os.environ.get("TOM_WAKE_WORD", "")).strip().lower()
+
+
+def strip_wake_word(heard: str, wake: str):
+    """The request after the wake word, "" for the wake word alone, None when it was not said.
+    Tolerates punctuation and ASR spellings like "Hey, Tom." / "hey thom"."""
+    words = re.findall(r"[a-z']+", (heard or "").lower())
+    want = wake.split()
+    fuzzy = {"tom": {"tom", "thom", "tum", "tomm", "tome"}}
+    if len(words) < len(want):
+        return None
+    for w, target in zip(words, want):
+        if w != target and w not in fuzzy.get(target, set()):
+            return None
+    # cut the original text after the wake word's last occurrence of its final word
+    m = re.search(r"\b" + r"\W+".join(r"\w+" for _ in want) + r"\b[\s,.!?:;-]*", heard, re.I)
+    return heard[m.end():].strip() if m else ""
 
 
 class VoiceTools:
@@ -513,6 +535,19 @@ class VoiceTools:
                         continue
 
                     lower = heard.lower().strip()
+
+                    # Optional wake word (PRD C02 / FR-002: opt-in). With TOM_WAKE_WORD set, hands-free mode
+                    # ignores speech that does not start with it, so background talk is never acted on.
+                    wake = wake_word()
+                    if wake:
+                        stripped = strip_wake_word(heard, wake)
+                        if stripped is None:
+                            _notify("listening", f"(ignored — say \"{wake}\" first)")
+                            continue
+                        heard, lower = stripped, stripped.lower()
+                        if not heard:
+                            _notify("listening", "Yes?")
+                            continue
 
                     # Stop commands
                     if lower in ("stop", "exit", "quit", "stop listening", "end conversation",

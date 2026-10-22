@@ -17,6 +17,13 @@ Last updated 2026-10-22.
 | R9 Advanced capabilities | **Done** behind flags | Watchers, reviewed workflows, cloud escalation gate, specialists; remote access deliberately not provided — `docs/security/r9-feature-review.md`, `tests/test_advanced_features.py` |
 | R10 Stabilize | **Done** (name stays TOM) | 21 dead Tk handlers + `_prompt_and_run` removed; CLI voice mode now a normal voice task (last TaskService bypass closed); `docs/release-checklist.md`; full regression suite green 2026-10-22 |
 
+## Full PRD check (2026-10-22)
+
+Every FR / RRM / capability / NFR is mapped to code and tests in [`prd-verification.md`](prd-verification.md).
+Remaining partial items are listed there honestly (FR-012, FR-016 grant enforcement, RRM-005, RRM-010,
+C02 streaming ASR, C05 sessions, C14 deployment, C15 live devices, NFR-011/012); C16 remote access is not
+built by design. Full suite 2026-10-22: 764 passed, 16 skipped.
+
 ## Owner decisions recorded (2026-10-21)
 
 ADR-002 `tom_core/` ✔ · ADR-003 keep Tkinter **and** add PySide6 ✔ · ADR-005 cloud routes opt-in, local default ✔ ·

@@ -185,13 +185,13 @@ def _bullets(d: Deck, slide, s: Dict[str, Any]) -> List[Any]:
     n = len(items)
     gap = min(Inches(1.35), Inches(4.9) / max(n, 1))
     top = Inches(1.75) + (Inches(4.9) - gap * n) / 2                 # centre the block vertically
-    size = 22 if n <= 3 else 19
+    size = min(_fit(22 if n <= 3 else 19, b, 100) for b in items)      # one size for every point
     for i, b in enumerate(items):
         y = top + gap * i
         dot = _box(slide, Inches(0.75), y + Inches(0.05), Inches(0.55), Inches(0.55), pal.primary, MSO_SHAPE.OVAL)
         _text(slide, 0, 0, 0, 0, str(i + 1), 15, "FFFFFF", bold=True, align=PP_ALIGN.CENTER,
               anchor=MSO_ANCHOR.MIDDLE, shape=dot)
-        t = _text(slide, Inches(1.55), y, Inches(10.8), gap, b, _fit(size, b, 100), pal.text, anchor=MSO_ANCHOR.TOP)
+        t = _text(slide, Inches(1.55), y, Inches(10.8), gap, b, size, pal.text, anchor=MSO_ANCHOR.TOP)
         shapes += [dot, t]
     return shapes
 

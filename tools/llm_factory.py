@@ -416,6 +416,9 @@ def make_chat_model(model: str, max_tokens: int = 4096, temperature: float = 0.1
                 kwargs["num_gpu"] = adm.num_gpu
         except Exception:
             pass  # admission is advisory; never block model construction
+    # RRM-006: idle models are unloaded by Ollama after keep_alive (Ollama's default is 5 minutes).
+    if os.environ.get("TOM_OLLAMA_KEEP_ALIVE", "").strip():
+        kwargs["keep_alive"] = os.environ["TOM_OLLAMA_KEEP_ALIVE"].strip()
     if "qwen3" in model.lower():
         kwargs["reasoning"] = False
     return ChatOllama(**kwargs)

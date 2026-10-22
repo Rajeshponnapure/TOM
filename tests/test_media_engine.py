@@ -37,8 +37,8 @@ from tools.media_engine import MediaEngine  # noqa: E402
 
 @pytest.fixture
 def eng(monkeypatch, tmp_path):
-    monkeypatch.setattr(mediamod, "project_path_str",
-                         lambda *parts: str(tmp_path.joinpath(*parts)))
+    # media deliverables go to the workspace (2026-10-22); keep them in tmp_path for the test
+    monkeypatch.setenv("TOM_WORKSPACE_DIR", str(tmp_path))
     return MediaEngine()
 
 

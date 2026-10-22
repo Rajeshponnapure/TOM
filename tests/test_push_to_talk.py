@@ -279,3 +279,17 @@ def test_at014_interrupting_tom_stops_playback_and_sends_the_next_request_once(t
     assert tk_app.voice.calls.index("stop_speaking") < tk_app.voice.calls.index(("listen", push_to_talk.LISTEN_TIMEOUT_S))
     assert tk_app.sent == [("open chrome", "voice")]  # exactly one task
     assert finished == [True] and tk_app.ui.empty()
+
+
+@pytest.mark.parametrize("heard,expected", [
+    ("Hey, Tom. open chrome", "open chrome"), ("hey thom what time is it", "what time is it"),
+    ("Hey Tom.", ""), ("what is the weather", None), ("hey there tom open", None)])
+def test_optional_wake_word_filters_hands_free_speech(heard, expected):
+    from tools.voice_tools import strip_wake_word
+    assert strip_wake_word(heard, "hey tom") == expected
+
+
+def test_wake_word_is_off_by_default(monkeypatch):
+    from tools.voice_tools import wake_word
+    monkeypatch.delenv("TOM_WAKE_WORD", raising=False)
+    assert wake_word() == ""
