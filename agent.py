@@ -614,6 +614,9 @@ class TomAgent:
                     words = (item.get("metadata") or {}).get("user_words") or item.get("content", "")
                     lines.append(f"  [{tag}] {words[:140]}")
             return {"status": "success", "response_type": "memory_status", "message": "\n".join(lines)}
+        controls = self._memory_controls(command.strip().rstrip("?!. "))
+        if controls is not None:
+            return controls
         m = re.match(r"^(?:what do you (?:remember|know) about|recall|search (?:your )?memory for)\s+(.+)$", low)
         if m:
             topic = m.group(1).strip()
@@ -626,6 +629,54 @@ class TomAgent:
                     "message": f"What I remember about '{topic}':\n{body}",
                     "memories_used": [h.text for h in hits]}
         return None
+
+    _MEM_LIST = re.compile(r"^(?:list|show)\s+(?:my\s+|all\s+)?memor(?:y|ies)(?:\s+with\s+ids?)?$", re.I)
+    _MEM_INSPECT = re.compile(r"^(?:inspect|show|explain)\s+memory\s+#?(\d+)$", re.I)
+    _MEM_FORGET = re.compile(r"^(?:forget|delete|remove)\s+memory\s+#?(\d+)$", re.I)
+    _MEM_CORRECT = re.compile(r"^(?:correct|fix|change|update)\s+memory\s+#?(\d+)\s*(?::|to|->)\s*(.+)$", re.I | re.S)
+
+    def _memory_controls(self, text: str) -> Optional[Dict[str, Any]]:
+        """R5 / AT-015: the user inspects, corrects and deletes what TOM remembers, by number.
+        Deterministic (no model call), so it is instant and cannot be misread."""
+        kinds = ((self._MEM_LIST, "list"), (self._MEM_INSPECT, "inspect"),
+                 (self._MEM_FORGET, "forget"), (self._MEM_CORRECT, "correct"))
+        hit = next(((kind, m) for rx, kind in kinds for m in [rx.match(text)] if m), None)
+        if hit is None:
+            return None
+        kind, m = hit
+        reply = lambda msg, status="success": {"status": status, "response_type": f"memory_{kind}", "message": msg}  # noqa: E731
+        try:
+            if kind == "list":
+                hits = self.memory.list_memories(limit=30)
+                if not hits:
+                    return reply("I have no long-term memories stored yet.")
+                rows = [f"#{h.id}  {h.text[:110]}" + (f"  (confidence {h.confidence:.2f}" if h.confidence is not None else "  (")
+                        + (f", {h.source})" if h.source else ")") for h in hits]
+                return reply("What I remember (newest first):\n" + "\n".join(rows) +
+                             "\n\nSay \"inspect memory N\", \"correct memory N: new text\" or \"forget memory N\".")
+            mid = m.group(1)
+            if kind == "inspect":
+                info = self.memory.inspect_memory(mid)
+                if info is None:
+                    return reply(f"There is no memory #{mid}.", "error")
+                prov = info.get("provenance") or {}
+                lines = [f"Memory #{mid}: {info['content']}",
+                         f"Stored: {info['occurred_at']} · confidence {info['confidence']:.2f} · source {info['source']}",
+                         f"Came from: {', '.join(f'{k} {v}' for k, v in prov.items()) or 'unknown (stored before provenance)'}",
+                         f"Expires: {info['expires_at'] or 'never'}"]
+                if info.get("superseded_by"):
+                    lines.append(f"Replaced by memory #{info['superseded_by']} — no longer used.")
+                return reply("\n".join(lines))
+            if kind == "forget":
+                ok = self.memory.delete_memory(mid)
+                return reply(f"Deleted memory #{mid}; I won't use it again." if ok else f"There is no memory #{mid}.",
+                             "success" if ok else "error")
+            new_id = self.memory.correct_memory(mid, m.group(2).strip())
+            if new_id is None:
+                return reply(f"There is no memory #{mid}.", "error")
+            return reply(f"Corrected. Memory #{mid} is replaced by #{new_id}: {m.group(2).strip()}")
+        except RuntimeError as exc:
+            return reply(str(exc), "error")
 
     def _build_knowledge_context(self, query: str, max_chars: int = 1400) -> str:
         """Retrieve curated domain knowledge for the query (fails silently to "").

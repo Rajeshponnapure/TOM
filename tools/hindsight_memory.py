@@ -100,6 +100,8 @@ class MemoryHit:
     tags: List[str] = field(default_factory=list)
     id: str = ""
     when: str = ""
+    confidence: Optional[float] = None
+    source: str = ""
 
     @property
     def is_preference(self) -> bool:
@@ -107,7 +109,7 @@ class MemoryHit:
 
     def to_dict(self) -> Dict[str, Any]:
         return {"text": self.text, "type": self.type, "tags": list(self.tags),
-                "id": self.id, "when": self.when}
+                "id": self.id, "when": self.when, "confidence": self.confidence, "source": self.source}
 
 
 def describe_error(exc: BaseException) -> str:
@@ -469,7 +471,8 @@ class HindsightMemory:
         when = get("mentioned_at") or get("occurred_start") or ""
         return MemoryHit(text=str(get("text") or "").strip(), type=str(get("type") or ""),
                          tags=list(get("tags") or []), id=str(get("id") or ""),
-                         when=str(when)[:10] if when else "")
+                         when=str(when)[:10] if when else "",
+                         confidence=get("confidence"), source=str(get("source") or ""))
 
     # ── reflect ──────────────────────────────────────────────────────────
     def reflect(self, query: str, *, context: str = "", budget: str = "low",
@@ -507,6 +510,23 @@ class HindsightMemory:
         except Exception as exc:
             self.last_error = f"list_memories: {describe_error(exc)}"
             return []
+
+    # ── user controls (R5, PRD §9.2: inspect, correct, delete) ───────────
+    def _local(self, op: str):
+        fn = getattr(self.client, op, None) if self.available else None
+        if fn is None:
+            raise RuntimeError("Inspecting, correcting and deleting memories works with the on-machine store "
+                               "(HINDSIGHT_BASE_URL unset); the cloud store has its own dashboard.")
+        return fn
+
+    def inspect_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        return self._local("inspect_memory")(memory_id)
+
+    def correct_memory(self, memory_id: str, new_text: str) -> Optional[str]:
+        return self._local("correct_memory")(memory_id, new_text)
+
+    def delete_memory(self, memory_id: str) -> bool:
+        return bool(self._local("delete_memory")(memory_id))
 
     def get_total_count(self) -> int:
         """Get total number of memories stored in Hindsight bank."""
