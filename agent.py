@@ -266,6 +266,13 @@ class TomAgent:
                 self.tasks = None
                 safe_print(f"[TASKS] Task service unavailable, using the legacy path: {_task_err}")
 
+        # R9 C11: opt-in watchers (TOM_WATCHERS=1) report actionable changes only.
+        self.notifications: List[Any] = []
+        from tom_core import watchers as _watchers
+        self._watchers_stop = _watchers.start(
+            lambda n: (self.notifications.append(n), safe_print(f"[WATCH] {n.message}")),
+            store=getattr(getattr(self, "tasks", None), "store", None))
+
         # ── Unified Engine Router ────────────────────────────────────────
         # Routes ML / IoT / VLSI / Hardware / Blender / GameDev / News /
         # Env / Auto-update / Autonomous / Multi-agent commands so the CLI
@@ -630,6 +637,65 @@ class TomAgent:
                     "memories_used": [h.text for h in hits]}
         return None
 
+    _WF_SAVE = re.compile(r"^save (?:this|that|it|the last plan) as (?:a )?workflow\s+(?:called\s+|named\s+)?[\"']?(.+?)[\"']?$", re.I)
+    _WF_SHOW = re.compile(r"^(?:show|review|describe) workflow\s+[\"']?(.+?)[\"']?$", re.I)
+    _WF_APPROVE = re.compile(r"^approve workflow\s+[\"']?(.+?)[\"']?$", re.I)
+    _WF_RUN = re.compile(r"^run workflow\s+[\"']?([\w -]+?)[\"']?(?:\s+with\s+(.+))?$", re.I)
+
+    async def _advanced_command(self, text: str) -> Optional[Dict[str, Any]]:
+        """R9: notifications (C11) and reviewed workflows (C12). Deterministic; None if not one."""
+        low = text.lower()
+        if low in ("show notifications", "notifications", "any alerts", "show alerts"):
+            notes = getattr(self, "notifications", [])
+            if not notes:
+                from tom_core import features
+                off = "" if features.enabled("watchers") else " (watchers are off — set TOM_WATCHERS=1 to enable them)"
+                return {"status": "success", "response_type": "notifications", "message": "No notifications." + off}
+            body = "\n".join(f"- [{n.level}] {n.message}" for n in notes[-15:])
+            return {"status": "success", "response_type": "notifications", "message": body}
+        if not any(rx.match(text) for rx in (self._WF_SAVE, self._WF_SHOW, self._WF_APPROVE, self._WF_RUN)) \
+                and low not in ("list workflows", "show workflows", "my workflows"):
+            return None
+        from tom_core import features, workflows
+        if not features.enabled("workflows"):
+            return {"status": "needs_input", "response_type": "workflow",
+                    "message": "Workflow learning is off. Set TOM_WORKFLOWS=1 in .env to turn it on."}
+        reply = lambda msg, status="success": {"status": status, "response_type": "workflow", "message": msg}  # noqa: E731
+        try:
+            if low in ("list workflows", "show workflows", "my workflows"):
+                items = workflows.list_workflows()
+                return reply("\n".join(f"- {w['name']} ({w['status']}): {w['goal']}" for w in items)
+                             or "No saved workflows yet.")
+            m = self._WF_SAVE.match(text)
+            if m:
+                plan = getattr(self, "last_plan", None)
+                if plan is None or not plan.steps:
+                    return reply("There is no finished plan to save yet — run an autonomous task first.", "needs_input")
+                wf = workflows.save_draft(m.group(1), plan)
+                return reply(workflows.describe(wf) + f"\n\nSaved as a draft. Check the steps, then say "
+                             f"\"approve workflow {wf['name']}\".")
+            m = self._WF_SHOW.match(text)
+            if m:
+                wf = workflows.load(m.group(1))
+                return reply(workflows.describe(wf)) if wf else reply(f"No workflow named '{m.group(1)}'.", "error")
+            m = self._WF_APPROVE.match(text)
+            if m:
+                wf = workflows.approve(m.group(1))
+                return reply(f"Workflow '{wf['name']}' approved. Run it with \"run workflow {wf['name']}\""
+                             + (f" (optionally: with {next(iter(wf['inputs']))}=...)" if wf["inputs"] else "") + ".")
+            m = self._WF_RUN.match(text)
+            values = dict(kv.split("=", 1) for kv in re.split(r"\s*,\s*|\s+and\s+", m.group(2) or "") if "=" in kv)
+            values = {k.strip(): v.strip().strip("\"'") for k, v in values.items()}
+            from tom_core.tools.registry import get_registry
+            report = await workflows.run(m.group(1), get_registry(), values)
+            status = report.status if report.status != "partial" else "error"
+            return {"status": status, "response_type": "workflow_run", "message": report.text(),
+                    "verified": status == "success"}
+        except KeyError as exc:
+            return reply(f"No workflow named {exc}.", "error")
+        except (PermissionError, ValueError) as exc:
+            return reply(str(exc), "error")
+
     _MEM_LIST = re.compile(r"^(?:list|show)\s+(?:my\s+|all\s+)?memor(?:y|ies)(?:\s+with\s+ids?)?$", re.I)
     _MEM_INSPECT = re.compile(r"^(?:inspect|show|explain)\s+memory\s+#?(\d+)$", re.I)
     _MEM_FORGET = re.compile(r"^(?:forget|delete|remove)\s+memory\s+#?(\d+)$", re.I)
@@ -831,6 +897,8 @@ class TomAgent:
             safe_print(f"[LLM] {task_name}: {reason}")
             self.last_llm_fallback = reason
             if fallback is None:
+                fallback, reason = self._cloud_fallback(payload, reason)
+            if fallback is None:
                 raise RuntimeError(f"The model ran out of memory during '{task_name}' ({reason}).") from exc
             try:
                 return await asyncio.wait_for((chain | fallback).ainvoke(payload),
@@ -838,6 +906,20 @@ class TomAgent:
             except Exception as exc2:
                 raise RuntimeError(f"The model ran out of memory during '{task_name}'; the one retry "
                                    f"({reason}) also failed: {type(exc2).__name__}: {exc2}") from exc2
+
+    def _cloud_fallback(self, payload: Dict[str, Any], local_reason: str):
+        """RRM-007: only when the owner configured key, data policy and cost limit (tom_core.resources.cloud)."""
+        from tom_core.resources import cloud
+        ok, why = cloud.allowed(" ".join(str(v) for v in payload.values()))
+        if not ok:
+            return None, f"{local_reason}; {why}"
+        try:
+            from tools.llm_factory import groq_model, make_groq_model
+            model = make_groq_model(groq_model("primary"))
+        except Exception as exc:
+            return None, f"{local_reason}; cloud model unavailable ({exc})"
+        cloud.record_use()
+        return model, f"{local_reason}; using the cloud model ({why})"
 
     # ── NLP-BASED UNDERSTANDING ─────────────────────────────────────────
 
@@ -972,6 +1054,9 @@ class TomAgent:
             mem_result = await self._memory_command(command)
             if mem_result is not None:
                 return mem_result
+            advanced = await self._advanced_command(command.strip().rstrip("?!. "))
+            if advanced is not None:
+                return advanced
             if memory_rules.is_preference_statement(command):
                 retained_before = self.memory.stats["retained"]
                 self._retain_preference(command)

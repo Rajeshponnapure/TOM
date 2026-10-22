@@ -85,6 +85,9 @@ class AutonomousAgent:
         return self._result(plan.goal, report)
 
     def _result(self, task_description: str, report) -> Dict[str, Any]:
+        if report.results and self.tom_agent is not None:       # C12: "save this as workflow X"
+            from tom_core.planning.planner import Plan
+            self.tom_agent.last_plan = Plan(report.goal, [r.step for r in report.results])
         result = {
             "status": report.status if report.status != "partial" else "error",
             "partial": report.status == "partial",

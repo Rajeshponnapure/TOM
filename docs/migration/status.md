@@ -14,7 +14,8 @@ Last updated 2026-10-22.
 | R8 Voice and interfaces | **Done** | Local ASR/TTS adapters in worker processes, female Indian-English voice preference (`TOM_TTS_GENDER`), one push-to-talk module (`tom_core/voice/push_to_talk.py`) used by both the PySide6 and the Tkinter app, professional voice persona; PySide6 desktop UI |
 | Planner / specialists (FR-004, C10) | **Done** | `tom_core/planning/` plan→typed steps→registry→honest report; Autonomous and Multi-Agent rebuilt on it (`tests/test_planner_and_specialists.py`); live-checked with llama3.2:3b 2026-10-22 |
 | R7 Adapters, injection, coding | **Done** (core) | AT-011 taint rule in the executor (web/file text only as write content; never commands, paths, recipients, child requests) + untrusted-data rule in the web summary prompt; AT-013 `tom_core/coding/workflow.py` (checkpoint → tests → one-file fix, never a test file → re-run → diff + evidence, rollback on failure), chat: "fix the failing tests in <folder>" |
-| R9, R10 | Not started | — |
+| R9 Advanced capabilities | **Done** behind flags | Watchers, reviewed workflows, cloud escalation gate, specialists; remote access deliberately not provided — `docs/security/r9-feature-review.md`, `tests/test_advanced_features.py` |
+| R10 Stabilize | In progress | — |
 
 ## Owner decisions recorded (2026-10-21)
 
