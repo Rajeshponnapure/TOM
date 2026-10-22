@@ -3144,20 +3144,35 @@ class TomAgent:
             file_summary = await asyncio.to_thread(self.file_analyzer.summarize, file_path)
 
             question = user_question or "Analyze this file and provide key insights."
+            facts = ""
+            if ext in (".csv", ".tsv", ".xlsx", ".xls"):
+                try:
+                    from tom_core.data_facts import compute
+                    facts = await asyncio.to_thread(compute, file_path)
+                except Exception as exc:
+                    facts = f"(could not compute exact figures: {exc})"
             prompt = self._safe_prompt([
                 ("system", "You are TOM, analyzing a file for the user. "
-                 "Provide a clear, useful analysis based on the file content. Be concise."),
-                ("user", "File info:\n{file_summary}\n\nFile content:\n{content}\n\nUser question: {question}"),
+                 "Provide a clear, useful analysis based on the file content. Be concise. "
+                 "When computed facts are given, use exactly those numbers and do not do your own arithmetic; "
+                 "every statement must agree with them."),
+                ("user", "File info:\n{file_summary}\n\nComputed facts (exact):\n{facts}\n\n"
+                         "File content:\n{content}\n\nUser question: {question}"),
             ])
             resp = await self._invoke_llm(
                 prompt,
-                {"file_summary": file_summary, "content": extracted[:3000], "question": question},
+                {"file_summary": file_summary, "facts": facts or "(none - not a data table)",
+                 "content": extracted[:3000], "question": question},
                 "file_analysis", self.llm)
+            message = resp.content.strip()
+            if facts and not facts.startswith("(could not"):
+                message += "\n\nExact figures (computed from the file):\n" + facts
             return {
                 "status": "success",
-                "message": resp.content.strip(),
+                "message": message,
                 "file_info": analysis,
                 "response_type": "file_analysis",
+                "evidence": "figures computed with pandas" if facts else "",
             }
         except Exception as e:
             return {"status": "error", "message": f"File analysis failed: {e}"}
