@@ -3737,39 +3737,12 @@ class TomAgent:
         return "\n".join(lines)
 
     async def generate_voice_response(self, command: str) -> Dict[str, Any]:
-        command_lower = command.lower().strip()
-        # If action request — or anything about memory/preferences — use the full pipeline
-        if any(k in command_lower for k in ("open ", "send ", "create ", "write ", "make ",
-                                              "email ", "whatsapp", "analyze", "search",
-                                              "launch ", "start ", "read ", "show ",
-                                              "organize", "organise", "tidy", "clean up",
-                                              "remember", "learned", "learnt")) or \
-                memory_rules.is_preference_statement(command):
-            result = await self.execute_task(command, interface="voice")
-            raw = result.get("message", "")
-            result["message"] = self._strip_for_speech(raw)
-            return result
-
-        self._recalled = await self.memory.arecall(command, limit=5) if self.memory.available else []
-        memory_context = self._build_memory_context(command)
-        voice_system = (
-            "You are TOM in VOICE mode, a calm and professional personal assistant. "
-            "Answer in 1-3 short, complete sentences of clear, natural spoken American English "
-            "(US spelling and phrasing). Be warm and polite, never slangy. "
-            "No markdown, lists, emojis, code or URLs. Say numbers, dates and times the way a person would."
-        )
-        prompt = self._safe_prompt([
-            ("system", voice_system),
-            ("user", "Memory:\n{memory}\n\nUser said:\n{message}"),
-        ])
-        resp = await self._invoke_llm(prompt, {"message": command, "memory": memory_context}, "voice", self.fast_llm)
-        spoken = self._strip_for_speech(resp.content.strip())
-        try:
-            self.chat_memory.append("user", command)
-            self.chat_memory.append("assistant", spoken)
-        except Exception:
-            pass
-        return {"status": "success", "message": spoken, "response_type": "voice_chat"}
+        """CLI voice mode (main.py). Every spoken request is a normal task with interface="voice",
+        exactly like push-to-talk in the desktop apps; the reply is cleaned up for speech.
+        (R10: the old separate chat path here skipped the task service and the policy engine.)"""
+        result = await self.execute_task(command, interface="voice")
+        result["message"] = self._strip_for_speech(result.get("message", ""))
+        return result
 
     @staticmethod
     def _strip_for_speech(text: str) -> str:

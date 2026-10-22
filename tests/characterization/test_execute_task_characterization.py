@@ -150,16 +150,19 @@ def test_voice_action_requests_go_through_execute_task(tom, monkeypatch):
     assert "**" not in result["message"]          # markdown stripped for speech
 
 
-def test_voice_small_talk_goes_straight_to_the_model(tom, monkeypatch):
-    async def fail_execute(command, interface=""):
-        raise AssertionError("small talk must not enter execute_task")
-    monkeypatch.setattr(tom, "execute_task", fail_execute)
-    tom.llm_stub.calls.clear()
-    tom.llm_stub.reply = "Doing great, thanks!"
+def test_voice_small_talk_is_a_task_too(tom, monkeypatch):
+    """R10 / TOM-MIG-010: the CLI voice mode no longer has its own chat path that skipped the
+    task service — small talk is a voice task like everything else (as push-to-talk already was)."""
+    seen = []
+
+    async def fake_execute(command, interface=""):
+        seen.append((command, interface))
+        return {"status": "success", "response_type": "chat", "message": "Doing *great*, thanks!"}
+    monkeypatch.setattr(tom, "execute_task", fake_execute)
 
     result = asyncio.run(tom.generate_voice_response("how is your day going"))
-    assert result["response_type"] == "voice_chat"
-    assert tom.llm_stub.calls == ["voice"]
+    assert seen == [("how is your day going", "voice")]
+    assert "*" not in result["message"]
 
 
 # ── Former gap trackers, delivered (were strict xfail until R2/R3 landed) ─
