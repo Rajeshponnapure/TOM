@@ -53,7 +53,38 @@ class AutonomousAgent:
 
         self._current_task = task_description
         ctx = json.dumps(context, default=str)[:800] if context else ""
-        report = await run_goal(task_description, self._ask, get_registry(), allowed=allowed, context=ctx)
+        report = await run_goal(task_description, self._ask, get_registry(), allowed=allowed, context=ctx,
+                                checkpoint=self._checkpointer())
+        return self._result(task_description, report)
+
+    def _store(self):
+        tasks = getattr(self.tom_agent, "tasks", None)
+        return getattr(tasks, "store", None)
+
+    def _checkpointer(self):
+        """Each plan and step outcome goes into the task's event log (R4), so an interrupted run
+        can be resumed without repeating finished steps or blindly redoing a half-done one."""
+        from tom_core.tasks.service import current_task_id
+        store, task_id = self._store(), current_task_id()
+        if store is None or not task_id:
+            return None
+        return lambda kind, data: store.add_event(task_id, f"plan_{kind}", json.dumps(data, default=str))
+
+    async def resume(self, task_id: str) -> Dict[str, Any]:
+        """Continue an interrupted Autonomous run from its checkpoint."""
+        from tom_core.planning.planner import Executor, restore_from_events
+        from tom_core.tools.registry import get_registry
+        store = self._store()
+        rec = store.get(task_id) if store is not None else None
+        if rec is None:
+            return {"status": "error", "message": f"No task {task_id} to resume."}
+        plan, previous = restore_from_events(rec.events)
+        if plan is None:
+            return {"status": "needs_input", "message": "That task has no readable plan checkpoint; ask again."}
+        report = await Executor(get_registry(), checkpoint=self._checkpointer()).run(plan, previous=previous)
+        return self._result(plan.goal, report)
+
+    def _result(self, task_description: str, report) -> Dict[str, Any]:
         result = {
             "status": report.status if report.status != "partial" else "error",
             "partial": report.status == "partial",

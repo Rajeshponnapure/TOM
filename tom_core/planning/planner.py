@@ -16,8 +16,10 @@ model *describing* how to do the task (owner report 2026-10-21: "list the 3 larg
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
@@ -28,6 +30,9 @@ from tom_core.tools.registry import ToolRegistry
 Ask = Callable[[str, str], Awaitable[str]]          # (system, user) -> model text
 
 MAX_STEPS = 6
+MAX_STEP_RETRIES = 2          # per read-only step, transient errors only
+MAX_TOTAL_RETRIES = 3         # per plan
+TRANSIENT_ERRORS = frozenset({"timeout", "network", "transient"})
 _REF = re.compile(r"\{\{\s*(\d+)\s*\}\}")
 
 
@@ -195,11 +200,55 @@ class Planner:
 
 
 class Executor:
+    """Runs a plan step by step (R4): a retry ceiling for transient failures of read-only steps,
+    a checkpoint callback after every step, pause/resume between steps, and resume-safe
+    reconciliation — a step recorded as started but never finished is NOT re-run (its outcome is
+    unknown, e.g. a file may or may not have been written), and steps that need it are skipped."""
+
     def __init__(self, registry: ToolRegistry, allowed: Optional[Iterable[str]] = None,
-                 budget_seconds: float = 600.0) -> None:
+                 budget_seconds: float = 600.0, *, max_step_retries: int = MAX_STEP_RETRIES,
+                 max_total_retries: int = MAX_TOTAL_RETRIES,
+                 checkpoint: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> None:
         self.registry = registry
         self.allowed = list(allowed) if allowed is not None else None
         self.budget_seconds = budget_seconds
+        self.max_step_retries = max_step_retries
+        self.max_total_retries = max_total_retries
+        self.checkpoint = checkpoint
+        self._resume = threading.Event()
+        self._resume.set()
+
+    def pause(self) -> None:
+        self._resume.clear()
+
+    def resume(self) -> None:
+        self._resume.set()
+
+    @property
+    def paused(self) -> bool:
+        return not self._resume.is_set()
+
+    def _save(self, kind: str, data: Dict[str, Any]) -> None:
+        if self.checkpoint is not None:
+            try:
+                self.checkpoint(kind, data)
+            except Exception:
+                pass                                 # a checkpoint failure never stops the work
+
+    async def _call(self, step: Step, args: Dict[str, Any], retries_left: List[int]) -> Dict[str, Any]:
+        spec = self.registry.get(step.tool)
+        read_only = spec is not None and spec.action_class.value == "OBSERVE"
+        attempt = 0
+        while True:
+            out = await self.registry.call(step.tool, args, allowed=self.allowed)
+            transient = out.get("status") != "success" and out.get("error_class") in TRANSIENT_ERRORS
+            if not (transient and read_only and attempt < self.max_step_retries and retries_left[0] > 0):
+                if attempt:
+                    out["retries"] = attempt
+                return out
+            attempt += 1
+            retries_left[0] -= 1
+            await asyncio.sleep(min(0.5 * attempt, 2.0))
 
     @staticmethod
     def _fill(value: Any, outputs: Dict[int, str]) -> Any:
@@ -222,12 +271,29 @@ class Executor:
             return json.dumps(output, default=str)[:8000]
         return message
 
-    async def run(self, plan: Plan) -> Report:
+    async def run(self, plan: Plan, *, previous: Optional[Dict[int, Dict[str, Any]]] = None) -> Report:
+        """`previous` is the checkpoint of an interrupted run: {step_id: {"state": "started" |
+        "succeeded" | "unverified" | ..., "output": text}}."""
         started = time.perf_counter()
         results: List[StepResult] = []
         outputs: Dict[int, str] = {}
         failed: set = set()
+        retries_left = [self.max_total_retries]
+        previous = previous or {}
+        self._save("plan", {"goal": plan.goal, "steps": [s.__dict__ for s in plan.steps]})
         for step in plan.steps:
+            before = previous.get(step.id) or {}
+            if before.get("state") in ("succeeded", "unverified"):
+                outputs[step.id] = str(before.get("output", ""))
+                results.append(StepResult(step, before["state"], "done in the earlier run — not repeated"))
+                continue
+            if before.get("state") == "started":
+                results.append(StepResult(step, "skipped", "was interrupted mid-way in the earlier run; its "
+                                                           "outcome is unknown, so it was not repeated — check it"))
+                failed.add(step.id)
+                continue
+            while not self._resume.is_set():         # paused between steps
+                await asyncio.sleep(0.2)
             if time.perf_counter() - started > self.budget_seconds:
                 results.append(StepResult(step, "skipped", "time budget used up"))
                 failed.add(step.id)
@@ -236,7 +302,8 @@ class Executor:
                 results.append(StepResult(step, "skipped", "an earlier step it needs did not succeed"))
                 failed.add(step.id)
                 continue
-            out = await self.registry.call(step.tool, self._fill(step.args, outputs), allowed=self.allowed)
+            self._save("step", {"id": step.id, "state": "started", "tool": step.tool})
+            out = await self._call(step, self._fill(step.args, outputs), retries_left)
             message = str(out.get("message") or "")
             if out.get("status") == "success":
                 spec = self.registry.get(step.tool)
@@ -246,13 +313,32 @@ class Executor:
             else:
                 status = "failed"
                 failed.add(step.id)
+            self._save("step", {"id": step.id, "state": status, "tool": step.tool,
+                                "output": outputs.get(step.id, "")[:1200], "message": message[:200]})
             results.append(StepResult(step, status, message, str(out.get("evidence") or ""), out))
         return Report(plan.goal, results, time.perf_counter() - started, note=plan.note)
 
 
 async def run_goal(goal: str, ask: Ask, registry: ToolRegistry, *, allowed: Optional[Iterable[str]] = None,
-                   context: str = "") -> Report:
+                   context: str = "", checkpoint: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> Report:
     plan = await Planner(ask, registry, allowed).plan(goal, context)
     if not plan.steps:
         return Report(goal, [], 0.0, note=plan.note or "No tool can do this, so nothing was run.")
-    return await Executor(registry, allowed).run(plan)
+    return await Executor(registry, allowed, checkpoint=checkpoint).run(plan)
+
+
+def restore_from_events(events: List[Dict[str, Any]]) -> "tuple[Optional[Plan], Dict[int, Dict[str, Any]]]":
+    """Rebuild an interrupted run from the task store's "plan_plan" / "plan_step" events.
+    Returns (None, {}) when the plan cannot be read back (e.g. it was too long to store)."""
+    plan, previous = None, {}
+    for ev in events:
+        try:
+            data = json.loads(ev.get("message", ""))
+        except (TypeError, ValueError):
+            continue
+        if ev.get("kind") == "plan_plan":
+            plan = Plan(data["goal"], [Step(**st) for st in data["steps"]])
+            previous = {}
+        elif ev.get("kind") == "plan_step" and isinstance(data.get("id"), int):
+            previous[data["id"]] = data
+    return plan, previous
