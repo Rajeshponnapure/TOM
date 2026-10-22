@@ -264,3 +264,18 @@ def test_qt_push_to_talk_round_trip(monkeypatch, tmp_path):
         assert w.task_table.item(0, 2).text() == "voice"
     finally:
         w.close()
+
+
+def test_at014_interrupting_tom_stops_playback_and_sends_the_next_request_once(tk_app):
+    """AT-014: press Talk while TOM is speaking → the reply stops, the new request runs exactly once,
+    and a second press during that same listen only ends it (no second submission)."""
+    tk_app.voice = FakeVoice(speaking=True)
+    finished = []
+    tk_app.voice.finish_listening = lambda: finished.append(True)
+    tk_app._push_to_talk()
+    tk_app._push_to_talk()                            # impatient second press while still listening
+    _drain(tk_app)
+    assert "stop_speaking" in tk_app.voice.calls
+    assert tk_app.voice.calls.index("stop_speaking") < tk_app.voice.calls.index(("listen", push_to_talk.LISTEN_TIMEOUT_S))
+    assert tk_app.sent == [("open chrome", "voice")]  # exactly one task
+    assert finished == [True] and tk_app.ui.empty()
