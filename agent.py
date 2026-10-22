@@ -106,6 +106,18 @@ def safe_print(message: str):
             pass
 
 
+
+def _known_folder(text: str) -> str:
+    """'my downloads' → the real Downloads folder; anything else is used as a path."""
+    t = text.strip().strip('"').rstrip(".")
+    low = re.sub(r"^(?:my|the)\s+", "", t.lower()).replace(" folder", "").strip()
+    home = os.path.expanduser("~")
+    for name in ("downloads", "documents", "desktop", "pictures", "music", "videos"):
+        if low == name:
+            cand = os.path.join(os.environ.get("OneDrive", home), name.title())
+            return cand if os.path.isdir(cand) else os.path.join(home, name.title())
+    return t
+
 class TomAgent:
     def __init__(self):
         # Primary model (Gemma 4 - best for complex reasoning)
@@ -642,9 +654,59 @@ class TomAgent:
     _WF_APPROVE = re.compile(r"^approve workflow\s+[\"']?(.+?)[\"']?$", re.I)
     _WF_RUN = re.compile(r"^run workflow\s+[\"']?([\w -]+?)[\"']?(?:\s+with\s+(.+))?$", re.I)
 
+    _DIAG = [
+        (re.compile(r"^(?:find|show|list)\s+(?:all\s+)?duplicate(?:s| files)?\s+(?:in|under|inside)\s+(.+)$", re.I),
+         "fs.find_duplicates", lambda m: {"path": _known_folder(m.group(1))}),
+        (re.compile(r"^(?:show|check|list)?\s*(?:the\s+)?(?:windows|system|event log|recent)\s+(?:errors|events)"
+                    r"(?:\s+in the (system|application) log)?$", re.I),
+         "system.events", lambda m: {"log": (m.group(1) or "system").title()}),
+        (re.compile(r"^(?:list|show)\s+(?:running\s+)?(?:windows\s+)?services(?:\s+(?:matching|named|for)\s+(.+))?$", re.I),
+         "system.services", lambda m: {"name_filter": (m.group(1) or "").strip(), "only_running": "running" in m.group(0).lower()}),
+        (re.compile(r"^(?:dns lookup|resolve|look up the ip of)\s+([A-Za-z0-9.-]+)$", re.I),
+         "net.dns", lambda m: {"host": m.group(1)}),
+        (re.compile(r"^(?:which|show|list)\s+(?:developer\s+|dev\s+)?(?:runtimes|tools) (?:are )?installed$|"
+                    r"^installed (?:runtimes|dev tools)$", re.I), "dev.runtimes", lambda m: {}),
+    ]
+    _PROJECT_ADD = re.compile(r"^add (?:a )?project\s+[\"']?([\w .-]+?)[\"']?\s+at\s+(.+?)"
+                              r"(?:\s+with tests?(?: command)?\s*[:=]?\s*(.+))?$", re.I)
+
     async def _advanced_command(self, text: str) -> Optional[Dict[str, Any]]:
-        """R9: notifications (C11) and reviewed workflows (C12). Deterministic; None if not one."""
+        """R9 + PRD gaps: notifications (C11), reviewed workflows (C12), diagnostics (C09/C04), project
+        profiles (FR-016), task report export (FR-019), self-evaluation (C18). Deterministic; None if not one."""
         low = text.lower()
+        for rx, tool, args in self._DIAG:
+            m = rx.match(text)
+            if m:
+                from tom_core.tools.registry import get_registry
+                out = await get_registry().call(tool, args(m))
+                return {"status": out.get("status", "error"), "response_type": f"tool_{tool}",
+                        "message": out.get("message", ""), "evidence": out.get("evidence", ""),
+                        "verified": out.get("status") == "success"}
+        m = self._PROJECT_ADD.match(text)
+        if m or low in ("list projects", "show projects", "my projects"):
+            from tom_core import projects
+            if m:
+                try:
+                    prof = projects.add(m.group(1), m.group(2), test_command=(m.group(3) or "").strip().strip("'\""))
+                except ValueError as exc:
+                    return {"status": "error", "response_type": "project", "message": str(exc)}
+                return {"status": "success", "response_type": "project",
+                        "message": "Project saved:\n" + projects.describe(prof)}
+            items = projects.all_profiles()
+            return {"status": "success", "response_type": "project",
+                    "message": "\n".join(projects.describe(p) for p in items) or
+                               "No projects yet. Say: add project myapp at C:/code/myapp with tests: pytest -q"}
+        m = re.match(r"^export (?:the )?(?:last |latest )?task report(?: (?:for|of) ([\w-]+))?$", low)
+        if m:
+            return self._export_task_report(m.group(1))
+        if low in ("self evaluation", "self-evaluation", "evaluate yourself", "how are you performing",
+                   "show your success rate", "task statistics"):
+            store = getattr(getattr(self, "tasks", None), "store", None)
+            if store is None:
+                return {"status": "error", "response_type": "self_eval", "message": "The task store is not available."}
+            from tom_core import evaluation
+            return {"status": "success", "response_type": "self_eval",
+                    "message": evaluation.report_text(evaluation.evaluate(store))}
         if low in ("show notifications", "notifications", "any alerts", "show alerts"):
             notes = getattr(self, "notifications", [])
             if not notes:
@@ -695,6 +757,28 @@ class TomAgent:
             return reply(f"No workflow named {exc}.", "error")
         except (PermissionError, ValueError) as exc:
             return reply(str(exc), "error")
+
+    def _export_task_report(self, task_id: Optional[str]) -> Dict[str, Any]:
+        """FR-019: write one task's redacted report to the workspace as Markdown."""
+        store = getattr(getattr(self, "tasks", None), "store", None)
+        if store is None:
+            return {"status": "error", "response_type": "task_report", "message": "The task store is not available."}
+        from tom_core.tasks.service import current_task_id
+        if not task_id:
+            here = current_task_id()
+            older = [t for t in store.list(20) if t.id != here]
+            if not older:
+                return {"status": "error", "response_type": "task_report", "message": "There is no earlier task to export."}
+            task_id = older[0].id
+        if store.get(task_id) is None:
+            return {"status": "error", "response_type": "task_report", "message": f"No task with id {task_id}."}
+        from tom_core import evaluation
+        from tools.document_creator import _output_path
+        path = _output_path(f"task_report_{task_id[:12]}.md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(evaluation.task_report(store, task_id))
+        return {"status": "success", "response_type": "task_report", "path": path, "paths": [path], "verified": True,
+                "message": f"Task report (secrets redacted) saved to: {path}"}
 
     _MEM_LIST = re.compile(r"^(?:list|show)\s+(?:my\s+|all\s+)?memor(?:y|ies)(?:\s+with\s+ids?)?$", re.I)
     _MEM_INSPECT = re.compile(r"^(?:inspect|show|explain)\s+memory\s+#?(\d+)$", re.I)

@@ -100,6 +100,7 @@ def enforce(tool: str, action_class: ActionClass, *, payload: Optional[Dict[str,
     paths and blocked classes still apply, and the decision is audited as "standing:<setting>".
     """
     payload = dict(payload or {})
+    get_policy().wait_if_paused()            # FR-006: while paused, a new action waits here
     ctx = _context()
     call = ToolCall(tool=tool, action_class=ActionClass(action_class), payload=payload, paths=list(paths),
                     actor=ctx["actor"], task_id=ctx["task_id"])

@@ -100,6 +100,8 @@ class PolicyEngine:
         self._protected = list(protected_paths) if protected_paths is not None else None
         self._halted = threading.Event()
         self.halt_reason = ""
+        self._running = threading.Event()        # cleared = paused (FR-006)
+        self._running.set()
 
     # roots are read lazily so TOM_WORKSPACE_DIR / TOM_WORKSPACE_ROOTS set later still count
     @property
@@ -122,6 +124,28 @@ class PolicyEngine:
     @property
     def halted(self) -> bool:
         return self._halted.is_set()
+
+    # ── pause (PRD FR-006) — new actions wait; nothing is cancelled ──────
+    def pause(self) -> None:
+        self._running.clear()
+
+    def unpause(self) -> None:
+        self._running.set()
+
+    @property
+    def paused(self) -> bool:
+        return not self._running.is_set()
+
+    def wait_if_paused(self, timeout: Optional[float] = None) -> bool:
+        """Block while paused. Returns early when an emergency stop arrives (the call is then refused)
+        or after `timeout`. True when the caller may continue."""
+        import time as _time
+        end = None if timeout is None else _time.monotonic() + timeout
+        while not self._running.is_set():
+            if self._halted.is_set() or (end is not None and _time.monotonic() >= end):
+                return False
+            self._running.wait(0.2)
+        return True
 
     # ── evaluation ───────────────────────────────────────────────────────
     def in_workspace(self, path: str) -> bool:

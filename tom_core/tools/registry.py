@@ -127,7 +127,8 @@ def get_registry() -> ToolRegistry:
     global _REGISTRY
     if _REGISTRY is None:
         registry = ToolRegistry()
-        from tom_core.tools import builtin
+        from tom_core.tools import builtin, diagnostics
         builtin.register_all(registry)
+        diagnostics.register(registry)
         _REGISTRY = registry
     return _REGISTRY

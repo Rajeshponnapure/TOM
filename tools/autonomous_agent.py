@@ -48,13 +48,28 @@ class AutonomousAgent:
 
     async def execute(self, task_description: str, context: Optional[Dict] = None,
                       allowed: Optional[List[str]] = None) -> Dict[str, Any]:
-        from tom_core.planning import run_goal
         from tom_core.tools.registry import get_registry
+
+        from tom_core.planning.planner import Executor, Planner, Report, changes_things, preflight
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import aenforce
 
         self._current_task = task_description
         ctx = json.dumps(context, default=str)[:800] if context else ""
-        report = await run_goal(task_description, self._ask, get_registry(), allowed=allowed, context=ctx,
-                                checkpoint=self._checkpointer())
+        registry = get_registry()
+        plan = await Planner(self._ask, registry, allowed).plan(task_description, ctx)
+        if not plan.steps:
+            return self._result(task_description, Report(task_description, [], 0.0,
+                                                         note=plan.note or "No tool can do this, so nothing was run."))
+        if changes_things(plan):
+            # FR-015 / C17: show the whole plan once before a multi-step change starts
+            summary = preflight(plan)
+            gate = await aenforce("plan.run", ActionClass.MATERIAL_CHANGE, payload={"plan": summary[:1500]},
+                                  approval_action="run_plan", summary=summary[:1500], risk_level="medium")
+            if not gate.allowed:
+                return {"status": "cancelled", "message": f"Not started — the plan was not approved.\n\n{summary}",
+                        "task": task_description, "steps": [], "verified": False}
+        report = await Executor(registry, allowed, checkpoint=self._checkpointer()).run(plan)
         return self._result(task_description, report)
 
     def _store(self):
@@ -95,6 +110,7 @@ class AutonomousAgent:
             "task": task_description,
             "duration_seconds": round(report.seconds, 1),
             "steps": [{"id": r.step.id, "tool": r.step.tool, "args": r.step.args, "status": r.status,
+                       "risk": r.step.risk, "timeout": r.step.timeout, "verify": r.step.verify,
                        "message": r.message[:500], "evidence": r.evidence} for r in report.results],
             # Only verified steps count as done (FR-008); the engine router re-checks declared paths.
             "verified": bool(report.results) and all(r.status == "succeeded" for r in report.results),

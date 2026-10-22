@@ -49,6 +49,11 @@ class Step:
     why: str = ""
     expect: str = ""
     depends_on: List[int] = field(default_factory=list)
+    # FR-004: filled in from the tool registry when the plan is made
+    risk: str = ""                       # the tool's action class (OBSERVE ... PRIVILEGED)
+    timeout: float = 0.0
+    verify: str = ""                     # how success is checked
+    touches: List[str] = field(default_factory=list)   # paths the step would read/change (C17 preflight)
 
 
 @dataclass
@@ -201,7 +206,44 @@ class Planner:
                     + note).strip()
         elif not steps and (not note or note.lower().startswith("goal")):
             note = "No available tool fits this request, so nothing was run."
+        for st in steps:
+            annotate(st, self.registry)
         return Plan(goal, steps, note=note)
+
+
+def annotate(step: Step, registry: ToolRegistry) -> Step:
+    """FR-004 / C17: risk class, timeout, verification method and affected paths of one step."""
+    spec = registry.get(step.tool)
+    if spec is None:
+        return step
+    step.risk = spec.action_class.value
+    step.timeout = spec.timeout
+    step.verify = ("read-only: the tool's own output is the evidence" if step.risk == "OBSERVE"
+                   else "the tool's evidence is checked; without it the step is reported as unverified")
+    try:
+        parsed = spec.args.model_validate({k: v for k, v in step.args.items() if "{{" not in str(v)})
+        step.touches = [str(p) for p in spec.paths(parsed)]
+    except Exception:
+        step.touches = [str(v) for k, v in step.args.items() if k in _PATH_KEYS and isinstance(v, str)]
+    return step
+
+
+def preflight(plan: Plan) -> str:
+    """What a plan will do, before it does it (FR-015, C17): steps, risk, affected paths, rollback."""
+    lines = [f"Plan: {plan.goal}"]
+    for st in plan.steps:
+        lines.append(f"{st.id}. {st.tool} [{st.risk or '?'}] — {st.why or st.expect or ''}".rstrip(" —"))
+        for t in st.touches[:3]:
+            lines.append(f"     affects: {t}")
+    changing = [s for s in plan.steps if s.risk and s.risk != "OBSERVE"]
+    if changing:
+        lines.append("Rollback: overwritten files are backed up first; deletions go to the Recycle Bin; "
+                     "risky steps still ask for your approval one by one.")
+    return "\n".join(lines)
+
+
+def changes_things(plan: Plan) -> bool:
+    return sum(1 for s in plan.steps if s.risk and s.risk != "OBSERVE") >= 2
 
 
 class Executor:
@@ -314,7 +356,10 @@ class Executor:
                                                            "outcome is unknown, so it was not repeated — check it"))
                 failed.add(step.id)
                 continue
-            while not self._resume.is_set():         # paused between steps
+            from tom_core.policy import get_policy
+            while not self._resume.is_set() or get_policy().paused:      # paused between steps
+                if get_policy().halted:
+                    break
                 await asyncio.sleep(0.2)
             if time.perf_counter() - started > self.budget_seconds:
                 results.append(StepResult(step, "skipped", "time budget used up"))

@@ -248,11 +248,16 @@ class TomWindow(QMainWindow):
         title = QLabel(APP_NAME, objectName="title")
         self.status_lbl = QLabel("Starting… loading models and memory")
         self.status_lbl.setStyleSheet("color:#9fb0c8")
+        self.pause_btn = QPushButton("⏸  Pause")
+        self.pause_btn.setCheckable(True)
+        self.pause_btn.setToolTip("Pause: running tasks wait before their next action; nothing is cancelled. "
+                                  "Click again to resume.")
         self.stop_all_btn = QPushButton("■  EMERGENCY STOP", objectName="danger")
         self.stop_all_btn.setToolTip("Cancel every running task (all TOM windows) and stop speaking.  Ctrl+.")
         top.addWidget(title)
         top.addSpacing(16)
         top.addWidget(self.status_lbl, 1)
+        top.addWidget(self.pause_btn)
         top.addWidget(self.stop_all_btn)
         outer.addLayout(top)
 
@@ -351,6 +356,7 @@ class TomWindow(QMainWindow):
         self.send_btn.clicked.connect(self.send)
         self.input.returnPressed.connect(self.send)
         self.stop_all_btn.clicked.connect(self.emergency_stop)
+        self.pause_btn.toggled.connect(self._on_pause)
         self.cancel_btn.clicked.connect(self.cancel_selected)
         self.task_table.itemSelectionChanged.connect(self._on_select)
         self.talk_btn.toggled.connect(self._on_talk)
@@ -468,10 +474,28 @@ class TomWindow(QMainWindow):
             self.status_lbl.setText("Cancellation requested")
 
     @Slot()
+    def _on_pause(self, paused: bool) -> None:
+        """FR-006: pause / resume every task in this TOM (actions wait at the policy gate)."""
+        from tom_core.policy import get_policy
+        if paused:
+            get_policy().pause()
+            self.pause_btn.setText("▶  Resume")
+            self.status_lbl.setText("Paused — tasks wait before their next action. Click Resume to continue.")
+        else:
+            get_policy().unpause()
+            self.pause_btn.setText("⏸  Pause")
+            self.status_lbl.setText("Resumed.")
+
     def emergency_stop(self) -> None:
         """PRD §11.2: stop all new execution now — every running task in every TOM window."""
         from tom_core.policy import get_policy
         get_policy().halt("emergency stop pressed in the desktop app")   # no new tool calls start
+        get_policy().unpause()                                           # a stop also ends any pause
+        if self.pause_btn.isChecked():
+            self.pause_btn.blockSignals(True)
+            self.pause_btn.setChecked(False)
+            self.pause_btn.setText("⏸  Pause")
+            self.pause_btn.blockSignals(False)
         tasks = getattr(self.host.agent, "tasks", None)
         cancelled = set()
         if tasks is not None:

@@ -62,9 +62,11 @@ def _policy_defaults(monkeypatch):
     from tom_core.policy import get_policy
     from tom_core.tools import guard
     get_policy().resume()
+    get_policy().unpause()
     monkeypatch.setattr(guard, "_approval_manager", _ApproveAll())
     yield
     get_policy().resume()
+    get_policy().unpause()
 
 
 class _Handler(socketserver.StreamRequestHandler):

@@ -962,11 +962,17 @@ class EngineRouter:
 
     # ── Coding workflow (AT-013) ──────────────────────────────────────────
     async def _run_fixtests(self, command: str) -> Dict[str, Any]:
+        from tom_core import projects
         m = re.search(r"\b(?:in|at|for)\s+[\"']?([A-Za-z]:[\\/][^\"']+|[./~][^\"'\s]+)", command)
-        if not m:
+        named = re.search(r"\b(?:in|at|for)\s+(?:the\s+|my\s+)?(?:project\s+)?[\"']?([\w .-]+?)[\"']?\s*(?:project)?$",
+                          command, re.I)
+        profile = projects.get(m.group(1).strip()) if m else (projects.get(named.group(1)) if named else None)
+        if not m and not profile:
             return {"status": "needs_input", "response_type": "engine_fixtests",
-                    "message": "Which project folder? For example: fix the failing tests in C:/code/myapp"}
-        repo = os.path.expanduser(m.group(1).strip().rstrip(".").strip())
+                    "message": "Which project folder? For example: fix the failing tests in C:/code/myapp "
+                               "(or save it once: add project myapp at C:/code/myapp with tests: pytest -q)"}
+        repo = profile["root"] if profile and not m else os.path.expanduser(m.group(1).strip().rstrip(".").strip())
+        test_cmd = (profile or {}).get("test_command") or ""
         agent = self._agent
         if agent is None or not hasattr(agent, "_invoke_llm"):
             return self._unavailable("Coding workflow", "")
@@ -979,7 +985,8 @@ class EngineRouter:
             return getattr(resp, "content", "") or ""
 
         from tom_core.coding import fix_failing_tests
-        res = await fix_failing_tests(repo, ask)
+        import shlex
+        res = await fix_failing_tests(repo, ask, test_cmd=shlex.split(test_cmd, posix=False) if test_cmd else None)
         if res.get("status") != "success":
             return {"status": res.get("status", "error"), "response_type": "engine_fixtests",
                     "message": res.get("message", ""), "raw": res}

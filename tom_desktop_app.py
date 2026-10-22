@@ -2371,6 +2371,12 @@ class TomDesktopApp:
             cursor="hand2", state="disabled")
         self.stop_btn.grid(row=0, column=5, padx=(6, 0))
 
+        # FR-006: pause every task before its next action (nothing is cancelled); click again to resume
+        self.pause_btn = tk.Button(input_row, text="⏸ Pause", command=self._toggle_pause,
+            bg=C["surface2"], fg=C["text2"], activebackground=C["border2"], activeforeground=C["blue"],
+            relief="flat", bd=0, padx=12, pady=8, font=("Segoe UI", 9, "bold"), cursor="hand2")
+        self.pause_btn.grid(row=0, column=6, padx=(6, 0))
+
         fb_row = tk.Frame(bottom_bar, bg=C["bg"])
         fb_row.grid(row=2, column=0, sticky="ew", pady=(6, 0))
 
@@ -3811,10 +3817,26 @@ class TomDesktopApp:
             elif future is self._active_task_future:
                 self._enqueue(self._on_response_ready, f"Error: {exc}", None, None)
 
+    def _toggle_pause(self):
+        from tom_core.policy import get_policy
+        policy = get_policy()
+        if policy.paused:
+            policy.unpause()
+            self.pause_btn.configure(text="⏸ Pause", fg=C["text2"])
+            self._set_status("Resumed")
+        else:
+            policy.pause()
+            self.pause_btn.configure(text="▶ Resume", fg=C["blue"])
+            self._set_status("Paused — tasks wait before their next action")
+
     def _cancel_active_work(self):
         """Stop a pending task and any currently spoken response (PRD §11.2 emergency stop)."""
         from tom_core.policy import get_policy
         get_policy().halt("Stop pressed in the desktop app")      # no new tool calls start
+        if get_policy().paused:                                   # a stop also ends any pause
+            get_policy().unpause()
+            if getattr(self, "pause_btn", None) is not None:
+                self.pause_btn.configure(text="⏸ Pause", fg=C["text2"])
         future = self._active_task_future
         if future is not None and not future.done():
             future.cancel()
