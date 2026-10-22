@@ -249,6 +249,8 @@ class EngineRouter:
             return "schedule"
         if re.search(r"\b(autonomous(ly)?\s+(task|execute|run|do)|execute autonomous)\b", c):
             return "autonomous"
+        if re.search(r"\bfix\b.*\b(failing|broken)?\s*tests?\b.*\b(in|at|for)\s+\S", c):
+            return "fixtests"
         if re.search(r"\b(multi[- ]agent|deploy (the )?agents?\b.*task|orchestrat)", c):
             return "orchestrator"
         if re.search(r"\b(verilog|vhdl|systemverilog|rtl design|testbench|fpga|freertos|soc design)\b", c):
@@ -352,6 +354,8 @@ class EngineRouter:
         try:
             if key == "orchestrator":
                 result: Any = await self._run_orchestrator(c)
+            elif key == "fixtests":
+                result = await self._run_fixtests(c)
             elif key == "autonomous":
                 result = await self._run_autonomous(c)
             elif key == "webauto":
@@ -955,6 +959,31 @@ class EngineRouter:
         extra = {"paths": res["paths"]} if res.get("paths") else {}
         return self._ok("engine_autonomous", str(res.get("message", ""))[:4000], raw=res,
                         verified=res.get("verified", False), **extra)
+
+    # ── Coding workflow (AT-013) ──────────────────────────────────────────
+    async def _run_fixtests(self, command: str) -> Dict[str, Any]:
+        m = re.search(r"\b(?:in|at|for)\s+[\"']?([A-Za-z]:[\\/][^\"']+|[./~][^\"'\s]+)", command)
+        if not m:
+            return {"status": "needs_input", "response_type": "engine_fixtests",
+                    "message": "Which project folder? For example: fix the failing tests in C:/code/myapp"}
+        repo = os.path.expanduser(m.group(1).strip().rstrip(".").strip())
+        agent = self._agent
+        if agent is None or not hasattr(agent, "_invoke_llm"):
+            return self._unavailable("Coding workflow", "")
+
+        async def ask(system, user):
+            from langchain_core.prompts import ChatPromptTemplate
+            prompt = ChatPromptTemplate.from_messages([("system", "{system}"), ("user", "{user}")])
+            resp = await agent._invoke_llm(prompt, {"system": system, "user": user}, "fix_tests",
+                                           getattr(agent, "code_llm", None) or agent.llm)
+            return getattr(resp, "content", "") or ""
+
+        from tom_core.coding import fix_failing_tests
+        res = await fix_failing_tests(repo, ask)
+        if res.get("status") != "success":
+            return {"status": res.get("status", "error"), "response_type": "engine_fixtests",
+                    "message": res.get("message", ""), "raw": res}
+        return self._ok("engine_fixtests", res["message"][:6000], raw=res, verified=res.get("verified", False))
 
     # ── Multi-agent orchestrator (lives on the agent) ────────────────────
     async def _run_orchestrator(self, command: str) -> Dict[str, Any]:

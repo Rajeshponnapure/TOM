@@ -13,7 +13,8 @@ Last updated 2026-10-22.
 | R6 Resource manager | **Done** | `tom_core/resources/llm_admission.py`: predicted peak (weights + KV for num_ctx + overhead) vs measured free VRAM minus reserve (`TOM_VRAM_RESERVE_MB`, 1024); num_ctx profiles (chat/plan 4096, fast 2048, code/document 8192, `TOM_NUM_CTX`); smaller context → `TOM_FALLBACK_MODEL`/smaller installed model → stated CPU split; one OOM retry in `_invoke_llm`. Benchmark: `docs/benchmarks/llm-profiles.md` (`tests/manual/benchmark_llm.py`). Off switch: `TOM_LLM_ADMISSION=0` |
 | R8 Voice and interfaces | **Largely done** | Local ASR/TTS adapters in worker processes, female Indian-English voice preference (`TOM_TTS_GENDER`), one push-to-talk module (`tom_core/voice/push_to_talk.py`) used by both the PySide6 and the Tkinter app, professional voice persona; PySide6 desktop UI |
 | Planner / specialists (FR-004, C10) | **Done** | `tom_core/planning/` plan→typed steps→registry→honest report; Autonomous and Multi-Agent rebuilt on it (`tests/test_planner_and_specialists.py`); live-checked with llama3.2:3b 2026-10-22 |
-| R7, R9, R10 | Not started | — |
+| R7 Adapters, injection, coding | **Done** (core) | AT-011 taint rule in the executor (web/file text only as write content; never commands, paths, recipients, child requests) + untrusted-data rule in the web summary prompt; AT-013 `tom_core/coding/workflow.py` (checkpoint → tests → one-file fix, never a test file → re-run → diff + evidence, rollback on failure), chat: "fix the failing tests in <folder>" |
+| R9, R10 | Not started | — |
 
 ## Owner decisions recorded (2026-10-21)
 
@@ -32,6 +33,8 @@ ADR-002 `tom_core/` ✔ · ADR-003 keep Tkinter **and** add PySide6 ✔ · ADR-0
 | AT-008 Resource admission | **Pass** (simulated low VRAM → smaller context / configured fallback) | `test_llm_admission.py` |
 | AT-009 OOM handling | **Pass** (one bounded retry, then the real outcome) | `test_llm_admission.py` |
 | AT-010 Secret redaction | **Pass** (audit log + task store) | `test_secrets_never_reach_the_audit_log`, redaction tests |
+| AT-011 Prompt injection | **Pass** | `test_injection_and_coding.py` |
+| AT-013 Coding workflow | **Pass** (disposable repo) | `test_injection_and_coding.py` |
 | AT-012 Cross-interface state | **Pass** (shared store + remote cancel) | `test_task_service.py`, `test_qt_app.py` |
 | AT-014 Voice interruption | Partial — stop flag + playback stop tested; barge-in during listening not yet | `test_voice_core.py` |
 | AT-015 Memory control | **Pass** — inspect/correct/delete by number, holds on the next run | `test_memory_controls.py` |
