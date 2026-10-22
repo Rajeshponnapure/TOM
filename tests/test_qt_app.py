@@ -123,3 +123,22 @@ def test_resource_and_privacy_panels(app, win):
     assert win.bars["CPU"].value() == 37 and "12.0 GB free" in win.bar_lbls["RAM"].text()
     assert "2.1 GB free" in win.bar_lbls["VRAM"].text()
     assert "Prompts and replies" in win.privacy_lbl.text()
+
+
+def test_memory_panel_lists_and_forgets(app, win, tmp_path, monkeypatch):
+    """R5 / AT-015 in the window: the store is listed with numbers; Forget removes one for good."""
+    import agent as agent_mod
+    from tools.hindsight_memory import TAG_PREFERENCE, HindsightMemory
+    monkeypatch.delenv("HINDSIGHT_BASE_URL", raising=False)
+    monkeypatch.setenv("HINDSIGHT_ENABLED", "1")
+    mem = HindsightMemory(bank_id="b", state_dir=tmp_path)
+    mem.retain("save invoices in Finance", tags=[TAG_PREFERENCE], wait=True)
+    win.host.agent.memory = mem
+    win.host.agent._memory_controls = agent_mod.TomAgent._memory_controls.__get__(win.host.agent)
+    for name in ("_MEM_LIST", "_MEM_INSPECT", "_MEM_FORGET", "_MEM_CORRECT"):
+        setattr(win.host.agent, name, getattr(agent_mod.TomAgent, name))
+    win.refresh_memory()
+    assert win.memory_list.count() == 1 and "save invoices in Finance" in win.memory_list.item(0).text()
+    win.memory_list.setCurrentRow(0)
+    win._memory_edit("forget")
+    assert win.memory_list.count() == 0 and mem.list_memories() == []

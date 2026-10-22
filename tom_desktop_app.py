@@ -2866,12 +2866,49 @@ class TomDesktopApp:
             return txt
 
         self.memory_result_text = _panel(0, "RECALL / REFLECTION")
-        self.memory_recent_text = _panel(1, "RECENTLY STORED")
+        self.memory_recent_text = _panel(1, "WHAT I REMEMBER  (#number · confidence · source)")
+
+        # R5 / AT-015: correct or forget one memory by its number
+        edit = tk.Frame(parent, bg=C["bg"], padx=24)
+        edit.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        edit.columnconfigure(3, weight=1)
+        tk.Label(edit, text="Memory #", bg=C["bg"], fg=C["text2"], font=("Segoe UI", 9)).grid(row=0, column=0)
+        self.memory_id_entry = tk.Entry(edit, width=6, bg=C["surface2"], fg=C["text"], insertbackground=C["text"],
+                                        relief="flat", font=("Segoe UI", 10))
+        self.memory_id_entry.grid(row=0, column=1, padx=(4, 10), ipady=4)
+        tk.Label(edit, text="New wording", bg=C["bg"], fg=C["text2"], font=("Segoe UI", 9)).grid(row=0, column=2)
+        self.memory_fix_entry = tk.Entry(edit, bg=C["surface2"], fg=C["text"], insertbackground=C["text"],
+                                         relief="flat", font=("Segoe UI", 10))
+        self.memory_fix_entry.grid(row=0, column=3, sticky="ew", padx=(4, 10), ipady=4)
+        for col, (label, kind) in enumerate((("Correct", "correct"), ("Forget", "forget")), start=4):
+            tk.Button(edit, text=label, command=lambda k=kind: self._memory_edit(k), bg=C["surface2"],
+                      fg=C["red"] if kind == "forget" else C["text"], activebackground=C["border2"],
+                      relief="flat", bd=0, padx=12, pady=5, font=("Segoe UI", 9, "bold"),
+                      cursor="hand2").grid(row=0, column=col, padx=(0, 6))
         tk.Button(parent, text="\u21ba  Refresh", command=self._refresh_memory_view,
                   bg=C["surface2"], fg=C["text2"], activebackground=C["border2"],
                   activeforeground=C["text"], relief="flat", bd=0, padx=12, pady=8,
                   font=("Segoe UI", 9), cursor="hand2").grid(
-                      row=3, column=0, columnspan=2, sticky="ew", padx=24, pady=(8, 16))
+                      row=4, column=0, columnspan=2, sticky="ew", padx=24, pady=(8, 16))
+
+    def _memory_edit(self, kind: str):
+        """Correct or forget the memory whose number is typed (same code path as the chat commands)."""
+        agent = getattr(self, "agent", None)
+        mid = self.memory_id_entry.get().strip().lstrip("#")
+        if agent is None or not mid.isdigit():
+            self._set_text(self.memory_result_text, "Type the memory's number (shown as #N on the right) first.")
+            return
+        if kind == "correct":
+            words = self.memory_fix_entry.get().strip()
+            if not words:
+                self._set_text(self.memory_result_text, "Type the corrected wording first.")
+                return
+            out = agent._memory_controls(f"correct memory {mid}: {words}")
+        else:
+            out = agent._memory_controls(f"forget memory {mid}")
+        self._set_text(self.memory_result_text, (out or {}).get("message", ""))
+        self.memory_fix_entry.delete(0, tk.END)
+        self._refresh_memory_view()
 
     @staticmethod
     def _set_text(widget, content: str):
@@ -2899,11 +2936,10 @@ class TomDesktopApp:
             f"{mem.status_line()}{total_str}   ·   this session: {st['retained']} stored, "
             f"{st['failed']} failed, {st['recalled']} recalls, {st['reflected']} reflections")
         lines = []
-        for item in mem.recent_journal(limit=30):
-            tags = item.get("tags") or []
-            kind = "RULE" if "preference" in tags else "TASK"
-            words = (item.get("metadata") or {}).get("user_words") or item.get("content", "")
-            lines.append(f"[{kind}] {item.get('timestamp', '')[:16].replace('T', ' ')}\n{words}\n")
+        for h in mem.list_memories(limit=40):           # the store itself: forgotten items are really gone
+            kind = "RULE" if h.is_preference else "TASK"
+            conf = f" · {h.confidence:.2f}" if h.confidence is not None else ""
+            lines.append(f"#{h.id}  [{kind}{conf} · {h.source or 'tom'}]  {h.when}\n{h.text}\n")
         self._set_text(self.memory_recent_text,
                        "\n".join(lines) or "Nothing stored yet. Correct TOM once "
                                            "(e.g. \"always put PDFs in Invoices\") and it will show up here.")

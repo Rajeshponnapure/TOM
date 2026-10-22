@@ -20,9 +20,9 @@ from typing import Any, Callable, Dict, List, Optional
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton, QSplitter, QTableWidget,
-    QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
+    QApplication, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton, QSplitter,
+    QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 from tom_core.voice import push_to_talk
@@ -339,6 +339,18 @@ class TomWindow(QMainWindow):
         self.privacy_lbl.setTextFormat(Qt.RichText)
         pl.addWidget(self.privacy_lbl)
         rl.addWidget(priv)
+        memp, mpl = self._panel("Memory")
+        self.memory_list = QListWidget()
+        self.memory_list.setToolTip("What TOM remembers. Select one to correct or forget it.")
+        mpl.addWidget(self.memory_list)
+        mrow = QHBoxLayout()
+        self.mem_refresh_btn = QPushButton("Refresh")
+        self.mem_fix_btn = QPushButton("Correct…")
+        self.mem_forget_btn = QPushButton("Forget")
+        for b in (self.mem_refresh_btn, self.mem_fix_btn, self.mem_forget_btn):
+            mrow.addWidget(b)
+        mpl.addLayout(mrow)
+        rl.addWidget(memp)
         voice, vl = self._panel("Voice")
         self.voice_lbl = QLabel("Push-to-talk. Speech is recognised on this machine by default.")
         self.voice_lbl.setWordWrap(True)
@@ -357,6 +369,9 @@ class TomWindow(QMainWindow):
         self.input.returnPressed.connect(self.send)
         self.stop_all_btn.clicked.connect(self.emergency_stop)
         self.pause_btn.toggled.connect(self._on_pause)
+        self.mem_refresh_btn.clicked.connect(self.refresh_memory)
+        self.mem_fix_btn.clicked.connect(lambda: self._memory_edit("correct"))
+        self.mem_forget_btn.clicked.connect(lambda: self._memory_edit("forget"))
         self.cancel_btn.clicked.connect(self.cancel_selected)
         self.task_table.itemSelectionChanged.connect(self._on_select)
         self.talk_btn.toggled.connect(self._on_talk)
@@ -474,6 +489,38 @@ class TomWindow(QMainWindow):
             self.status_lbl.setText("Cancellation requested")
 
     @Slot()
+    def refresh_memory(self) -> None:
+        """R5 / AT-015: list the memory store (numbers, confidence, source)."""
+        agent = self.host.agent
+        self.memory_list.clear()
+        mem = getattr(agent, "memory", None) if agent is not None else None
+        if mem is None:
+            return
+        for h in mem.list_memories(limit=50):
+            conf = f"{h.confidence:.2f}" if h.confidence is not None else "—"
+            item = QListWidgetItem(f"#{h.id}  {h.text[:90]}  ({conf}, {h.source or 'tom'})")
+            item.setData(Qt.UserRole, h.id)
+            item.setToolTip(h.text)
+            self.memory_list.addItem(item)
+
+    def _memory_edit(self, kind: str) -> None:
+        agent = self.host.agent
+        item = self.memory_list.currentItem()
+        if agent is None or item is None:
+            self.status_lbl.setText("Select a memory first.")
+            return
+        mid = item.data(Qt.UserRole)
+        if kind == "correct":
+            words, ok = QInputDialog.getText(self, "Correct memory", f"New wording for memory #{mid}:",
+                                             text=item.toolTip())
+            if not ok or not words.strip():
+                return
+            out = agent._memory_controls(f"correct memory {mid}: {words.strip()}")
+        else:
+            out = agent._memory_controls(f"forget memory {mid}")
+        self.status_lbl.setText((out or {}).get("message", "")[:160])
+        self.refresh_memory()
+
     def _on_pause(self, paused: bool) -> None:
         """FR-006: pause / resume every task in this TOM (actions wait at the policy gate)."""
         from tom_core.policy import get_policy
@@ -549,6 +596,7 @@ class TomWindow(QMainWindow):
         self.status_lbl.setText("Ready")
         for w in (self.input, self.send_btn, self.talk_btn):
             w.setEnabled(True)
+        self.refresh_memory()
         self.input.setFocus()
         self.refresh_privacy()
         self.refresh_tasks()
