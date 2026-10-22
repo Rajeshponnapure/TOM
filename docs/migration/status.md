@@ -1,17 +1,18 @@
 # Refactor Status (PRD v1.1 supplement §S5)
 
-Last updated 2026-10-21.
+Last updated 2026-10-22.
 
 | Phase | State | Evidence |
 |---|---|---|
 | R0 Repository audit | **Done — approved by owner 2026-10-21** | `docs/architecture/*`, `docs/migration/*`, `docs/security/tool-permissions.md`, `docs/runbooks/rollback.md` |
 | R1 Characterization tests | **Done** | `tests/characterization/` — 21 offline tests (~9 s) |
 | R2 Shared task facade | **Done** | `tom_core/tasks/` — `TomAgent.execute_task()` is a facade over `TaskService.submit_task()`; CLI, Tk chat, Tk voice, voice mode, scheduler and the PySide6 UI all go through it with an `interface` label. Rollback: `TOM_TASK_SERVICE=0` |
-| R3 Policy + typed tools | **Started** — secret redaction only | `tom_core/observability/redact.py`, applied to the audit log and the task store. Policy engine / typed tool registry not started |
+| R3 Policy + typed tools | **Done** | `tom_core/policy/engine.py` (deterministic classes OBSERVE…BLOCKED, workspace roots, protected paths, emergency halt), `tools/approval.py` ApprovalLedger (payload-bound, single-use, 300 s TTL), `tom_core/tools/guard.py` (enforce/aenforce + redacted audit `tom_logs/audit.jsonl`), typed `ToolRegistry` + builtin tools. Every legacy side-effect entry point is gated — `tests/test_no_direct_execution.py` |
 | R4 Durable task state | **Partly done** | SQLite store (`tom_brain/tasks.sqlite3`), restart reconciliation (orphaned tasks → `BLOCKED`, never replayed), cross-process cancel, emergency stop. Not yet: checkpoints, retry ceilings, pause/resume |
 | R5 Memory adapter | **Partly done** | Local SQLite memory behind the Hindsight client surface (ADR-010); cloud opt-in. Not yet: provenance/confidence fields, retention policy, memory editing UI |
 | R6 Resource manager | **Started** | Measured-VRAM admission for the ASR model (ADR-009), CPU/RAM/VRAM panel. Not yet: LLM admission, `num_ctx` profiles, benchmark harness |
 | R8 Voice and interfaces | **Largely done** | Local ASR/TTS adapters in worker processes, female Indian-English voice preference (`TOM_TTS_GENDER`), one push-to-talk module (`tom_core/voice/push_to_talk.py`) used by both the PySide6 and the Tkinter app, professional voice persona; PySide6 desktop UI |
+| Planner / specialists (FR-004, C10) | **Done** | `tom_core/planning/` plan→typed steps→registry→honest report; Autonomous and Multi-Agent rebuilt on it (`tests/test_planner_and_specialists.py`); live-checked with llama3.2:3b 2026-10-22 |
 | R7, R9, R10 | Not started | — |
 
 ## Owner decisions recorded (2026-10-21)
@@ -23,7 +24,7 @@ ADR-002 `tom_core/` ✔ · ADR-003 keep Tkinter **and** add PySide6 ✔ · ADR-0
 
 | PRD test | Status | Where |
 |---|---|---|
-| AT-001 Task lifecycle | Partial — id, persisted state, events, final outcome; no plan/steps yet | `test_task_service.py` |
+| AT-001 Task lifecycle | **Pass** — id, state, events, plan steps with per-step status | `test_task_service.py`, `test_planner_and_specialists.py` |
 | AT-003 Approval gate | Characterized (delete, email); Qt dialog shows exact target | `characterization/`, `test_qt_app.py` |
 | AT-005 Cancellation | **Pass** | `test_cancel_requested_from_another_interface_stops_the_task` |
 | AT-006 Recovery | **Pass** (no blind replay) | `test_restart_marks_orphaned_tasks_blocked_and_never_replays` |
@@ -35,7 +36,7 @@ ADR-002 `tom_core/` ✔ · ADR-003 keep Tkinter **and** add PySide6 ✔ · ADR-0
 | TOM-MIG-003 Memory continuity | Partial — journal seeding tested; see open item 1 | `test_local_memory.py` |
 | TOM-MIG-007 Rollback | **Pass** for `TOM_TASK_SERVICE=0` | `test_rollback_flag_runs_the_legacy_path` |
 | TOM-MIG-009 Secret handling | **Pass** for logs/tasks | — |
-| TOM-MIG-010 No direct execution bypass | **Open** — Tk engine buttons still call tools directly (R7). Closed for Tk voice: the old sidebar voice mode (`generate_voice_response`, which skipped TaskService for most requests) was replaced by push-to-talk on 2026-10-21; the CLI voice mode in `main.py` still uses it | `current-state.md` §2, `test_push_to_talk.py` |
+| TOM-MIG-010 No direct execution bypass | **Pass** — static + behavioural check of every side-effect entry point; `shell=True` only in the approved shell runner | `test_no_direct_execution.py` |
 
 ## R0 defects
 

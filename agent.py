@@ -37,6 +37,7 @@ from tools.file_analyzer import FileAnalyzer
 from tools.project_paths import PROJECT_ROOT, env_file, project_path_str, workspace_path
 from tools.skill_manager import SkillManager, SkillRoute
 from tom_core import skill_modes
+from tom_core.llm_json import parse_model_json
 from tools.capability_resolver import CapabilityResolver
 from tools.hindsight_memory import get_memory, MemoryHit, TAG_PREFERENCE, TAG_CORRECTION, TAG_TASK
 from tools import memory_rules
@@ -158,6 +159,11 @@ class TomAgent:
             self.skill_telemetry = None
         self.capability_resolver = CapabilityResolver()
         self.approval_manager = ApprovalManager()
+        # R3: every side-effecting tool asks the policy engine through tom_core.tools.guard, using
+        # this approval channel (the UIs set its provider); typed tools can hand sub-requests back here.
+        from tom_core.tools import builtin as _typed_tools, guard as _tool_guard
+        _tool_guard.set_approval_manager(self.approval_manager)
+        _typed_tools.set_agent(self)
         self.whatsapp_tools = WhatsAppTools(self.browser_tools)
         self.chat_apps = ChatApps()
         self.chrome_profiles = ChromeProfileManager()
@@ -1752,44 +1758,9 @@ class TomAgent:
     # ── Structured (JSON) content from the model ────────────────────────
     @staticmethod
     def _parse_model_json(text: str) -> Any:
-        """The JSON object in a model reply, tolerating fences, chatter, comments and trailing commas.
-
-        Word/Excel/PowerPoint/PDF content used plain json.loads; one stray comma from a small local
-        model turned a requested document into a placeholder (owner report 2026-10-21).
-        """
-        s = (text or "").strip()
-        if "```" in s:
-            fenced = re.search(r"```(?:json)?\s*(.*?)```", s, re.S)
-            if fenced:
-                s = fenced.group(1).strip()
-        start = min([i for i in (s.find("{"), s.find("[")) if i >= 0], default=-1)
-        if start > 0:
-            s = s[start:]
-        # Cut after the matching closing bracket (ignores trailing chatter).
-        depth, in_str, esc, end = 0, False, False, len(s)
-        for i, ch in enumerate(s):
-            if in_str:
-                esc = (ch == "\\" and not esc)
-                if ch == '"' and not esc:
-                    in_str = False
-                continue
-            if ch == '"':
-                in_str = True
-            elif ch in "{[":
-                depth += 1
-            elif ch in "}]":
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
-        s = s[:end]
-        try:
-            return json.loads(s)
-        except json.JSONDecodeError:
-            repaired = re.sub(r"//[^\n]*", "", s)                     # // comments
-            repaired = re.sub(r",\s*([}\]])", r"\1", repaired)        # trailing commas
-            repaired = re.sub(r"[“”]", '"', repaired)       # smart quotes
-            return json.loads(repaired)
+        """The JSON object in a model reply (tom_core.llm_json): fences, chatter, comments and trailing
+        commas tolerated. Plain json.loads turned requested documents into placeholders."""
+        return parse_model_json(text)
 
     async def _model_json(self, prompt, payload: Dict[str, Any], label: str, llm=None) -> Any:
         """Ask for JSON; on a parse error ask once more with the error, then give up (raises)."""

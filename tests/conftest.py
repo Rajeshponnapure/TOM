@@ -40,6 +40,32 @@ if not os.environ.get("TOM_TASK_DB"):
 from tools.email_tools import EmailTools  # noqa: E402
 
 
+class _ApproveAll:
+    """The approval channel tool-level tests assume: the user said yes. Tests that check refusals
+    install their own approver; tests that build a TomAgent get the agent's own channel."""
+
+    def __init__(self):
+        from tools.approval import ApprovalLedger
+        self.ledger = ApprovalLedger()
+        self.requests = []
+
+    def request_approval(self, request, prompt_fn=None):
+        self.requests.append(request)
+        self.ledger.grant(request.action, request.details)
+        return True
+
+
+@pytest.fixture(autouse=True)
+def _policy_defaults(monkeypatch):
+    """Every test starts with no emergency stop and an approving channel (R3 guard)."""
+    from tom_core.policy import get_policy
+    from tom_core.tools import guard
+    get_policy().resume()
+    monkeypatch.setattr(guard, "_approval_manager", _ApproveAll())
+    yield
+    get_policy().resume()
+
+
 class _Handler(socketserver.StreamRequestHandler):
     def _send(self, line):
         self.wfile.write((line + "\r\n").encode())

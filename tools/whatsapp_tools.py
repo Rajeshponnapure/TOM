@@ -479,6 +479,14 @@ class WhatsAppTools:
         user still has to choose between several matching chats (needs_input).
         `confirm`: the user asked to be asked when the name is ambiguous.
         """
+        # R3: the policy engine sees every send, whoever calls this (TOM-MIG-010). The agent's
+        # approval of this exact recipient + text is used here, not asked for a second time.
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import aenforce
+        gate = await aenforce("whatsapp.send", ActionClass.DESTRUCTIVE_OR_EXTERNAL,
+                              payload={"to": contact_name, "message": message}, approval_action="whatsapp_message")
+        if not gate.allowed:
+            return gate.refusal()
         mode = os.environ.get("WHATSAPP_MODE", "auto").strip().lower()
         native_result: Optional[Dict[str, Any]] = None
         if self._is_windows() and mode in ("auto", "desktop"):

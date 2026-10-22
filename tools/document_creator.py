@@ -43,7 +43,17 @@ def _safe_filename(name: str, ext: str) -> str:
 
 
 def _output_path(filename: str) -> str:
-    return str(OUTPUT_DIR / filename)
+    """Where a document is saved. Every document write passes the R3 policy engine here: inside the
+    workspace it is allowed; an absolute filename elsewhere (OUTPUT_DIR / "C:/x.docx" is "C:/x.docx")
+    needs approval, and protected locations are refused."""
+    path = str(OUTPUT_DIR / filename)
+    from tom_core.policy.engine import ActionClass
+    from tom_core.tools.guard import enforce
+    gate = enforce("document.write", ActionClass.WORKSPACE_WRITE, payload={"path": path}, paths=[path],
+                   approval_action="write_outside_workspace")
+    if not gate.allowed:
+        raise PermissionError(gate.reason)
+    return path
 
 
 # ─── Web content fetch ────────────────────────────────────────────────────────

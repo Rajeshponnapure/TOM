@@ -276,3 +276,12 @@ class AutoUpdate:
             "knowledge_dir": self._update_knowledge_dir,
             "background_active": len(history) > 0,
         }
+
+
+# R3: pulling code into TOM, upgrading its packages or a full update change TOM itself — privileged,
+# approval every time, and never available to autonomous runs (tom_core.policy.engine rule 4).
+from tom_core.policy.engine import ActionClass as _ActionClass  # noqa: E402
+from tom_core.tools.guard import guard_methods as _guard_methods  # noqa: E402
+
+_guard_methods(AutoUpdate, ("pull_updates", "update_pip_packages", "full_update"), "autoupdate",
+               _ActionClass.PRIVILEGED, approval_action="auto_update")

@@ -948,8 +948,13 @@ class EngineRouter:
             return self._unavailable("Autonomous agent", "")
         task = re.sub(r"^(execute\s+)?autonomous(ly)?\s*(task)?\s*:?\s*", "", command, flags=re.I).strip()
         res = await eng.execute(task or command)
-        msg = res.get("message") or res.get("summary") or str(res)
-        return self._ok("engine_autonomous", str(msg)[:2000], raw=res)
+        if res.get("status") != "success":
+            # failed / unverified / partial / nothing plannable: never reported as done
+            return {"status": res.get("status", "error"), "response_type": "engine_autonomous",
+                    "message": res.get("message", ""), "raw": res}
+        extra = {"paths": res["paths"]} if res.get("paths") else {}
+        return self._ok("engine_autonomous", str(res.get("message", ""))[:4000], raw=res,
+                        verified=res.get("verified", False), **extra)
 
     # ── Multi-agent orchestrator (lives on the agent) ────────────────────
     async def _run_orchestrator(self, command: str) -> Dict[str, Any]:
@@ -957,9 +962,12 @@ class EngineRouter:
         if not orch:
             return self._unavailable("Multi-agent orchestrator", "")
         task = re.sub(r"^deploy multi[- ]agent task\s*:?\s*", "", command, flags=re.I).strip()
-        res = await orch.execute_task(task or command)
+        res = await orch.execute_task(task or command, coordinate=True)
         msg = res.get("message") or res.get("result") or str(res)
-        return self._ok("engine_orchestrator", str(msg)[:2000], raw=res)
+        if res.get("status") not in ("success",):
+            return {"status": res.get("status", "error"), "response_type": "engine_orchestrator",
+                    "message": str(msg), "raw": res}
+        return self._ok("engine_orchestrator", str(msg)[:4000], raw=res)
 
     # ── Web automation: verify a URL / localhost app ─────────────────────
     async def _run_webauto(self, command: str) -> Dict[str, Any]:
@@ -1029,10 +1037,11 @@ class EngineRouter:
         approved = await _aio.to_thread(
             agent.approval_manager.request_approval,
             ApprovalRequest(action="run_code", summary=f"Run {run_kind}: {shell_m.group(1) if shell_m else path}",
-                            details={"path": path}, risk_level="high"))
+                            details={"target": shell_m.group(1) if shell_m else path}, risk_level="high"))
         if not approved:
             return {"status": "cancelled", "response_type": "engine_coderun",
                     "message": "Code run cancelled by user."}
+        # The CodeRunner method itself passes the policy engine (it consumes this approval).
         if run_kind == "shell":
             res = eng.run_shell(shell_m.group(1))
             label = "shell"
@@ -1075,6 +1084,15 @@ class EngineRouter:
         if not approved:
             return {"status": "cancelled", "response_type": "engine_fileops",
                     "message": "File operation cancelled. (Plan was: " + plan["message"][:200] + ")", **extras}
+        # R3 policy gate: moves in the user's own folder are a material change the user just approved
+        # (protected locations stay blocked; the approval above is consumed, not asked again).
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import aenforce
+        gate = await aenforce("fs.organize", ActionClass.MATERIAL_CHANGE, payload={"folder": plan.get("folder", "")},
+                              paths=[plan.get("folder", "")], approval_action="file_ops",
+                              manager=agent.approval_manager)
+        if not gate.allowed:
+            return {**gate.refusal(), "response_type": "engine_fileops", **extras}
         from tools.file_ops import FileOps
         ops = FileOps()
         res = ops.execute_plan(plan)
@@ -1119,6 +1137,13 @@ class EngineRouter:
             if not approved:
                 return {"status": "cancelled", "response_type": "engine_fileops",
                         "message": "Undo cancelled. (Plan was: " + plan["message"] + ")"}
+            from tom_core.policy.engine import ActionClass
+            from tom_core.tools.guard import aenforce
+            gate = await aenforce("fs.organize_undo", ActionClass.MATERIAL_CHANGE,
+                                  payload={"operation": "undo", "count": len(plan["moves"])},
+                                  approval_action="file_ops", manager=agent.approval_manager)
+            if not gate.allowed:
+                return {**gate.refusal(), "response_type": "engine_fileops"}
             undone = ops.execute_undo_plan(plan)
             return self._ok("engine_fileops", undone["message"],
                             completed_moves=undone.get("completed_moves") or [])

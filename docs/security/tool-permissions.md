@@ -44,3 +44,13 @@
 3. No tool may write `config/policies.yaml` or anything under `safety/` or `tom_core/policy/`.
 4. Secrets (`*_API_KEY`, `*_PASSWORD`, `*_TOKEN`, bearer tokens, `sk-…`, `gsk_…`) are redacted **before** any log, audit, task-store or export write.
 5. Paths are normalized (`os.path.realpath`) before workspace checks, which defeats `..` traversal and symlink escape.
+
+## 4. Enforcement (implemented 2026-10-22, R3)
+
+* Every side effect passes `tom_core.tools.guard.enforce()` → `PolicyEngine.decide()`; the decision and a redacted target are appended to `tom_logs/audit.jsonl`.
+* Approvals are recorded in `ApprovalLedger`, bound to the exact payload, single-use, valid 300 s.
+* Emergency stop (Qt and Tk **Stop**) calls `get_policy().halt()`: every new tool call is refused until the user's next request.
+* Background agents with standing permission (email auto-reply, Instagram report) need their opt-in `.env` flag; nothing else is pre-authorized.
+* In-process Blender `exec()` is BLOCKED; plugins and code runs need approval for that exact plugin / file / command.
+* Specialist agents only see their granted tools (`ROLE_TOOLS` in `tools/agent_orchestrator.py`); the registry refuses anything else.
+

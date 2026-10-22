@@ -718,7 +718,8 @@ class InstagramAINNewsAgent:
             logger.info("Instagram report draft prepared")
 
             if self.auto_send_report_email:
-                result = await self.email_tools.send_email_direct(recipient, subject, body, attachments=[pdf_path])
+                result = await self.email_tools.send_email_direct(
+                    recipient, subject, body, attachments=[pdf_path], standing="INSTAGRAM_AUTO_SEND_REPORT_EMAIL")
             else:
                 result = await self.email_tools.send_email(recipient, subject, body, attachments=[pdf_path])
 

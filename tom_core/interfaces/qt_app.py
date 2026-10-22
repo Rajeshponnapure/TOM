@@ -392,6 +392,8 @@ class TomWindow(QMainWindow):
         self.input.clear()
         self._append("You", text, "#7fb2ff")
         self.status_lbl.setText("Working…")
+        from tom_core.policy import get_policy
+        get_policy().resume()            # a new request from the user lifts an emergency stop
         self.host.submit(text, interface)
 
     @Slot(str, dict)
@@ -468,6 +470,8 @@ class TomWindow(QMainWindow):
     @Slot()
     def emergency_stop(self) -> None:
         """PRD §11.2: stop all new execution now — every running task in every TOM window."""
+        from tom_core.policy import get_policy
+        get_policy().halt("emergency stop pressed in the desktop app")   # no new tool calls start
         tasks = getattr(self.host.agent, "tasks", None)
         cancelled = set()
         if tasks is not None:

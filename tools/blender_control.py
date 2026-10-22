@@ -521,12 +521,13 @@ print("TOM house model created")
         with open(script_path, "w") as f:
             f.write(script)
 
-        if self._has_bpy:
-            try:
-                exec(script, {"__name__": "__tom_blender__"})
-                return {"status": "success", "mode": "direct", "message": "Script executed in-process"}
-            except Exception as e:
-                return {"status": "error", "mode": "direct", "message": str(e)}
+        if self._has_bpy and not self.blender_path:
+            # In-process exec() is blocked (tool-permissions.md §2): a script runs only inside a
+            # separate Blender process, never inside TOM itself.
+            from tom_core.policy.engine import ActionClass
+            from tom_core.tools.guard import enforce
+            gate = enforce("blender.exec_in_process", ActionClass.BLOCKED, payload={"script": script_path})
+            return {**gate.refusal(), "mode": "direct"}
 
         # NOTE: this used to fire-and-forget with subprocess.Popen() and report
         # "success" the instant the process merely *launched* -- never waiting

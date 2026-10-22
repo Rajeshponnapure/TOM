@@ -462,3 +462,17 @@ class HardwareControl:
             return {"status": "success", "message": "Opened volume mixer"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+
+# R3: input and audio actions are reversible (no approval) but still pass the policy engine, so the
+# emergency stop really stops them and each one is in the audit log (tool-permissions.md §2 — they
+# used to be called straight from GUI buttons).
+from tom_core.policy.engine import ActionClass as _ActionClass  # noqa: E402
+from tom_core.tools.guard import guard_methods as _guard_methods  # noqa: E402
+
+_guard_methods(HardwareControl, ("move_mouse", "click", "double_click", "right_click", "drag", "scroll",
+                                 "type_text", "press_key", "hotkey", "key_down", "key_up", "focus_window",
+                                 "copy_to_clipboard", "set_volume", "mute_audio", "unmute_audio",
+                                 "volume_up", "volume_down", "screenshot"),
+               "hardware", _ActionClass.REVERSIBLE, approval_action="hardware")
+

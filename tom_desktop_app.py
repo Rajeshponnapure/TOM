@@ -3784,6 +3784,8 @@ class TomDesktopApp:
         self.stop_btn.configure(state="normal")
         self.orb.status = "loading"
         self.processing = True
+        from tom_core.policy import get_policy
+        get_policy().resume()                      # a new request lifts an earlier Stop
         threading.Thread(target=self._process_message, args=(routed, interface), daemon=True).start()
 
         # Update header
@@ -3820,7 +3822,9 @@ class TomDesktopApp:
                 self._enqueue(self._on_response_ready, f"Error: {exc}", None, None)
 
     def _cancel_active_work(self):
-        """Stop a pending task and any currently spoken response."""
+        """Stop a pending task and any currently spoken response (PRD §11.2 emergency stop)."""
+        from tom_core.policy import get_policy
+        get_policy().halt("Stop pressed in the desktop app")      # no new tool calls start
         future = self._active_task_future
         if future is not None and not future.done():
             future.cancel()

@@ -18,9 +18,8 @@ Each agent:
 - Can escalate errors to CEO for re-routing
 """
 import asyncio
-import json
 import logging
-import os
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -37,6 +36,33 @@ class AgentRole(Enum):
     CFO = "cfo"
     COO = "coo"
 
+
+
+# Tool grants per specialist (PRD C10 "constrained tool grants"). The registry refuses anything else,
+# and the policy engine still applies (approvals; privileged actions are never granted).
+ROLE_TOOLS: Dict[AgentRole, tuple] = {
+    AgentRole.CTO: ("git.status", "git.diff", "git.log", "git.checkpoint", "shell.run", "fs.read_text",
+                    "fs.list_dir", "fs.find_files", "fs.largest_files", "system.info", "system.top_processes",
+                    "net.open_ports", "web.search", "web.fetch"),
+    AgentRole.CMO: ("web.search", "web.fetch", "fs.write_text", "fs.make_dir", "tom.request"),
+    AgentRole.CPO: ("web.search", "web.fetch", "fs.read_text", "fs.list_dir", "fs.write_text"),
+    AgentRole.CFO: ("fs.read_text", "fs.list_dir", "fs.find_files", "web.search", "tom.request"),
+    AgentRole.COO: ("app.open", "system.info", "system.top_processes", "fs.list_dir", "fs.make_dir",
+                    "tom.request"),
+}
+# Work that needs the PC or the live web (files, folders, repos, processes, ports, apps, current
+# facts); anything else is thinking work a specialist answers directly.
+_NEEDS_TOOLS = re.compile(
+    r"[A-Za-z]:[\/]|\b(files?|folders?|director(y|ies)|disk|drive|repo(sitory)?|git|commits?|"
+    r"process(es)?|cpu|ram|ports?|(open|launch|start) (the )?(app|program|application)|install(ed)?|search (the )?(web|internet|online)|"
+    r"look up|latest|current|today'?s|news|prices?|download(s)?|desktop|workspace)\b", re.I)
+ROLE_FOCUS: Dict[AgentRole, str] = {
+    AgentRole.CTO: "engineering — code, repositories, diagnostics, technical research",
+    AgentRole.CMO: "communication — writing, content, presentations, research for them",
+    AgentRole.CPO: "product — requirements, comparisons, user needs, specifications",
+    AgentRole.CFO: "finance — budgets, costs, numbers in files, financial research",
+    AgentRole.COO: "operations — scheduling, apps, system resources, organizing work",
+}
 
 @dataclass
 class Task:
@@ -139,7 +165,8 @@ class AgentOrchestrator:
         for agent in agents_config:
             self._agents[agent.role] = agent
 
-    async def execute_task(self, task_description: str, intent: str = "") -> Dict[str, Any]:
+    async def execute_task(self, task_description: str, intent: str = "",
+                           coordinate: bool = False) -> Dict[str, Any]:
         """CEO entry point: decompose task, delegate to sub-agents, aggregate results."""
         task_id = self._generate_task_id()
 
@@ -150,7 +177,8 @@ class AgentOrchestrator:
             created_at=time.time(),
         )
 
-        role = self._determine_best_agent(task_description, intent)
+        # coordinate (the Multi-Agent quick action): the coordinator splits the job across specialists
+        role = AgentRole.CEO if coordinate else self._determine_best_agent(task_description, intent)
         task.assigned_to = role
 
         if role == AgentRole.CEO:
@@ -307,41 +335,108 @@ class AgentOrchestrator:
         return {"escalation": "failed", "message": "No available agents for escalation"}
 
     async def _handle_as_ceo(self, task: Task) -> Dict[str, Any]:
-        """CEO handles tasks that don't fit any sub-agent or require coordination."""
-        if self.llm:
+        """Coordinator: split the job across specialists, run each, show each result as it is
+        (a model-written merge invented facts in the live check of 2026-10-22).
+
+        It used to answer "[CEO] <your task>" — an echo, with no work done (owner report 2026-10-21).
+        """
+        if not self._can_think():
+            return {"status": "error", "role": "ceo",
+                    "message": "Coordinating specialists needs the language model, which is not available."}
+        roles = ", ".join(f"{r.value} ({a.name}: {ROLE_FOCUS[r]})" for r, a in self._agents.items())
+        system = ("You are TOM's coordinator. Split the user's job into 1-4 assignments for these specialists: "
+                  f"{roles}. Each assignment is one concrete piece of work for one role. "
+                  'Return ONLY JSON: {"assignments": [{"role": "cto|cmo|cpo|cfo|coo", "task": "..."}]}')
+        valid = {r.value for r in self._agents}
+        try:
+            from tom_core.llm_json import parse_model_json
+            plan = parse_model_json(await self._ask(system, f"Job: {task.description}"))
+            assignments = [(AgentRole(a["role"]), str(a["task"])) for a in (plan or {}).get("assignments", [])
+                           if isinstance(a, dict) and a.get("role") in valid and a.get("task")][:4]
+        except Exception:
+            assignments = []
+        if not assignments:
+            best = self._determine_best_agent(task.description, task.intent)
+            assignments = [(best if best != AgentRole.CEO else AgentRole.CPO, task.description)]
+
+        results = []
+        for role, piece in assignments:
+            sub = Task(id=self._generate_task_id(), description=piece, intent=task.intent,
+                       created_at=time.time(), assigned_to=role)
+            results.append((role, piece, await self._delegate_task(sub, role)))
+
+        worked = [r for r in results if r[2].get("status") in ("success", "unverified")]
+        digest = "\n\n".join(f"### {self._agents[role].name} — {piece}\nStatus: {res.get('status')}\n"
+                               f"{str(res.get('message', ''))[:2500]}" for role, piece, res in results)
+        who = "\n".join(f"- {self._agents[role].name}: {res.get('status')} — {piece}" for role, piece, res in results)
+        return {"status": "success" if worked else "error", "role": "ceo",
+                "message": f"{digest}\n\nWho did what:\n{who}",
+                "assignments": [{"role": r.value, "task": p, "status": res.get("status")} for r, p, res in results]}
+
+    # ── Specialists (PRD C10): real work with the tools each role is granted ──
+
+    def _can_think(self) -> bool:
+        return self.llm is not None or (self.tom_agent is not None and hasattr(self.tom_agent, "_invoke_llm"))
+
+    async def _ask(self, system: str, user: str) -> str:
+        agent = self.tom_agent
+        if agent is not None and hasattr(agent, "_invoke_llm"):
             from langchain_core.prompts import ChatPromptTemplate
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", "You are TOM acting as CEO. Analyze the task and break it down if needed. "
-                           "Return JSON: {\"plan\": [\"step1\", \"step2\"], \"delegation\": \"self|cto|cmo|cpo|cfo|coo\"}"),
-                ("user", "Task: {task}"),
-            ])
+            prompt = ChatPromptTemplate.from_messages([("system", "{system}"), ("user", "{user}")])
+            resp = await agent._invoke_llm(prompt, {"system": system, "user": user}, "specialist",
+                                           getattr(agent, "llm", None))
+            return getattr(resp, "content", "") or ""
+        if self.llm is not None:
+            from langchain_core.messages import HumanMessage, SystemMessage
+            resp = await self.llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
+            return getattr(resp, "content", "") or ""
+        raise RuntimeError("No language model is available.")
+
+    async def _specialist(self, role: AgentRole, task: str) -> Dict[str, Any]:
+        """Do `task` as this role. Thinking work (a tagline, a budget split, a spec) is answered from
+        the role's expertise in one model call; only work that touches this PC or the live web is
+        planned and run with the role's granted tools (live check 2026-10-22: planning a tagline
+        produced failing file writes instead of a tagline)."""
+        name = self._agents[role].name
+        if not self._can_think():
+            return {"status": "error", "role": role.value, "message": f"{name} needs the language model."}
+        report = None
+        if _NEEDS_TOOLS.search(task):
+            from tom_core.planning import run_goal
+            from tom_core.tasks import service as _svc
+            from tom_core.tools.registry import get_registry
+            token = _svc._current_interface.set(f"specialist:{role.value}")   # audit + policy actor
             try:
-                resp = await (prompt | self.llm).ainvoke({"task": task.description})
-                content = resp.content.strip()
-                if "```json" in content:
-                    content = content.split("```json")[1].split("```")[0].strip()
-                elif "```" in content:
-                    content = content.split("```")[1].split("```")[0].strip()
-                analysis = json.loads(content)
-                delegation = analysis.get("delegation", "self")
+                report = await run_goal(task, self._ask, get_registry(), allowed=ROLE_TOOLS[role])
+            finally:
+                _svc._current_interface.reset(token)
+            if report.results and report.status in ("success", "unverified"):
+                return {"status": report.status, "role": role.value, "message": f"[{name}]\n{report.text()}"}
+        advice = await self._ask(
+            f"You are TOM's {name}: {ROLE_FOCUS[role]}. Do this piece of work directly and concretely in "
+            "American English — analysis, a draft, a plan or a recommendation. You cannot act outside this "
+            "answer, so never claim you sent, saved, opened or ran anything.", task)
+        message = f"[{name}]\n{advice.strip()}"
+        if report is not None and report.results:          # tools were tried and failed: say so
+            message += f"\n\n(Tool steps that did not work:\n{report.text()})"
+            return {"status": "partial", "role": role.value, "response_type": "specialist_answer",
+                    "message": message}
+        return {"status": "success", "role": role.value, "response_type": "specialist_answer", "message": message}
 
-                if delegation != "self":
-                    try:
-                        role = AgentRole(delegation)
-                        return await self._delegate_task(task, role)
-                    except ValueError:
-                        pass
+    async def _execute_cto_task(self, task: str, intent: str) -> Dict[str, Any]:
+        return await self._specialist(AgentRole.CTO, task)
 
-                return {
-                    "status": "success",
-                    "message": f"[CEO] Processed: {task.description}",
-                    "plan": analysis.get("plan", []),
-                    "role": "ceo",
-                }
-            except Exception as e:
-                return {"status": "success", "message": f"[CEO] {task.description}", "role": "ceo"}
+    async def _execute_cmo_task(self, task: str, intent: str) -> Dict[str, Any]:
+        return await self._specialist(AgentRole.CMO, task)
 
-        return {"status": "success", "message": f"[CEO] {task.description}", "role": "ceo"}
+    async def _execute_cpo_task(self, task: str, intent: str) -> Dict[str, Any]:
+        return await self._specialist(AgentRole.CPO, task)
+
+    async def _execute_cfo_task(self, task: str, intent: str) -> Dict[str, Any]:
+        return await self._specialist(AgentRole.CFO, task)
+
+    async def _execute_coo_task(self, task: str, intent: str) -> Dict[str, Any]:
+        return await self._specialist(AgentRole.COO, task)
 
     def _process_pending_queue(self):
         """Process the next pending task if a suitable agent is free."""
@@ -352,43 +447,6 @@ class AgentOrchestrator:
             if agent and agent.status == "idle":
                 self._pending_tasks.remove(task)
                 asyncio.create_task(self._delegate_task(task, task.assigned_to))
-
-    # ── Sub-agent Executors ─────────────────────────────────────────────
-
-    async def _execute_cto_task(self, task: str, intent: str) -> Dict[str, Any]:
-        """CTO handles technical tasks."""
-        tech_keywords = ["web automation", "browser", "localhost", "debug", "code"]
-        if any(kw in task.lower() for kw in tech_keywords) and self.tom_agent:
-            if "web automation" in task.lower() or "browser" in task.lower() or "localhost" in task.lower():
-                try:
-                    from tools.web_automation import WebAutomationSuite
-                    auto = WebAutomationSuite(self.tom_agent.browser_tools)
-                    page = await self.tom_agent.browser_tools._get_active_page()
-                    if page and ("localhost" in task.lower() or "http" in task.lower()):
-                        url_match = __import__("re").search(r'https?://[^\s]+', task)
-                        if url_match:
-                            result = await auto.wait_and_verify(url_match.group(0))
-                            return result
-                except Exception as e:
-                    return {"status": "error", "message": f"[CTO] Web automation failed: {e}", "role": "cto"}
-
-        return {"status": "info", "message": f"[CTO] Technical assessment: {task}", "role": "cto"}
-
-    async def _execute_cmo_task(self, task: str, intent: str) -> Dict[str, Any]:
-        """CMO handles marketing/content tasks."""
-        return {"status": "info", "message": f"[CMO] Marketing assessment: {task}", "role": "cmo"}
-
-    async def _execute_cpo_task(self, task: str, intent: str) -> Dict[str, Any]:
-        """CPO handles product tasks."""
-        return {"status": "info", "message": f"[CPO] Product assessment: {task}", "role": "cpo"}
-
-    async def _execute_cfo_task(self, task: str, intent: str) -> Dict[str, Any]:
-        """CFO handles financial tasks."""
-        return {"status": "info", "message": f"[CFO] Financial assessment: {task}", "role": "cfo"}
-
-    async def _execute_coo_task(self, task: str, intent: str) -> Dict[str, Any]:
-        """COO handles operational tasks."""
-        return {"status": "info", "message": f"[COO] Operations assessment: {task}", "role": "coo"}
 
     # ── Utilities ───────────────────────────────────────────────────────
 
@@ -431,8 +489,8 @@ class AgentOrchestrator:
         }
 
     async def deploy_multi_agent_task(self, task_description: str) -> Dict[str, Any]:
-        """Deploy a complex task across multiple agents with coordination."""
-        result = await self.execute_task(task_description)
+        """Multi-Agent quick action: the coordinator splits the job across specialists."""
+        result = await self.execute_task(task_description, coordinate=True)
         return {
             "status": result.get("status", "completed"),
             "message": result.get("message", ""),

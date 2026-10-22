@@ -2014,5 +2014,15 @@ def main():
         parser.print_help()
 
 
+
+# R3 (tool-permissions.md §2): installing, removing or upgrading packages and creating or migrating
+# environments are material changes — each one now needs the user's approval through the policy engine.
+from tom_core.policy.engine import ActionClass as _ActionClass  # noqa: E402
+from tom_core.tools.guard import guard_methods as _guard_methods  # noqa: E402
+
+_guard_methods(DependencyManager, ("create_venv", "install_package", "uninstall_package", "update_package",
+                                   "migrate_to_python311"), "deps", _ActionClass.MATERIAL_CHANGE,
+               approval_action="dependency_change")
+
 if __name__ == "__main__":
     main()
