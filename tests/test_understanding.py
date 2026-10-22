@@ -29,7 +29,8 @@ def test_constraints_are_kept():
 
 
 def test_missing_details_and_vague_references_are_not_confident():
-    assert not u("send a whatsapp message to mounish").confident or u("send a whatsapp message to mounish").missing
+    x = u("send a whatsapp message to mounish")
+    assert not x.confident and x.missing == ["message_body"]
     assert not u("send it again").confident
     assert u("create a 10 slide presentation on climate change").confident
 
@@ -50,3 +51,17 @@ def test_clear_requests_skip_the_model_and_unclear_ones_use_it():
     assert calls == [] and clear["understanding"]["confident"]
     asyncio.run(p.parse_with_llm("can you sort out that thing with the files from yesterday please"))
     assert len(calls) == 1
+
+
+def test_a_whatsapp_request_without_words_asks_instead_of_sending():
+    import agent as agent_mod
+    a = agent_mod.TomAgent.__new__(agent_mod.TomAgent)
+    a.nlp_parser = P
+    sent = []
+
+    async def no_send(contact, message, confirm=False):
+        sent.append((contact, message))
+    a._send_whatsapp = no_send
+    out = asyncio.run(a._execute_whatsapp("send a whatsapp message to mounish"))
+    assert out["status"] == "needs_input" and "What should I say to mounish" in out["message"]
+    assert sent == []

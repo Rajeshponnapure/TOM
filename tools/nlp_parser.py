@@ -165,6 +165,11 @@ INTENTS = [
     "email_inbox", "build_agent", "schedule_task", "skill_task", "file_operation", "chat", "compound",
 ]
 
+# "a whatsapp message", "a text", "a quick message" — the kind of message, never its content.
+GENERIC_MESSAGE = re.compile(r"\s*(?:a|an|the|my)?\s*(?:whats\s*app|text|short|quick|new|small)?\s*"
+                             r"(?:message|msg|text|note|ping)\s*", re.IGNORECASE)
+
+
 class CommandParser:
     DOMAIN_KEYWORDS = {
         "frontend": ("frontend", "react", "next.js", "website", "web app", "html", "css"),
@@ -307,6 +312,9 @@ CRITICAL RULES:
                 "noun_chunks": [c["text"] for c in analysis.get("noun_chunks", [])],
             }
 
+        # "send a whatsapp message to mounish" names the kind of message, not its text — never send that.
+        if GENERIC_MESSAGE.fullmatch(str(result.get("message_body") or "")):
+            result["message_body"] = ""
         return result
 
     async def parse_with_llm(self, command: str) -> Dict[str, Any]:
@@ -499,6 +507,10 @@ CRITICAL RULES:
                 continue        # "tell the team ..." is not a contact called "the"
             if len(message) >= 2 and message[0] in "\"'“" and message[-1] in "\"'”":
                 message = message[1:-1].strip()          # text Ravi "on my way" → on my way
+            if contact and message and GENERIC_MESSAGE.fullmatch(message):
+                message = ""                              # the kind of message was named, not its text
+                if not re.fullmatch(app_re, contact, re.IGNORECASE):
+                    return {"contact": contact, "message": ""}
             if contact and message and not re.fullmatch(app_re, contact, re.IGNORECASE):
                 out = {"contact": contact, "message": message}
                 if confirm:

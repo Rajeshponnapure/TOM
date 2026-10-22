@@ -2761,10 +2761,16 @@ class TomAgent:
                     message = message or task.get("message_body") or ""
                     break
 
+        if contact and not message:
+            # Never let a model make up the words of a message the user did not give (FR-015).
+            return {"status": "needs_input", "response_type": "whatsapp",
+                    "message": f"What should I say to {contact} on WhatsApp?"}
+
         if not contact or not message:
             memory_context = self._build_memory_context(command)
             prompt = self._safe_prompt([
-                ("system", "Extract WhatsApp recipient and message. Reply with:\nTO: <name>\nMESSAGE: <text>"),
+                ("system", "Extract WhatsApp recipient and message. Reply with:\nTO: <name>\nMESSAGE: <text>\n"
+                           "Use only words the user actually gave for the message; if there are none, write MESSAGE: (none)."),
                 ("user", "Memory:\n{memory}\n\nCommand: {command}"),
             ])
             try:
@@ -2785,8 +2791,14 @@ class TomAgent:
 
         contact = str(contact).strip()
         message = str(message).strip()
+        if message.lower() in ("(none)", "none", "n/a"):
+            message = ""
+        if contact and not message:
+            return {"status": "needs_input", "response_type": "whatsapp",
+                    "message": f"What should I say to {contact} on WhatsApp?"}
         if not contact or not message:
-            return {"status": "error", "message": f"Could not determine WhatsApp contact or message from: {command}"}
+            return {"status": "needs_input", "response_type": "whatsapp",
+                    "message": "Who should I message on WhatsApp, and what should it say?"}
 
         return await self._send_whatsapp(contact, message, confirm=bool(details.get("confirm_contact")))
 
