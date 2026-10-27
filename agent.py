@@ -2738,6 +2738,7 @@ class TomAgent:
                 "email_draft_for_send", self.llm,
             )
             subject, body = self._split_subject_body(resp.content)
+            body = self._tidy_email_body(body)
             if not subject:
                 subject = parsed_subject or "Message from TOM"
         else:
@@ -2771,6 +2772,19 @@ class TomAgent:
             result["message"] = f"{found_note}\n{result.get('message', '')}"
         return result
 
+    _SENT_CLAIM = re.compile(r"[^.!?\n]*\b(?:has been sent|was sent|been delivered|sent successfully|appears? to have "
+                             r"(?:been )?sent|successfully sent)\b[^.!?\n]*[.!?]?", re.IGNORECASE)
+
+    @classmethod
+    def _tidy_email_body(cls, body: str) -> str:
+        """Fix what a small model gets wrong in a drafted email (live test 2026-10-27: "Dear
+        gnanarajeswarareddy1607@gmail.com," and "It appears to have sent successfully." inside the email):
+        a greeting to a bare address becomes "Hello,", and claims that it was already sent are removed."""
+        body = re.sub(r"^\s*(Dear|Hi|Hello|Hey)\s+[\w.+-]+@[\w-]+(?:\.[\w-]+)+\s*,", "Hello,", body or "",
+                      flags=re.IGNORECASE)
+        body = cls._SENT_CLAIM.sub("", body)
+        return re.sub(r"[ \t]+\n", "\n", re.sub(r"\n{3,}", "\n\n", body)).strip()
+
     def _gmail_web(self):
         gw = getattr(self, "_gmail_web_tool", None)
         if gw is None:
@@ -2802,10 +2816,13 @@ class TomAgent:
             return {"status": "needs_input" if window["status"] == "signin" else "error", "sent": False,
                     "response_type": "email_send", "message": window["message"]}
         looked = await gw.inspect_draft(recipient, subject, window["hwnd"]) if hasattr(gw, "inspect_draft") else {}
-        if looked.get("ok") is False and "recipient" in looked.get("missing", []):
+        if looked.get("ok") is False:
+            # Never press Send unless the window in front is THIS draft (same recipient and subject): in a live
+            # run an older draft was also open and Gmail was declared ready before the new one had loaded.
             return {"status": "error", "sent": False, "response_type": "email_send",
-                    "message": f"Gmail opened, but I can't see {recipient} in the draft on screen, so I won't send it. "
-                               "The draft is still open in Chrome — check it there."}
+                    "message": f"Gmail opened, but I can't see the {' and '.join(looked.get('missing', []))} of this "
+                               "email in the window on screen, so I didn't send it. The draft is open in Chrome — "
+                               "check it there and click Send yourself if it's right."}
         seen_note = f"\n({looked['message']})" if looked.get("ok") else ""
         sender = gw.account_in(window.get("title", "")) if hasattr(gw, "account_in") else ""
         approved = await asyncio.to_thread(
@@ -2829,7 +2846,11 @@ class TomAgent:
         # in its Inbox; otherwise only Gmail's own "Message sent" on screen is evidence (live check 2026-10-27:
         # Chrome was signed into a different account, so Sent never showed it).
         mailbox = (getattr(gw, "account", "") or "").lower()
-        if not sender or sender == mailbox:
+        if recipient.lower() == mailbox and sender != mailbox:
+            # mailing TOM's own mailbox (from whichever account Chrome uses): it must arrive in the inbox
+            confirmed, where = await gw.verify_sent(recipient, subject, since, folder="inbox"), \
+                f"it has arrived in {recipient}'s inbox"
+        elif not sender or sender == mailbox:
             confirmed, where = await gw.verify_sent(recipient, subject, since), "it's in your Sent folder"
         elif recipient.lower() == mailbox:
             confirmed, where = await gw.verify_sent(recipient, subject, since, folder="inbox"), \

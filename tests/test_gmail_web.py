@@ -230,6 +230,70 @@ def test_a_revoked_oauth_token_falls_back_to_the_app_password(monkeypatch):
     assert asyncio.run(et._get_active_mail_connection()) == "conn"
 
 
+# ── reading the screen (fake OCR — tests never photograph or click the desktop) ─────────
+
+class FakeScreen:
+    """Lines of text "on screen"; clicks are recorded. Each line is (text, y)."""
+
+    def __init__(self, lines, after_click=None):
+        from tom_core.screen_control import ScreenControl
+        self.lines, self.after_click, self.clicks = lines, after_click, []
+
+        def ocr(_img):
+            out = []
+            for n, (text, y) in enumerate(self.lines):
+                x = 100
+                for w in text.split():
+                    out.append((w, 95.0, (x, y, 10 * len(w), 20), n))
+                    x += 10 * len(w) + 8
+            return out
+        hw = type("H", (), {"click": lambda s, x, y: self.clicks.append((x, y)) or self._clicked() or {"status": "success"},
+                            "double_click": lambda s, x, y: {"status": "success"}})()
+        self.sc = ScreenControl(hardware=hw, grab=lambda region: None, ocr=ocr)
+
+    def _clicked(self):
+        if self.after_click is not None:
+            self.lines = self.after_click
+
+    def __getattr__(self, name):
+        return getattr(self.sc, name)
+
+
+def test_only_the_send_button_is_clicked_not_the_word_send_in_the_body():
+    screen = FakeScreen([("TOM live test 23:47", 100), ("This is a test: TOM clicked Send itself", 300),
+                         ("Send", 900)], after_click=[("Message sent", 950)])
+    gw = _gw()
+    gw._screen_tool = screen
+    res = asyncio.run(gw.send_open_draft("ravi@example.com", "Ravi meeting", hwnd=1))
+    assert res["method"] == "button" and screen.clicks and screen.clicks[0][1] == 910      # the button row
+    assert gw._hardware.keys == [] and "Message sent" in res["screen"]
+
+
+def test_a_missed_click_falls_back_to_the_shortcut_once():
+    screen = FakeScreen([("Send", 900)])                                   # still there after the click
+    gw = _gw()
+    gw._screen_tool = screen
+    res = asyncio.run(gw.send_open_draft("ravi@example.com", "Ravi meeting", hwnd=1))
+    assert res["method"] == "keyboard" and gw._hardware.keys == [("ctrl", "enter")]
+
+
+def test_an_older_draft_never_passes_for_this_one():
+    gw = _gw()
+    gw._screen_tool = FakeScreen([("ravi@example.com", 80), ("TOM live test 21:30", 120)])
+    res = asyncio.run(gw.inspect_draft("ravi@example.com", "TOM live test 21:38", hwnd=1, timeout=0))
+    assert res["ok"] is False and res["missing"] == ["subject"]
+    gw._screen_tool = FakeScreen([("ravi@example.com", 80), ("TOM live test 21:38", 120)])
+    assert asyncio.run(gw.inspect_draft("ravi@example.com", "TOM live test 21:38", hwnd=1, timeout=0))["ok"] is True
+
+
+def test_drafted_emails_never_greet_an_address_or_claim_they_were_sent():
+    from agent import TomAgent
+    body = ("Dear ravi.kumar@acme.com,\n\nPlease find the report attached. It appears to have sent successfully.\n\n"
+            "Best regards,\nRajesh")
+    out = TomAgent._tidy_email_body(body)
+    assert out.startswith("Hello,") and "sent successfully" not in out and "report attached" in out
+
+
 # ── the agent ──────────────────────────────────────────────────────────
 
 class FakeGmail:

@@ -171,7 +171,7 @@ class GmailWeb:
                 self._screen_tool = ScreenControl(hardware=self._hardware)
         return self._screen_tool
 
-    async def inspect_draft(self, to: str, subject: str, hwnd: int) -> Dict[str, Any]:
+    async def inspect_draft(self, to: str, subject: str, hwnd: int, timeout: float = 15.0) -> Dict[str, Any]:
         """Read the Gmail window (Tesseract) and check the recipient and subject TOM filled in are really
         there. {"ok": bool|None, "seen": [...], "missing": [...]}; ok=None when OCR isn't available."""
         from tom_core.screen_control import window_box
@@ -180,14 +180,20 @@ class GmailWeb:
         if not usable:
             return {"ok": None, "seen": [], "missing": [], "message": why}
         self.focus(hwnd)
-        await asyncio.sleep(0.8)
-        lines = await asyncio.to_thread(sc.read, window_box(hwnd))
-        seen, missing = [], []
-        for label, value in (("recipient", to), ("subject", subject[:40])):
-            if value and sc.find(value, lines=lines, min_score=0.75):
-                seen.append(label)
-            elif value:
-                missing.append(label)
+        deadline = time.monotonic() + timeout
+        while True:                    # the compose page may still be loading: look again for a while
+            await asyncio.sleep(0.8)
+            lines = await asyncio.to_thread(sc.read, window_box(hwnd))
+            seen, missing = [], []
+            # near-exact: "TOM live test 21:30" vs "…21:38" is a 95% fuzzy match, and an older draft must
+            # never pass for this one — a misread means "don't send", the safe failure
+            for label, value, need in (("recipient", to, 0.85), ("subject", subject[:40], 0.97)):
+                if value and sc.find(value, lines=lines, min_score=need):
+                    seen.append(label)
+                elif value:
+                    missing.append(label)
+            if not missing or time.monotonic() >= deadline:
+                break
         return {"ok": not missing, "seen": seen, "missing": missing,
                 "message": ("I can see the draft in Gmail with the " + " and ".join(seen) + " filled in."
                             if seen else "I couldn't read the draft's fields on screen.")}
