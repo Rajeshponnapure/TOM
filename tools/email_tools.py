@@ -254,7 +254,15 @@ class EmailTools:
     async def connect_email_service(self, provider: str = "gmail") -> Dict[str, Any]:
         try:
             if provider == "gmail" and self.gmail_credentials_file:
-                return await self._connect_gmail_oauth()
+                oauth = await self._connect_gmail_oauth()
+                if oauth.get("status") == "success" or not (self.email_address and self.email_password):
+                    return oauth
+                # An expired/revoked OAuth token ("invalid_grant") used to disable all mail reading even
+                # though the app password in .env works (found 2026-10-27). Fall back to it.
+                fallback = await self._connect_imap_generic(provider)
+                if fallback.get("status") == "success":
+                    fallback["message"] += f" (OAuth unavailable: {oauth.get('message', '')[:120]})"
+                return fallback
             else:
                 return await self._connect_imap_generic(provider)
         except Exception as e:

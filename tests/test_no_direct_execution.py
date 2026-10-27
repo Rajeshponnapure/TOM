@@ -19,6 +19,8 @@ ENTRY_POINTS = [
     ("tools.chat_apps", "ChatApps.send"),
     ("tools.email_tools", "EmailTools.send_email"),
     ("tools.email_tools", "EmailTools.send_email_direct"),
+    ("tools.gmail_web", "GmailWeb.open_compose"),
+    ("tools.gmail_web", "GmailWeb.send_open_draft"),
     ("tools.file_tools", "FileTools.delete_path"),
     ("tools.tool_acquirer", "ToolAcquirer.install_package"),
     ("tools.tool_acquirer", "ToolAcquirer.clone_repo"),

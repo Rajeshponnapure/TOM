@@ -2640,29 +2640,53 @@ class TomAgent:
         # passed straight to SMTP and failed there with an opaque server error.
         match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', command)
         recipient = parsed.get("email_address") or (match.group(1) if match else "")
+        found_note = ""
         if not recipient:
             who = CommandParser._clean_name(parsed.get("recipient_name") or parsed.get("person_name") or "")
-            return {"status": "error",
-                    "message": (f"I need {who}'s email address to send this (e.g. name@example.com)."
-                                if who else "I need the recipient's email address (e.g. name@example.com).")}
+            # "Search for the person": look the name up in the owner's own mail (Sent + Inbox).
+            found = await self._gmail_web().find_contacts(who) if who else None
+            if found and len(found) == 1:
+                recipient = found[0]["address"]
+                found_note = f"Found {who} in your mail: {found[0]['name'] or recipient} <{recipient}>."
+            elif found:
+                options = [f"{c['name'] or c['address']} <{c['address']}>" for c in found]
+                self._pending_choice = {"kind": "email", "options": options,
+                                        "addresses": [c["address"] for c in found],
+                                        "command": command, "parsed": dict(parsed), "at": time.time()}
+                return {"status": "needs_input", "response_type": "email_choose_contact", "options": options,
+                        "message": f"I found {len(found)} people matching '{who}' in your mail. Which one?\n"
+                                   + "\n".join(f"  {i}. {o}" for i, o in enumerate(options, 1))}
+            if not recipient:
+                where = " — I couldn't find them in your mail" if found == [] else ""
+                return {"status": "error",
+                        "message": (f"I need {who}'s email address to send this (e.g. name@example.com){where}."
+                                    if who else "I need the recipient's email address (e.g. name@example.com).")}
 
         # If we don't have a real body, use LLM to write the whole email
         if not parsed_body or len(parsed_body.strip()) < 20:
             memory_context = self._build_memory_context(command)
+            from tom_core.documents.spec import owner_name
+            sender = owner_name()
             draft_prompt = self._safe_prompt([
                 ("system",
-                 "You are TOM, a professional AI assistant. The user wants to send an email. "
-                 "Generate a professional, contextually appropriate email. "
+                 "You are TOM, writing an email on the user's behalf. Work out from the request what the "
+                 "email must say (purpose, any dates, times, places and asks) and write a complete, natural, "
+                 "professional email with a greeting, a clear body and a sign-off. Match the tone to the "
+                 "relationship (warm for friends and family, formal for officials and clients). Never invent "
+                 "facts that are not in the request, and never leave placeholders such as [Your Name] or "
+                 "[Date]. Sign off with the sender's name if it is given, otherwise with just 'Best regards'. "
                  "Respond ONLY with:\nSUBJECT: <subject>\nBODY:\n<body>"),
                 ("user",
                  "Memory:\n{memory}\n\n"
                  "User command: {command}\n"
                  "Recipient: {recipient}\n"
+                 "Sender's name: {sender}\n"
                  "Draft the email now."),
             ])
             resp = await self._invoke_llm(
                 draft_prompt,
-                {"memory": memory_context, "command": command, "recipient": recipient},
+                {"memory": memory_context, "command": command, "recipient": recipient,
+                 "sender": sender or "(not given)"},
                 "email_draft_for_send", self.llm,
             )
             subject, body = self._split_subject_body(resp.content)
@@ -2673,6 +2697,14 @@ class TomAgent:
             body = parsed_body
 
         safe_print(f"\n[EMAIL] To: {recipient} | Subject: {subject}")
+
+        if self._email_via_chrome(command):
+            result = await self._send_email_in_gmail(recipient, subject, body)
+            if result is not None:
+                if found_note:
+                    result["message"] = f"{found_note}\n{result.get('message', '')}"
+                return result
+            # None: the message is too long for a Gmail link — it goes through the mail server below.
 
         # Approval callback for non-blocking send
         # The user must approve the actual message. The earlier gate only saw the
@@ -2687,7 +2719,66 @@ class TomAgent:
             return await asyncio.to_thread(self.approval_manager.request_approval, request)
 
         result = await self.email_tools.send_email(recipient, subject, body, approval_callback=approve_send)
+        if found_note:
+            result["message"] = f"{found_note}\n{result.get('message', '')}"
         return result
+
+    def _gmail_web(self):
+        gw = getattr(self, "_gmail_web_tool", None)
+        if gw is None:
+            from tools.gmail_web import GmailWeb
+            gw = self._gmail_web_tool = GmailWeb(email_tools=getattr(self, "email_tools", None))
+        return gw
+
+    def _email_via_chrome(self, command: str) -> bool:
+        """Emails are sent from Gmail in the owner's Chrome profile (owner request 2026-10-27) unless
+        TOM_EMAIL_VIA=smtp, the request asks for the background/SMTP route, or Chrome isn't installed."""
+        if os.environ.get("TOM_EMAIL_VIA", "chrome").strip().lower() == "smtp":
+            return False
+        if re.search(r"\b(smtp|in the background|without (?:opening|chrome|the browser))\b", command, re.IGNORECASE):
+            return False
+        return self._gmail_web().available()
+
+    async def _send_email_in_gmail(self, recipient: str, subject: str, body: str) -> Optional[Dict[str, Any]]:
+        """Open the drafted email in Gmail (Chrome), ask the owner, send it there, confirm it is in Sent.
+        None = too long for a Gmail link (the caller sends it through the mail server instead)."""
+        gw = self._gmail_web()
+        opened = await gw.open_compose(recipient, subject, body)
+        if opened.get("status") == "too_long":
+            return None
+        if opened.get("status") != "success":
+            return {"status": opened.get("status", "error"), "sent": False, "response_type": "email_send",
+                    "message": f"I couldn't open Gmail in Chrome: {opened.get('message', opened)}"}
+        window = await gw.wait_for_compose(subject, before=opened.get("windows_before"))
+        if window["status"] != "ready":
+            return {"status": "needs_input" if window["status"] == "signin" else "error", "sent": False,
+                    "response_type": "email_send", "message": window["message"]}
+        approved = await asyncio.to_thread(
+            self.approval_manager.request_approval,
+            ApprovalRequest(action="send_email",
+                            summary=(f"Send this email from Gmail? (It's open in Chrome — you can check it there.)\n"
+                                     f"To: {recipient}\nSubject: {subject}\n\n{body[:800]}"),
+                            details={"to": recipient, "subject": subject}, risk_level="high"))
+        if not approved:
+            return {"status": "cancelled", "sent": False, "response_type": "email_send",
+                    "message": "Not sent. The draft is still open in Gmail in Chrome — edit and send it yourself, "
+                               "or close it."}
+        since = time.time()
+        pressed = await gw.send_open_draft(recipient, subject, window["hwnd"])
+        if pressed.get("status") != "pressed":
+            pressed.setdefault("response_type", "email_send")
+            return pressed
+        confirmed = await gw.verify_sent(recipient, subject, since)
+        self.safety.log_action("EMAIL_SENT" if confirmed else "EMAIL_SEND_UNCONFIRMED", target=recipient,
+                               status="SUCCESS" if confirmed else "UNCONFIRMED", message=f"Gmail web: {subject[:80]}")
+        if confirmed:
+            return {"status": "success", "sent": True, "verified": True, "response_type": "email_send",
+                    "message": f"Sent from Gmail to {recipient} — it's in your Sent folder.\nSubject: {subject}"}
+        why = ("I couldn't read your Sent folder to confirm it" if confirmed is None
+               else "it hasn't appeared in your Sent folder yet")
+        return {"status": "unverified", "sent": None, "response_type": "email_send",
+                "message": f"I pressed Send in Gmail for {recipient}, but {why}. Please check Gmail in Chrome — "
+                           "if the draft is still open, click Send there."}
 
     async def execute_email_task(self, command: str) -> Dict[str, Any]:
         """Legacy email drafting."""
@@ -2875,6 +2966,10 @@ class TomAgent:
         index = self._match_choice(command, pending["options"])
         if index is None:
             return None                                   # not an answer: handle as a new request
+        if pending.get("kind") == "email":                # "which Ravi?" → continue that email
+            parsed = dict(pending["parsed"])
+            parsed["email_address"] = pending["addresses"][index]
+            return await self.execute_email_send_flow(pending["command"], parsed)
         chosen, text = pending["options"][index], pending["message"]
         approved = await asyncio.to_thread(
             self.approval_manager.request_approval,
