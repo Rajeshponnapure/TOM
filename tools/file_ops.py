@@ -304,6 +304,11 @@ class FileOps:
         entries.append({"kind": "organize", "folder": os.path.abspath(plan["folder"]),
                         "moves": [[source, dest] for source, dest in completed]})
         self._save_journal(entries)
+        try:                                     # one timeline for "undo your last change" (FR-012)
+            from tom_core import recovery
+            recovery.record("organize", folder=os.path.abspath(plan["folder"]), count=len(completed))
+        except Exception:
+            pass
 
     def plan_undo_last_organization(self, folder: Optional[str] = None) -> Dict[str, Any]:
         """Build a verified reverse-move plan for the latest organization.

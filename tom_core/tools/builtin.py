@@ -184,6 +184,9 @@ def write_text(path: str, content: str, overwrite: bool = False) -> Dict[str, An
         fh.write(content)
     with open(p, encoding="utf-8", newline="") as fh:
         ok = fh.read() == content                 # verified by reading it back, not assumed
+    if ok:
+        from tom_core import recovery
+        recovery.record("write", path=p, backup=backup or None)
     return {"status": "success" if ok else "error", "verified": ok, "path": p, "backup": backup,
             "evidence": f"{p} holds {len(content)} chars" + (f"; previous version saved to {backup}" if backup else ""),
             "message": f"Wrote {p}" if ok else f"Writing {p} could not be verified."}
@@ -191,8 +194,12 @@ def write_text(path: str, content: str, overwrite: bool = False) -> Dict[str, An
 
 def make_dir(path: str) -> Dict[str, Any]:
     p = _abs(path)
+    existed = os.path.isdir(p)
     os.makedirs(p, exist_ok=True)
     ok = os.path.isdir(p)
+    if ok and not existed:
+        from tom_core import recovery
+        recovery.record("mkdir", path=p)
     return {"status": "success" if ok else "error", "verified": ok, "path": p,
             "evidence": f"{p} exists" if ok else "", "message": f"Folder ready: {p}"}
 
@@ -211,6 +218,9 @@ def copy_path(src: str, dst: str) -> Dict[str, Any]:
     os.makedirs(os.path.dirname(d) or ".", exist_ok=True)
     (shutil.copytree if os.path.isdir(s) else shutil.copy2)(s, d)
     ok = os.path.exists(d)
+    if ok:
+        from tom_core import recovery
+        recovery.record("copy", src=s, dst=d)
     return {"status": "success" if ok else "error", "verified": ok, "path": d,
             "evidence": f"{d} exists", "message": f"Copied to {d}"}
 
@@ -224,6 +234,9 @@ def move_path(src: str, dst: str) -> Dict[str, Any]:
     os.makedirs(os.path.dirname(d) or ".", exist_ok=True)
     shutil.move(s, d)
     ok = os.path.exists(d) and not os.path.exists(s)
+    if ok:
+        from tom_core import recovery
+        recovery.record("move", src=s, dst=d)
     return {"status": "success" if ok else "error", "verified": ok, "path": d,
             "evidence": f"{d} exists and {s} is gone" if ok else "", "message": f"Moved to {d}"}
 
@@ -249,10 +262,14 @@ def delete_path(path: str) -> Dict[str, Any]:
     p = _abs(path)
     if not os.path.exists(p):
         return {"status": "error", "error_class": "not_found", "message": f"Nothing at {p}."}
+    from tom_core import recovery
+    kept = recovery.backup(p)                     # FR-012: a copy first, so "undo" can restore it
     if not _recycle(p):
         return {"status": "error", "error_class": "unsupported",
                 "message": "Could not move it to the Recycle Bin, so nothing was deleted."}
     ok = not os.path.exists(p)
+    if ok:
+        recovery.record("delete", path=p, backup=kept or None)
     return {"status": "success" if ok else "error", "verified": ok,
             "evidence": f"{p} is in the Recycle Bin" if ok else "", "message": f"Moved {p} to the Recycle Bin."}
 

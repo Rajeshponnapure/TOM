@@ -117,6 +117,11 @@ async def create(kind: str, request: str, ask: Ask, *, parsed: Optional[Dict[str
         msg += "\nNumbers not taken from your request or a web search are marked as illustrative."
     if issues:
         msg += "\nQuality notes: " + "; ".join(issues[:4])
+    try:
+        from tom_core import recovery
+        recovery.record("create", path=path)          # "undo your last change" removes it (Recycle Bin)
+    except Exception:
+        pass
     return {"status": "success" if check["ok"] else "error", "path": path, "paths": [path],
             "message": msg if check["ok"] else f"The {label} was saved but failed its check: {check['detail']}. {path}",
             "verified": check["ok"], "evidence": check.get("detail", ""), "response_type": f"document_{kind}",

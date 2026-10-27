@@ -670,10 +670,55 @@ class TomAgent:
     _PROJECT_ADD = re.compile(r"^add (?:a )?project\s+[\"']?([\w .-]+?)[\"']?\s+at\s+(.+?)"
                               r"(?:\s+with tests?(?: command)?\s*[:=]?\s*(.+))?$", re.I)
 
+    _UNDO_LAST = re.compile(r"^(?:please\s+)?(?:undo|revert|reverse|roll ?back)\s*(?:(?:that|it|this|what you "
+                            r"(?:just )?did)|(?:your|the|my)?\s*(?:last|latest|previous|most recent)?\s*"
+                            r"(?:change|thing you did|action|step|edit)?)\s*$")
+    _UNDO_ONE = re.compile(r"^(?:please\s+)?undo (?:change|number|#)\s*(\d{1,3})$")
+    _CHANGES = re.compile(r"^(?:show|list|what are)?\s*(?:me\s+)?(?:your|the)?\s*(?:recent|last)?\s*changes"
+                          r"(?: you made)?$|^what (?:did|have) you changed?(?: recently)?$")
+
+    async def _recovery_command(self, low: str) -> Optional[Dict[str, Any]]:
+        """FR-012: "show your recent changes", "undo your last change", "undo change 3" — every file TOM wrote,
+        moved, copied, created, organized or deleted is in one journal (tom_core.recovery)."""
+        low = low.strip().rstrip("?.!")
+        from tom_core import recovery
+        if self._CHANGES.match(low):
+            items = recovery.entries(10)
+            if not items:
+                return {"status": "success", "response_type": "recovery", "message": "I haven't changed any files yet."}
+            lines = [f"  {i}. {e['at']} — {recovery.describe(e)}" for i, e in enumerate(items, 1)]
+            return {"status": "success", "response_type": "recovery",
+                    "message": "My recent changes (newest first):\n" + "\n".join(lines)
+                               + "\n\nSay \"undo your last change\" or \"undo change 2\"."}
+        m = self._UNDO_ONE.match(low)
+        if not (m or self._UNDO_LAST.match(low)):
+            return None
+        items = recovery.entries(50)
+        if not items:
+            return {"status": "error", "response_type": "recovery", "message": "There is no change of mine to undo."}
+        idx = int(m.group(1)) - 1 if m else 0
+        if not 0 <= idx < len(items):
+            return {"status": "error", "response_type": "recovery",
+                    "message": f"I only have {len(items)} recent change(s) — say \"show your recent changes\"."}
+        e = items[idx]
+        warn = " You have edited it since — undoing will replace your edits." if recovery.changed_since(e) else ""
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import aenforce
+        gate = await aenforce("recovery.undo", ActionClass.MATERIAL_CHANGE, payload={"id": e["id"]},
+                              approval_action="undo_change", summary=f"Undo: {recovery.describe(e)}?{warn}")
+        if not gate.allowed:
+            return {**gate.refusal(), "response_type": "recovery"}
+        res = await asyncio.to_thread(recovery.undo, e["id"])
+        res["response_type"] = "recovery"
+        return res
+
     async def _advanced_command(self, text: str) -> Optional[Dict[str, Any]]:
         """R9 + PRD gaps: notifications (C11), reviewed workflows (C12), diagnostics (C09/C04), project
         profiles (FR-016), task report export (FR-019), self-evaluation (C18). Deterministic; None if not one."""
         low = text.lower()
+        undo = await self._recovery_command(low)
+        if undo is not None:
+            return undo
         for rx, tool, args in self._DIAG:
             m = rx.match(text)
             if m:

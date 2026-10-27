@@ -413,6 +413,11 @@ async def build(brief: SiteBrief, ask: Ask, progress: Progress = lambda m: None,
     report = verify(folder, brief)
     with open(os.path.join(folder, "README.md"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write(_readme(brief, report))
+    try:
+        from tom_core import recovery
+        recovery.record("create", path=folder)        # "undo your last change" removes the site folder
+    except Exception:
+        pass
     fallback = content.get("_fallback_sections", [])
     status = "success" if report["ok"] else "unverified"
     lines = [f"{'Built' if report['ok'] else 'Built, but the check found problems in'} the {brief.blueprint.label} "

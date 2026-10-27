@@ -128,6 +128,8 @@ class FileTools:
 
         try:
             import shutil
+            from tom_core import recovery
+            kept = recovery.backup(abs_path)           # FR-012: a copy first, so "undo" can put it back
             trashed = False
             if to_trash:
                 try:
@@ -148,6 +150,7 @@ class FileTools:
                 else:
                     os.remove(abs_path)
             where = "moved to the Recycle Bin" if trashed else "permanently deleted"
+            recovery.record("delete", path=abs_path, backup=kept or None)
             safety.log_action("DELETE_PATH", target=abs_path, status="SUCCESS",
                               message=f"{summary} {where}")
             return {"status": "success",
