@@ -1334,6 +1334,12 @@ class TomAgent:
                 elif handler == "execute_website_creation":
                     result = await self.execute_website_creation(command)
 
+                # An installed game ("play Green Hell") / Windows control ("lock my pc", "brightness 60")
+                elif handler == "execute_game_launch":
+                    result = await self.execute_game_launch(command)
+                elif handler == "execute_system_control":
+                    result = await self.execute_system_control(route.metadata["action"], route.metadata["arg"])
+
                 # Screen read
                 elif handler == "execute_screen_read":
                     result = await self.execute_screen_read(command)
@@ -2312,11 +2318,12 @@ class TomAgent:
                         "message": website.question_text(brief)}
         prompt = ChatPromptTemplate.from_messages([("system", "{system}"), ("user", "{user}")])
         memory = self._build_memory_context(command)
+        llm = self._json_mode(self.llm)
 
         async def ask(system: str, user: str) -> str:
             if memory:
                 user = f"{user}\n\nWhat TOM knows about the user's preferences:\n{memory[:800]}"
-            resp = await self._invoke_llm(prompt, {"system": system, "user": user}, "website", self.llm)
+            resp = await self._invoke_llm(prompt, {"system": system, "user": user}, "website", llm)
             return getattr(resp, "content", "") or ""
 
         safe_print(f"\nTOM WILL BUILD A {brief.blueprint.label.upper()} WEBSITE...\n")
@@ -2332,6 +2339,18 @@ class TomAgent:
             self.file_tools.open_file(result["index"])
             result["message"] += "\nPreview opened in your browser."
         return result
+
+    @staticmethod
+    def _json_mode(llm):
+        """A copy of an Ollama chat model that may only emit valid JSON (Ollama's format="json").
+        Without it llama3.2:3b wrote '}' for ']' in most website sections, so every section fell back
+        to standard text (live check 2026-10-27). Other providers are returned unchanged."""
+        if llm is not None and "format" in getattr(type(llm), "model_fields", {}):
+            try:
+                return llm.model_copy(update={"format": "json"})
+            except Exception:
+                return llm
+        return llm
 
     async def _answer_pending_site(self, command: str) -> Optional[Dict[str, Any]]:
         """The owner's reply to the website questions TOM asked; None when this message is something else."""
@@ -2352,12 +2371,38 @@ class TomAgent:
         command = re.sub(r"^Build a professional website for\s+", "", command)
         prompt = ChatPromptTemplate.from_messages([("system", "{system}"), ("user", "{user}")])
 
+        llm = self._json_mode(self.fast_llm)
+
         async def ask(system: str, user: str) -> str:
-            resp = await self._invoke_llm(prompt, {"system": system, "user": user}, "website_answers", self.fast_llm)
+            resp = await self._invoke_llm(prompt, {"system": system, "user": user}, "website_answers", llm)
             return getattr(resp, "content", "") or ""
 
         brief = await website.extract_answers(pending["brief"], command, ask)
         return await self.execute_website_creation(brief.request, brief=brief)
+
+    # ── GAMES AND WINDOWS CONTROL ───────────────────────────────────────
+
+    async def execute_game_launch(self, command: str) -> Dict[str, Any]:
+        """Start an installed Steam/Epic game by name. TOM starts games; it doesn't play them for the owner."""
+        from tools import game_library
+        game = self.command_router.game_in_request(command.lower())
+        if game is None:
+            return {"status": "error", "response_type": "game_launch",
+                    "message": "I couldn't find that game installed on this PC."}
+        result = await game_library.launch(game)
+        result["response_type"] = "game_launch"
+        if result.get("status") == "success":
+            note = ("" if not re.search(r"\b(?:can you|for me|you play)\b", command, re.IGNORECASE) else
+                    " I can start games and switch to them, but I can't play a real-time game for you — "
+                    "that needs you at the controls.")
+            result["message"] += " It may take a moment to appear." + note
+        return result
+
+    async def execute_system_control(self, action: str, arg: str = "") -> Dict[str, Any]:
+        from tools.system_control import SystemControl
+        tool = getattr(self, "_system_control", None) or SystemControl()
+        self._system_control = tool
+        return await tool.run(action, arg)
 
     # ── DELETE (guarded) ────────────────────────────────────────────────
 
@@ -3598,6 +3643,9 @@ class TomAgent:
         router = self.engine_router
         if mode.key == "skill":
             return await self._run_skill_question(command)
+        if mode.key == "hardware" and self.command_router.route(command).handler in (
+                "execute_system_control", "execute_game_launch"):
+            return None                     # lock/sleep/brightness/switch/close/settings and games: normal routing
         if mode.needs_file in ("any", "data"):
             m = self._FILE_IN_TEXT.search(command)
             if m:

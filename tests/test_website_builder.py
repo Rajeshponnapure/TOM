@@ -241,3 +241,39 @@ def test_website_mode_is_a_quick_action():
     assert skill_modes.BY_LABEL["Website"] == "website"
     assert skill_modes.compose(mode, "a bakery called Sweet Crumbs") == "Build a professional website for a bakery called Sweet Crumbs"
     assert CommandRouter().route(skill_modes.compose(mode, "my dental clinic")).handler == "execute_website_creation"
+
+
+# ── no invented claims (live check 2026-10-27: "Award-Winning Pastries", "serving the community for years") ──
+
+def test_unsupported_claims_and_placeholders_are_removed():
+    from tom_core.website import _scrub
+    b = website.understand("build a website for my bakery called Sweet Crumbs, go ahead")
+    content = {"about": {"paragraphs": [
+        "At [Bakery Name] we bake every morning. We've been serving the community for years. Come and say hello.",
+        "Our award-winning croissants are loved by 5,000 happy customers."],
+        "highlights": [{"title": "Award-Winning Pastries", "text": "Known across the city."},
+                       {"title": "Fresh daily", "text": "Baked before sunrise."}]},
+        "offerings": {"groups": [{"name": "Breads", "items": [{"name": "Sourdough", "description": "Slow fermented.",
+                                                               "price": "Rs 200"}]}]}}
+    removed = _scrub(content, b)
+    paras = content["about"]["paragraphs"]
+    assert paras == ["At Sweet Crumbs we bake every morning. Come and say hello."]
+    assert [h["title"] for h in content["about"]["highlights"]] == ["Fresh daily"]
+    assert content["offerings"]["groups"][0]["items"][0]["price"] == "Rs 200"          # untouched
+    assert removed == 3                     # "for years", the award/customers sentence, the award title
+
+
+def test_a_claim_the_owner_made_is_kept():
+    from tom_core.website import _scrub
+    b = website.understand("build a website for my bakery, award-winning since 1998, go ahead")
+    content = {"about": {"paragraphs": ["Award-winning since 1998, we bake every morning."]}}
+    assert _scrub(content, b) == 0 and content["about"]["paragraphs"] == ["Award-winning since 1998, we bake every morning."]
+
+
+def test_ollama_models_are_asked_for_json_and_others_left_alone():
+    from agent import TomAgent
+    from langchain_ollama import ChatOllama
+    m = ChatOllama(model="llama3.2:3b")
+    assert TomAgent._json_mode(m).format == "json" and m.format != "json"
+    other = object()
+    assert TomAgent._json_mode(other) is other and TomAgent._json_mode(None) is None

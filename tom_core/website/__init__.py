@@ -66,6 +66,56 @@ def _strs(xs: Any, n: int) -> bool:
     return isinstance(xs, list) and len(xs) >= n
 
 
+# Claims a small model adds although told not to ("Award-Winning Pastries", "since 1998", "5,000 happy
+# customers", "rated 4.9 stars"). A sentence with one is removed unless the owner said it.
+_CLAIMS = re.compile(
+    r"\b(?:award[- ]?winning|awards?|since (?:19|20)\d\d|\d+\+?\s*(?:years|yrs)|(?:thousands|hundreds|millions) of|"
+    r"\d[\d,]*\+?\s*(?:happy\s+|satisfied\s+)?(?:customers|clients|patients|students|orders|reviews)|"
+    r"rated|ratings?|\d(?:\.\d)?\s*stars?|#\s?1|number one|best in (?:the )?(?:city|town|region|country|state)|"
+    r"certified|accredited|michelin|famous|renowned|for (?:many )?years|for decades|decades|for generations|"
+    r"generations of|loyal (?:following|customers|clientele)|well[- ]known|trusted by|beloved by|favou?rite of)\b",
+    re.IGNORECASE)
+_BRACKET = re.compile(r"\[[^\]]{2,40}\]")
+_KEEP_KEYS = {"price", "icon", "keywords"}
+
+
+def _scrub(content: Dict[str, Any], brief: SiteBrief) -> int:
+    """Remove unsupported claims and [placeholders] from model text in place; returns how many went."""
+    owner = f"{brief.request} {brief.extra} {brief.offerings}".lower()
+    removed = 0
+
+    def text(value: str) -> str:
+        nonlocal removed
+        if brief.name:
+            value = re.sub(r"\[(?:your |the )?(?:business|bakery|shop|company|store|brand|restaurant|clinic)?\s*name\]",
+                           brief.name, value, flags=re.IGNORECASE)
+        parts = re.split(r"(?<=[.!?])\s+", value)
+        keep = [p for p in parts if not _BRACKET.search(p)
+                and all(m.group(0).lower() in owner for m in _CLAIMS.finditer(p))]
+        removed += len(parts) - len(keep)
+        return " ".join(keep).strip()
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            out = {}
+            for k, v in node.items():
+                out[k] = v if k in _KEEP_KEYS or k.startswith("_") else walk(v)
+            return out
+        if isinstance(node, list):
+            items = [walk(x) for x in node]
+            # a card whose title or text was removed is dropped whole, as is an emptied paragraph
+            return [x for x in items if x and not (isinstance(x, dict) and any(
+                k in x and not x[k] for k in ("title", "text", "q", "a", "name", "caption")))]
+        if isinstance(node, str):
+            return text(node)
+        return node
+
+    for key in list(content):
+        if not key.startswith("_"):
+            content[key] = walk(content[key])
+    return removed
+
+
 # ── fallback content (used per section when the model is unavailable or fails twice) ─────────────
 
 def _fallback(brief: SiteBrief) -> Dict[str, Any]:
@@ -196,6 +246,12 @@ async def write_content(brief: SiteBrief, ask: Ask, progress: Progress = lambda 
             for it in g.get("items", []) if isinstance(g, dict) else []:
                 if isinstance(it, dict):
                     it["price"] = ""
+    content["_removed_claims"] = _scrub(content, brief)
+    for key, fallback in _fallback(brief).items():          # a section emptied by the scrub gets standard text
+        if key in content and isinstance(fallback, dict) and isinstance(content[key], dict):
+            for field, value in fallback.items():
+                if not content[key].get(field):
+                    content[key][field] = value
     content["_fallback_sections"] = used_fallback
     return content
 
@@ -374,6 +430,9 @@ async def build(brief: SiteBrief, ask: Ask, progress: Progress = lambda m: None,
                      f"{brief.blueprint.label} — edit them to match what you really sell.")
     if fallback:
         lines.append("The model could not write: " + ", ".join(fallback) + " — standard text was used there.")
+    if content.get("_removed_claims"):
+        lines.append(f"Removed {content['_removed_claims']} unsupported claim(s) the model added (awards, years, "
+                     "ratings, customer counts or placeholders) — tell me any that are true and I'll add them.")
     return {"status": status, "response_type": "website", "path": folder,
             "index": os.path.join(folder, "index.html"), "verification": report,
             "message": "\n".join(lines)}

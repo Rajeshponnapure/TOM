@@ -37,6 +37,22 @@ class CommandRouter:
         r"\b(?:word|docx?|pdf|power ?point|pptx?|slides?|presentation|excel|spreadsheet|report|essay|"
         r"screenshot|safe|safety|secure|scan|phishing)\b")
 
+    _GAME_VERB = re.compile(
+        r"^(?:please\s+|can you\s+|could you\s+|let'?s\s+|i want to\s+)?(?:play|start|launch|run|open|load)\s+"
+        r"(?:the\s+|a\s+)?(?:game\s+)?(.+?)(?:\s+game)?(?:\s+(?:for me|on steam|on epic|now|please))*\s*[?.!]*$")
+
+    @classmethod
+    def game_in_request(cls, lower: str):
+        """The installed game a "play/start/launch <name>" request names, else None (cheap: cached index)."""
+        m = cls._GAME_VERB.match(lower.strip())
+        if not m:
+            return None
+        try:
+            from tools.game_library import find_game
+            return find_game(m.group(1))
+        except Exception:
+            return None
+
     @classmethod
     def is_website_build_request(cls, lower: str) -> bool:
         """"build a website for my bakery", "create a landing page for our app" — not "open website X",
@@ -96,6 +112,17 @@ class CommandRouter:
                 )
             if any(act in lower for act in ("open", "launch", "start")):
                 return RouteDecision("communication", "open_whatsapp", "execute_open_whatsapp", confidence=0.93)
+
+        # Games installed on this PC ("play Green Hell") and everyday Windows control ("lock my pc")
+        game = self.game_in_request(lower)
+        if game is not None:
+            return RouteDecision("system", "launch_game", "execute_game_launch", confidence=0.93,
+                                 metadata={"game": game.name})
+        from tools import system_control
+        control = system_control.parse(lower)
+        if control is not None:
+            return RouteDecision("system", "system_control", "execute_system_control", confidence=0.92,
+                                 metadata={"action": control[0], "arg": control[1]})
 
         # Content creation
         if self.is_website_build_request(lower):

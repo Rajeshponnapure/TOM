@@ -21,6 +21,8 @@ ENTRY_POINTS = [
     ("tools.email_tools", "EmailTools.send_email_direct"),
     ("tools.gmail_web", "GmailWeb.open_compose"),
     ("tools.gmail_web", "GmailWeb.send_open_draft"),
+    ("tools.system_control", "SystemControl.run"),
+    ("tools.game_library", "launch"),
     ("tools.file_tools", "FileTools.delete_path"),
     ("tools.tool_acquirer", "ToolAcquirer.install_package"),
     ("tools.tool_acquirer", "ToolAcquirer.clone_repo"),

@@ -96,8 +96,9 @@ MODES: Dict[str, SkillMode] = {m.key: m for m in (
               ("create a folder of 3 short poems as text files on my desktop",
                "find the 5 largest files in my Downloads and list them"),
               engine="autonomous", template="Execute autonomous task: {}", fallback="engine"),
-    SkillMode("hardware", "Hardware", "Say what to do with the mouse, keyboard, volume or screen.",
-              ("set the volume to 30", "take a screenshot", "show system info"),
+    SkillMode("hardware", "Hardware", "Control this PC: volume, brightness, lock/sleep/restart, switch or close apps, "
+              "Settings pages, start an installed game, mouse and keyboard.",
+              ("set the volume to 30", "set brightness to 60", "lock my pc", "switch to chrome", "play Green Hell"),
               engine="hardware", fallback="engine"),
     SkillMode("skill", "Skill", "Ask which skills TOM has, or ask a question in any skill area.",
               ("what skills are loaded?", "explain REST vs GraphQL using your backend skill")),

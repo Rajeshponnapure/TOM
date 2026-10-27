@@ -90,3 +90,21 @@ left out, with the reason.
 ## Acceptance tests
 
 All PRD acceptance tests AT-001 … AT-015 pass — see `status.md`.
+
+## Owner capability pass (2026-10-27)
+
+Owner request: every option should do professional-grade work — e.g. a bakery website built after
+asking what it needs, email sent from Gmail in the owner's Chrome profile after asking, control of the
+PC, starting games.
+
+| Area | Before | Now | Evidence |
+|---|---|---|---|
+| Website (C13) | only the literal words "create website" routed; one model call returned the whole site as JSON (broke on bad JSON, generic page, invented details) | `tom_core/website`: 16 business blueprints, one round of questions for owner-only facts (never invented), section-by-section writing with retry + fallback, multi-file site (SEO, schema.org, map, tel/WhatsApp, form, mobile nav, a11y), verification before success; Website quick action | `test_website_builder.py` (33); live: llama3.2:3b bakery site in 17 s warm, all checks pass, 0 JS errors, no overflow at 390 px |
+| Email (C05/C13) | SMTP only; a bare name failed ("I need Ravi's address") | `tools/gmail_web.py`: name looked up in the owner's mail; draft opened pre-filled in Gmail in Chrome's last-used profile; approval shows the exact message; focus check; Ctrl+Enter; **sent only when found in Sent** | `test_gmail_web.py` (26). Live: Chrome + profile found, IMAP + Sent folder read. **Not live-tested: an actual send** (needs the owner's go-ahead) |
+| Mail reading | revoked OAuth token (`invalid_grant`) disabled all IMAP reads | falls back to the app password | live: IMAP connects |
+| Computer control (C01) | mouse/keyboard/volume/screenshot only | `tools/system_control.py`: lock, sleep*, restart*/shut down* (60 s, cancellable), brightness (read back), show desktop, switch to / close* an app (checked), Settings pages. *needs approval | `test_games_and_system_control.py`; live: brightness read via WMI |
+| Games | "play Green Hell" fell through to chat | `tools/game_library.py`: Steam (all libraries) + Epic games; "play/start/launch <game>" starts it; TOM says plainly it can't play real-time games for the owner | live index: Spider-Man 2, Green Hell, over the hill |
+
+Known limits: Gmail's Ctrl+Enter send is not documented by Google for accounts with keyboard shortcuts
+off — the Sent-folder check is what decides success. Sleep via `SetSuspendState` may be refused on
+Modern Standby laptops (reported as such). TOM cannot play real-time games.
