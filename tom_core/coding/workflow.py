@@ -82,6 +82,41 @@ def _git_diff(repo: str) -> str:
         return ""
 
 
+def _blank_run(lines: List[str]) -> int:
+    n = 0
+    for line in lines:
+        if line.strip():
+            break
+        n += 1
+    return n
+
+
+def keep_formatting(original: str, proposed: str) -> str:
+    """The model's fix, applied as a minimal change to the original: only lines that really changed come
+    from the model; blank lines it dropped, the final newline and the line endings stay as they were.
+    Live check 2026-10-27: a one-character fix (a - b → a + b) also deleted the blank lines between
+    functions and the file's last newline. Indentation changes are kept — in Python they can be the fix."""
+    import difflib
+    o, p = original.splitlines(), proposed.splitlines()
+    sm = difflib.SequenceMatcher(None, [x.rstrip() for x in o], [x.rstrip() for x in p], autojunk=False)
+    out: List[str] = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            out += o[i1:i2]
+        elif tag == "delete":
+            if all(not x.strip() for x in o[i1:i2]):
+                out += o[i1:i2]                       # keep blank lines the model dropped
+        elif tag == "insert":
+            if any(x.strip() for x in p[j1:j2]):
+                out += p[j1:j2]                       # new code yes, stray blank lines no
+        else:                                         # replaced: the model's lines, original blank margins
+            seg_o, seg_p = o[i1:i2], p[j1:j2]
+            out += [""] * max(0, _blank_run(seg_o) - _blank_run(seg_p)) + seg_p \
+                + [""] * max(0, _blank_run(seg_o[::-1]) - _blank_run(seg_p[::-1]))
+    nl = "\r\n" if "\r\n" in original else "\n"
+    return nl.join(out) + (nl if original.endswith(("\n", "\r")) else "")
+
+
 async def fix_failing_tests(repo: str, ask: Ask, *, test_cmd: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     repo = os.path.abspath(repo)
     cmd = list(test_cmd or [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"])
@@ -121,7 +156,9 @@ async def fix_failing_tests(repo: str, ask: Ask, *, test_cmd: Optional[Sequence[
                           approval_action="write_outside_workspace", summary=f"Apply TOM's fix to {target}")
     if not gate.allowed:
         return {"status": "blocked", "message": gate.reason, "tests_before": before}
-    original = open(target, encoding="utf-8").read()
+    with open(target, encoding="utf-8", newline="") as fh:
+        original = fh.read()
+    content = keep_formatting(original, content)
     with open(target, "w", encoding="utf-8", newline="") as fh:
         fh.write(content)
     diff = _git_diff(repo)

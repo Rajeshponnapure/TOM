@@ -105,6 +105,34 @@ PC, starting games.
 | Computer control (C01) | mouse/keyboard/volume/screenshot only | `tools/system_control.py`: lock, sleep*, restart*/shut down* (60 s, cancellable), brightness (read back), show desktop, switch to / close* an app (checked), Settings pages. *needs approval | `test_games_and_system_control.py`; live: brightness read via WMI |
 | Games | "play Green Hell" fell through to chat | `tools/game_library.py`: Steam (all libraries) + Epic games; "play/start/launch <game>" starts it; TOM says plainly it can't play real-time games for the owner | live index: Spider-Man 2, Green Hell, over the hill |
 
+### Live feature audit (2026-10-27, second pass)
+
+Every quick action and the main chat features were run through the real `TomAgent` with the local model
+(llama3.2:3b) and isolated state; every approval refused unless named, so nothing was sent. Outputs were
+opened and read, not just their status. Defects found and fixed:
+
+| Feature | Found | Fixed |
+|---|---|---|
+| Blender 3D | "low-poly house with lights" answered with Pygame code: the owner's `blender_mcp` add-on crashed Blender at exit, the failure was hidden behind a skill answer, and "light" picked a lighting demo on a cube | `--factory-startup`; a saved scene counts; subject beats modifier; real house (gable roof, door, windows, chimney, path, trees), lights, camera framing; failures reported |
+| Multi-Agent | invented product specs | research pieces search the web first and cite; no figures without results |
+| Analyze | two generic sentences | structured analysis (summary, factors, pros/cons or comparison table, risks, recommendation), web-grounded when facts matter |
+| News | stale SEO pages, feed URL as every link, duplicates | Google News briefings: last 2 days, real links, de-duplicated |
+| Diagnostics | "why is my RAM high?" → "I don't have that information" | measured report, per-app process totals, GPU holders, loaded models, tips; closes nothing |
+| Env Setup | "Has conflicts: yes" + "No conflicts detected" | verdict from `pip check` exit code |
+| Auto-Update | "Count: 0" | behind/ahead of upstream, incoming commits, local changes |
+| ML | ignored "predict for 5" | predictions + fitted line |
+| Website safety | example.com "no https" (scored the typed text) | one verified HTTPS request; certificate errors flagged |
+| PowerPoint | "5 slides" → 9 | the number is the deck length |
+| Word | "one-page proposal" → cover + contents + 1,749 words | compact layout, 3 sections, word budget (361 words live) |
+| Excel | budget with no formulas, "$" for rupees | numeric columns inferred from values; currency from the data |
+| Autonomous | poems saved with literal `\n` | double-escaped text unescaped |
+| Fix failing tests | worked, but rewrote the file's blank lines | minimal change merged onto the original |
+| Website (agent) | every section fell back to standard text | Ollama JSON mode for website writing |
+
+Verified working as-is: documents/letters, email draft, web search, website, Web Auto, file and data
+analysis, system info/brightness, skills, IoT/VLSI code, game scaffold, media resize, scaler, status,
+task report, self-evaluation. Full suite after the fixes: 923 passed, 15 skipped.
+
 Known limits: Gmail's Ctrl+Enter send is not documented by Google for accounts with keyboard shortcuts
 off — the Sent-folder check is what decides success. Sleep via `SetSuspendState` may be refused on
 Modern Standby laptops (reported as such). TOM cannot play real-time games.

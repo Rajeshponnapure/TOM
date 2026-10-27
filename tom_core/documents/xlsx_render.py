@@ -19,11 +19,62 @@ FORMATS = {"number": "#,##0.##", "currency": "$#,##0.00", "percent": "0.0%", "da
 _THIN = Side(style="thin", color="D1D5DB")
 
 
+_MONEY_SIGNS = re.compile(r"₹|rs\.?|inr|\$|usd|€|eur|£|gbp", re.IGNORECASE)
+_MONEY_NAMES = re.compile(r"amount|price|cost|revenue|sales|salary|income|expense|budget|spend|saving|profit|fee|"
+                          r"rent|bill|total|balance|payment|value", re.IGNORECASE)
+
+
+def _number(value: Any):
+    """A number from 1200, "1,200", "₹1,200", "Rs. 1200", "$1.2", "12%"; None otherwise."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    s = _MONEY_SIGNS.sub("", str(value)).replace(",", "").strip().rstrip("%").strip()
+    try:
+        return float(s) if s else None
+    except ValueError:
+        return None
+
+
+def currency_format(rows: List[list]) -> str:
+    """The currency the figures are written in (₹ for rupees, …); plain 2-decimal numbers when none is shown.
+    Was always "$", so an Indian household budget came out in dollars."""
+    text = " ".join(str(v) for r in rows for v in r)
+    for rx, fmt in ((r"₹|\brs\.?|\binr\b", '"₹"#,##0.00'), (r"€|\beur\b", '"€"#,##0.00'),
+                    (r"£|\bgbp\b", '"£"#,##0.00'), (r"\$|\busd\b", "$#,##0.00")):
+        if re.search(rx, text, re.IGNORECASE):
+            return fmt
+    return "#,##0.00"
+
+
+def infer_kinds(cols: List[Dict[str, Any]], rows: List[list]) -> List[str]:
+    """Column kinds from the values themselves, not only the model's label: a column the model called
+    "text" but that holds amounts ("₹12,000") is numeric, so it gets totals, a chart and a summary
+    (live check 2026-10-27: a budget came out with no formulas at all)."""
+    kinds = []
+    for i, col in enumerate(cols):
+        declared = col.get("type", "text") if col.get("type") in FORMATS else "text"
+        values = [r[i] for r in rows if i < len(r) and str(r[i]).strip() not in ("", "None")]
+        nums = [v for v in values if _number(v) is not None]
+        if declared in ("number", "currency", "percent", "date") or len(nums) < 2 or len(nums) < 0.7 * len(values):
+            kinds.append(declared)
+            continue
+        joined = " ".join(str(v) for v in values)
+        if "%" in joined:
+            kinds.append("percent")
+        elif _MONEY_SIGNS.search(joined) or _MONEY_NAMES.search(str(col.get("name", ""))):
+            kinds.append("currency")
+        else:
+            kinds.append("number")
+    return kinds
+
+
 def _coerce(value: Any, kind: str) -> Any:
     if kind in ("number", "currency", "percent"):
         if isinstance(value, (int, float)):
             return value
-        s = str(value).replace(",", "").replace("$", "").strip()
+        s = _MONEY_SIGNS.sub("", str(value)).replace(",", "").strip()
         pct = s.endswith("%")
         try:
             v = float(s.rstrip("%"))
@@ -62,12 +113,14 @@ def render_workbook(content: Dict[str, Any], spec: DocSpec, pal: Palette, path: 
     used: set = set()
     head_fill = PatternFill("solid", fgColor=pal.primary)
     summary_rows: List[tuple] = []
+    all_rows = [r for s in content["sheets"][:5] for r in s.get("rows", []) if isinstance(r, list)]
+    FORMATS = {**globals()["FORMATS"], "currency": currency_format(all_rows)}     # noqa: N806 (per workbook)
     for idx, sheet in enumerate(content["sheets"][:5]):
         cols = [c if isinstance(c, dict) else {"name": str(c), "type": "text"} for c in sheet["columns"]]
-        kinds = [c.get("type", "text") if c.get("type") in FORMATS else "text" for c in cols]
         rows = [list(r)[:len(cols)] + [""] * (len(cols) - len(r)) for r in sheet["rows"] if isinstance(r, list)][:500]
         # totals are added as live formulas below — drop any the model wrote itself
         rows = [r for r in rows if not re.match(r"^\s*(grand\s+)?(total|sum|average|avg)\b", str(r[0]), re.I)]
+        kinds = infer_kinds(cols, rows)
         ws = wb.create_sheet(_safe_name(sheet.get("name") or f"Sheet {idx + 1}", used))
         ws.sheet_view.showGridLines = False
         last_col = get_column_letter(len(cols))

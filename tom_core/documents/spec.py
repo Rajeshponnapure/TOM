@@ -59,7 +59,7 @@ class DocSpec:
         if self.genre == "letter":
             return 1
         if self.pages:
-            return max(4, min(14, self.pages * 2))
+            return 3 if self.pages == 1 else max(4, min(14, self.pages * 2))
         return {"resume": 6, "minutes": 5, "notes": 6, "essay": 6, "guide": 7, "proposal": 8}.get(self.genre, 7)
 
     @property
@@ -145,7 +145,21 @@ def understand(kind: str, request: str, parsed: Optional[Dict[str, Any]] = None)
     )
     if re.search(r"\b(no|without)\s+animations?\b|\bstatic\b", low):
         spec.animated = False
+    if kind == "pptx" and slides:
+        # "5 slides" means a 5-slide deck, not 5 content slides plus title, agenda, sources and closing
+        # (live check 2026-10-27 gave 9). Agenda only from 8 slides, a sources slide only from 10.
+        total = spec.slides
+        spec.extras["slides_total"] = total
+        spec.slides = max(1, total - 2 - (total >= 8) - (spec.research and total >= 10))
+    if not pages:
+        m = re.search(rf"\b({'|'.join(_WORD_NUMBERS)})[- ]pages?\b", low)
+        if m:                                                          # "a one-page proposal", "two page summary"
+            spec.pages = _WORD_NUMBERS[m.group(1)]
     return spec
+
+
+_WORD_NUMBERS = {"one": 1, "single": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+                 "eight": 8, "nine": 9, "ten": 10}
 
 
 def file_name_for(spec: DocSpec, title: str = "") -> str:

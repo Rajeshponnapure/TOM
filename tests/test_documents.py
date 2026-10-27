@@ -88,7 +88,10 @@ def run(coro):
 # ── understanding ───────────────────────────────────────────────────────────
 def test_understanding_reads_genre_audience_counts_and_recipient():
     d = S.understand("pptx", "Create a professional animated 12 slide presentation on EV batteries for investors in a dark theme")
-    assert (d.genre, d.audience, d.slides, d.theme, d.animated) == ("presentation", "investors", 12, "dark", True)
+    # "12 slide" = a 12-slide deck: title, agenda, sources, closing + 8 content slides (2026-10-27)
+    assert (d.genre, d.audience, d.extras["slides_total"], d.theme, d.animated) == \
+        ("presentation", "investors", 12, "dark", True)
+    assert d.slides == 8
     assert "ev batteries" in d.topic.lower()
     letter = S.understand("docx", "write a sick leave letter to my manager for tomorrow")
     assert letter.genre == "letter" and letter.recipient == "manager"
@@ -134,17 +137,17 @@ def test_letter_has_business_layout_and_no_duplicate_date_or_signoff():
 
 def test_deck_is_animated_with_designed_layouts_notes_and_honest_numbers():
     from pptx import Presentation
-    res = run(documents.create("pptx", "Make a professional 4 slide presentation on EV batteries for investors", fake_model()))
+    res = run(documents.create("pptx", "Make a professional 6 slide presentation on EV batteries for investors", fake_model()))
     assert res["status"] == "success"
     prs = Presentation(res["path"])
-    assert len(prs.slides) == 4 + 3                                              # title, agenda, closing
+    assert len(prs.slides) == 6                      # exactly as asked: title, 4 content, closing (no agenda < 8)
     ns = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
     assert all(s._element.find(f"{ns}transition") is not None for s in prs.slides)
     assert all(s._element.find(f"{ns}timing") is not None for s in prs.slides)
     texts = [" ".join(sh.text_frame.text for sh in s.shapes if sh.has_text_frame) for s in prs.slides]
-    assert "Illustrative figures" in texts[2] and "750 GWh" in texts[2]          # stats slide
-    assert "2026" in texts[4] and "Sodium-ion" in texts[4]                       # timeline slide
-    assert prs.slides[3].notes_slide.notes_text_frame.text                       # speaker notes
+    assert "Illustrative figures" in texts[1] and "750 GWh" in texts[1]          # stats slide
+    assert "2026" in texts[3] and "Sodium-ion" in texts[3]                       # timeline slide
+    assert prs.slides[2].notes_slide.notes_text_frame.text                       # speaker notes
 
 
 def test_workbook_has_formulas_formats_chart_and_no_model_total_row():
@@ -157,7 +160,8 @@ def test_workbook_has_formulas_formats_chart_and_no_model_total_row():
     assert col_a.count("Total") == 1                                             # model's own total row dropped
     formulas = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, str) and c.value.startswith("=")]
     assert "=SUM(B5:B7)" in formulas and ws["B6"].value == 420.5 and ws["B7"].value == 180
-    assert ws["B5"].number_format.startswith("$") and ws._charts and ws.freeze_panes == "A5"
+    # no currency symbol in the figures → no invented "$" (₹/€/£/$ are used when the data shows them)
+    assert ws["B5"].number_format == "#,##0.00" and ws._charts and ws.freeze_panes == "A5"
     assert "illustration" in " ".join(str(c.value) for c in ws["A"] if c.value)
 
 

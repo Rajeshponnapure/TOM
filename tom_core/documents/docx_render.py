@@ -189,6 +189,8 @@ def render_document(content: Dict[str, Any], spec: DocSpec, pal: Palette, path: 
     sec.top_margin = sec.bottom_margin = Cm(2.2)
     if content.get("letter"):
         return _letter(doc, content, spec, pal, path)
+    if 0 < spec.pages <= 2:
+        return _compact(doc, content, spec, pal, path)
 
     # Cover page
     for _ in range(6):
@@ -222,6 +224,29 @@ def render_document(content: Dict[str, Any], spec: DocSpec, pal: Palette, path: 
     doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
     for i, s in enumerate(content["sections"], 1):
         doc.add_heading(f"{i}. {s['heading']}", level=1)
+        _blocks(doc, s["blocks"], pal)
+    doc.core_properties.title = content["title"]
+    doc.core_properties.author = spec.sender or "TOM"
+    doc.core_properties.subject = spec.topic
+    doc.save(path)
+    return {"path": path, "sections": len(content["sections"])}
+
+
+def _compact(doc, content, spec: DocSpec, pal: Palette, path: str) -> Dict[str, Any]:
+    """One- or two-page documents: a title block instead of a cover page and contents page ("a one-page
+    proposal" came out as cover + contents + 1,749 words in a live check, 2026-10-27)."""
+    _header_footer(doc.sections[0], content["title"], pal)
+    p = doc.add_paragraph()
+    _runs(p, spec.genre.upper(), size=10, color=pal.accent, bold=True)
+    title = doc.add_paragraph(style="Title")
+    title.add_run(content["title"])
+    _bottom_border(title, pal.accent, 12)
+    meta = " · ".join(m for m in (content.get("subtitle") or "", f"Prepared by {spec.sender}" if spec.sender else "",
+                                  f"{date.today():%B %d, %Y}") if m)
+    p = doc.add_paragraph()
+    _runs(p, meta, size=10, color=pal.muted)
+    for s in content["sections"]:
+        doc.add_heading(s["heading"], level=2)
         _blocks(doc, s["blocks"], pal)
     doc.core_properties.title = content["title"]
     doc.core_properties.author = spec.sender or "TOM"

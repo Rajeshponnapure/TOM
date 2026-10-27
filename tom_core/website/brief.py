@@ -9,7 +9,7 @@ never invented — and anything still missing at build time becomes a clearly ma
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 

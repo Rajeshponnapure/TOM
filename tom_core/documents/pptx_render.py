@@ -382,7 +382,21 @@ def render_deck(content: Dict[str, Any], spec: DocSpec, pal: Palette, path: str)
     m = _text(sl, Inches(1.15), Inches(6.35), Inches(11), Inches(0.6), meta, 14, "FFFFFF")
     d.anim(sl, [t, sub, m])
 
-    # Agenda
+    total = spec.extras.get("slides_total") or 0          # the owner asked for an exact deck length
+    if not total or total >= 8:
+        _agenda(d, content, pal)
+    _render_body(d, content, illustrative)
+    if content.get("sources") and (not total or total >= 10):
+        sl = d.new()
+        d.frame(sl, "Sources")
+        lines = [ln.strip() for ln in content["sources"].split("\n") if ln.strip()][:16]
+        box = _text(sl, Inches(0.65), Inches(1.65), Inches(12), Inches(5.1), lines, 11, pal.muted)
+        d.anim(sl, [box])
+    _closing(d, content, spec, pal, sources_in_notes=bool(content.get("sources")) and bool(total) and total < 10)
+    return _finish(d, path)
+
+
+def _agenda(d, content: Dict[str, Any], pal: Palette) -> None:
     sl = d.new()
     d.frame(sl, "Agenda")
     titles = [s["title"] for s in content["slides"]]
@@ -397,6 +411,8 @@ def render_deck(content: Dict[str, Any], spec: DocSpec, pal: Palette, path: str)
         shapes += [num, lab]
     d.anim(sl, shapes)
 
+
+def _render_body(d, content: Dict[str, Any], illustrative: bool) -> None:
     layouts = {"bullets": _bullets, "cards": _cards, "timeline": _timeline, "table": _table, "statement": _statement,
                "quote": _statement, "two_column": _two_column}
     for s in content["slides"]:
@@ -421,14 +437,8 @@ def render_deck(content: Dict[str, Any], spec: DocSpec, pal: Palette, path: str)
         d.notes(sl, s.get("notes", ""))
         d.anim(sl, shapes)
 
-    if content.get("sources"):
-        sl = d.new()
-        d.frame(sl, "Sources")
-        lines = [ln.strip() for ln in content["sources"].split("\n") if ln.strip()][:16]
-        box = _text(sl, Inches(0.65), Inches(1.65), Inches(12), Inches(5.1), lines, 11, pal.muted)
-        d.anim(sl, [box])
 
-    # Closing
+def _closing(d, content: Dict[str, Any], spec: DocSpec, pal: Palette, sources_in_notes: bool = False) -> None:
     sl = d.new(dark=True)
     t = _text(sl, Inches(0.9), Inches(2.3), Inches(11.5), Inches(1.3), "Thank You", 54, "FFFFFF", bold=True,
               font=pal.heading_font, align=PP_ALIGN.CENTER)
@@ -437,8 +447,12 @@ def render_deck(content: Dict[str, Any], spec: DocSpec, pal: Palette, path: str)
     who = _text(sl, Inches(0.9), Inches(5.0), Inches(11.5), Inches(0.6), spec.sender or content["title"], 16, pal.light,
                 align=PP_ALIGN.CENTER)
     d.anim(sl, [t, q, who])
+    if sources_in_notes:                                   # short decks keep their sources in the speaker notes
+        d.notes(sl, "Sources:\n" + content["sources"])
 
-    d.prs.core_properties.title = content["title"]
-    d.prs.core_properties.author = spec.sender or "TOM"
+
+def _finish(d, path: str) -> Dict[str, Any]:
+    d.prs.core_properties.title = d.title
+    d.prs.core_properties.author = d.spec.sender or "TOM"
     d.prs.save(path)
     return {"path": path, "slides": d.count}

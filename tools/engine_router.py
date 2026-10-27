@@ -44,6 +44,60 @@ def _extract_kv_list(command: str, key: str) -> Optional[Any]:
     return None
 
 
+def _probe_https(domain: str, timeout: float = 6.0) -> str:
+    """One HTTPS request with certificate verification: a short description of what happened, "" if no domain."""
+    if not domain or not re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", domain.lower()):
+        return ""
+    try:
+        import requests
+        r = requests.get(f"https://{domain}", timeout=timeout, allow_redirects=True, stream=True,
+                         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        final = r.url
+        r.close()
+        return f"valid HTTPS certificate; responded HTTP {r.status_code}" + (
+            f" (redirects to {final})" if final.rstrip("/") != f"https://{domain}" else "")
+    except Exception as exc:
+        name = type(exc).__name__
+        if "SSL" in name or "SSL" in str(exc)[:200]:
+            return f"certificate problem — the HTTPS certificate could not be verified ({name})"
+        return f"site did not answer over HTTPS ({name})"
+
+
+def _ml_predictions(command: str, res: Any, X: Optional[Any]) -> str:
+    """"... and predict for 5" — use the model that was just trained (live check 2026-10-27: the request
+    was ignored). Also states the fitted equation for a one-feature linear model."""
+    model = res.get("result") if isinstance(res, dict) else None
+    if model is None or not hasattr(model, "predict"):
+        return ""
+    out = ""
+    coef, icpt = getattr(model, "coef_", None), getattr(model, "intercept_", None)
+    try:
+        import numpy as np
+        if coef is not None and icpt is not None and np.ndim(coef) == 1 and len(coef) == 1 \
+                and not hasattr(model, "poly_features_"):
+            out += f"\nFitted line: y = {float(coef[0]):.4g}·x + {float(icpt):.4g}"
+    except Exception:
+        pass
+    m = re.search(r"\bpredict(?:ion)?s?\b(?:\s+(?:the\s+)?(?:value\s+)?(?:for|at|of|when\s+x\s*(?:is|=)|x\s*=))?\s*"
+                  r"(\[\[.*?\]\]|\[[^\]]*\]|-?\d+(?:\.\d+)?(?:\s*(?:,|and)\s*-?\d+(?:\.\d+)?)*)", command, re.I)
+    if not m:
+        return out
+    raw = m.group(1)
+    n_features = len(X[0]) if X and isinstance(X[0], (list, tuple)) else 1
+    if raw.startswith("[["):
+        rows = _safe_literal(raw)
+    else:
+        nums = [float(v) for v in re.findall(r"-?\d+(?:\.\d+)?", raw)]
+        rows = [[v] for v in nums] if n_features == 1 else [nums[:n_features]]
+    try:
+        feats = getattr(model, "poly_features_", None)
+        preds = model.predict(feats.transform(rows) if feats is not None else rows)
+        lines = [f"  x = {r[0] if len(r) == 1 else r} → {float(p):.4g}" for r, p in zip(rows, preds)]
+        return out + "\nPredictions:\n" + "\n".join(lines)
+    except Exception as exc:
+        return out + f"\n(Could not predict for {raw}: {exc})"
+
+
 def _extract_kv_num(command: str, key: str, default: int) -> int:
     m = re.search(rf"\b{key}\s*=\s*(\d+)", command)
     if m:
@@ -535,7 +589,8 @@ class EngineRouter:
         if isinstance(res, dict) and str(res.get("status", "")).lower() == "error":
             return {"status": "error", "response_type": "engine_ml", "raw": res,
                     "message": f"The ML engine could not run this: {res.get('message', res)}"}
-        return self._ok("engine_ml", f"ML result:\n{humanize(res)}{note}", raw=res)
+        extra = _ml_predictions(command, res, X)
+        return self._ok("engine_ml", f"ML result:\n{humanize(res)}{extra}{note}", raw=res)
 
     # ── IoT ──────────────────────────────────────────────────────────────
     def _run_iot(self, command: str) -> Dict[str, Any]:
@@ -851,10 +906,21 @@ class EngineRouter:
 
     # ── News ─────────────────────────────────────────────────────────────
     def _run_news(self, command: str) -> Dict[str, Any]:
+        # Current, dated articles with their own links (tools.news_briefing); the older feed engine is only a
+        # fallback — its feeds returned stale SEO pages with the feed URL as every link (live check 2026-10-27).
+        from tools import news_briefing
+        c = command.lower()
+        topic = ""
+        m = re.search(r"(?:news|headlines|updates)\s+(?:on|about|for|regarding)\s+(.+)|search(?: news)?(?: for)?\s+(.+)", c)
+        if m:
+            topic = (m.group(1) or m.group(2) or "").strip(" ?.!")
+        kind = "tech" if re.search(r"\btech", c) else "world" if "world" in c else "daily"
+        brief = news_briefing.build(kind, topic=topic)
+        if brief["status"] == "success":
+            return self._ok("engine_news", brief["message"], raw={"count": brief["count"]})
         eng = self._get("news")
         if not eng:
-            return self._unavailable("News", "", "news")
-        c = command.lower()
+            return {"status": "error", "response_type": "engine_news", "message": brief["message"]}
         if "tech" in c:
             res = eng.technology_roundup()
         elif "world" in c:
@@ -897,6 +963,9 @@ class EngineRouter:
         if isinstance(r, dict) and str(r.get("status", "")).lower() == "error":
             return {"status": "error", "response_type": "engine_deps", "raw": r,
                     "message": f"Env/Deps: {r.get('message', 'failed')}"}
+        if "conflict" in c and isinstance(r, dict):
+            import sys as _sys
+            return self._ok("engine_deps", f"Dependency check ({_sys.executable}):\n{r.get('message', '')}", raw=r)
         return self._ok("engine_deps", f"Env/Deps:\n{humanize(r)}", raw=r)
 
     # ── Auto-update ──────────────────────────────────────────────────────
@@ -921,6 +990,8 @@ class EngineRouter:
         if isinstance(r, dict) and str(r.get("status", "")).lower() == "error":
             return {"status": "error", "response_type": "engine_autoupdate", "raw": r,
                     "message": f"Auto-update: {r.get('message', 'failed')}"}
+        if isinstance(r, dict) and r.get("message") and "behind" in r:        # check_git_updates: already readable
+            return self._ok("engine_autoupdate", r["message"], raw=r)
         return self._ok("engine_autoupdate", f"Auto-update:\n{humanize(r)}", raw=r)
 
     # ── Voice+ (text emotion only — audio needs the GUI/voice mode) ─────
@@ -1042,12 +1113,34 @@ class EngineRouter:
                     "message": "Give me a URL to check, e.g. 'is example.com safe?'."}
         res = safety.analyze_website(m.group(1).rstrip(".,:;"))
         if isinstance(res, dict):
+            probe = _probe_https(res.get("domain") or "") if res.get("trust_level") not in ("trusted", "blocked", "local") \
+                else ""
+            if probe and isinstance(res.get("flags"), list):
+                # "example.com" typed without https:// used to be scored as "no https" (live check 2026-10-27);
+                # the site itself is now tested.
+                res["flags"] = [f for f in res["flags"] if f != "no_https"]
+                if probe.startswith("valid"):
+                    res["flags"].append("valid_https_certificate")
+                    res["score"] = min(100, int(res.get("score", 50)) + 20)
+                elif probe.startswith("certificate"):
+                    res["flags"].append("certificate_error")
+                    res["score"] = max(0, int(res.get("score", 50)) - 25)
+                    res["recommendation"] = "avoid"
+                score = int(res.get("score", 50))
+                res["trust_level"] = "likely_safe" if score >= 70 else "uncertain" if score >= 40 else "suspicious"
+                if score >= 70 and res.get("recommendation") == "proceed_with_caution":
+                    res["recommendation"] = "looks safe — still don't enter passwords from a link you didn't expect"
+            if isinstance(res.get("score"), (int, float)):
+                res["score"] = max(0, min(100, int(res["score"])))
             flags = ", ".join(str(f).replace("_", " ") for f in res.get("flags") or []) or "none"
             verdict = str(res.get("recommendation", "unknown")).replace("_", " ")
             text = (f"Website safety for {res.get('domain', m.group(1))}:\n"
-                    f"Trust level: {res.get('trust_level', 'unknown')} (score {res.get('score', '?')}/100)\n"
-                    f"Warning signs: {flags}\nRecommendation: {verdict}\n"
-                    "(This is a heuristic check of the address — it does not open or scan the page.)")
+                    f"Trust level: {str(res.get('trust_level', 'unknown')).replace('_', ' ')} "
+                    f"(score {res.get('score', '?')}/100)\n"
+                    f"Signals: {flags}\n" + (f"Live check: {probe}\n" if probe else "") +
+                    f"Recommendation: {verdict}\n"
+                    "(Address heuristics plus one HTTPS request to the site — the page itself is not opened or "
+                    "rendered. For a link in an email, also check the sender.)")
             return self._ok("engine_websafety", text, raw=res)
         return self._ok("engine_websafety", f"Website safety:\n{humanize(res)}", raw=res)
 

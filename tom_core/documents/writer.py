@@ -239,13 +239,63 @@ async def write_document(spec: DocSpec, ask: Ask, research: str = "",
     if spec.genre == "letter":
         return await write_letter(spec, ask)
     plan = await outline(spec, ask, research)
+    if spec.pages:                                     # an asked-for length is a limit, not a suggestion
+        plan["sections"] = plan["sections"][:spec.target_sections]
     sections = []
     for i, sec in enumerate(plan["sections"], 1):
         if progress:
             progress(f"Writing section {i}/{len(plan['sections'])}: {sec['heading']}")
         sections.append(await write_section(spec, plan, sec, ask, research))
+    if spec.pages:
+        fit_length(sections, spec.pages * 500)
     return {"title": plan["title"], "subtitle": plan["subtitle"], "sections": sections,
             "issues": [f"{s['heading']}: {i}" for s in sections for i in s["issues"]]}
+
+
+def _word_count(text: str) -> int:
+    return len(str(text).split())
+
+
+def _cut(text: str, limit: int) -> str:
+    """At most `limit` words, ending at a sentence boundary when one is close."""
+    words = str(text).split()
+    if len(words) <= limit:
+        return text
+    cut = " ".join(words[:limit])
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "), cut.rfind(".") if cut.endswith(".") else -1)
+    return cut[:end + 1] if end > len(cut) * 0.5 else cut.rstrip(",;:") + "…"
+
+
+def fit_length(sections: List[Dict[str, Any]], budget: int) -> None:
+    """Trim sections in place to about `budget` words in total (small models write 2-3x what they are asked
+    for: "a one-page proposal" came out at 1,320 words — live check 2026-10-27). Each section keeps its
+    opening; lists keep their first items, tables their first rows."""
+    if not sections:
+        return
+    per = max(60, budget // len(sections))
+    for s in sections:
+        left, kept = per, []
+        for b in s["blocks"]:
+            if left <= 15 and kept:
+                break
+            if b["type"] in ("paragraph", "callout"):
+                b["text"] = _cut(b["text"], left)
+                left -= _word_count(b["text"])
+            elif b["type"] in ("bullets", "numbered"):
+                items = []
+                for it in b["items"][:5]:
+                    if left <= 10 and items:
+                        break
+                    items.append(_cut(it, max(10, min(left, 35))))
+                    left -= _word_count(items[-1])
+                b["items"] = items
+            elif b["type"] == "table":
+                b["rows"] = b["rows"][:5]
+                left -= sum(_word_count(" ".join(map(str, r))) for r in b["rows"])
+            else:
+                left -= _word_count(b.get("text", ""))
+            kept.append(b)
+        s["blocks"] = kept
 
 
 async def write_letter(spec: DocSpec, ask: Ask) -> Dict[str, Any]:

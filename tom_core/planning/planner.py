@@ -152,8 +152,17 @@ def _clean_path(value: Any) -> Any:
     return value
 
 
+def _clean_text(value: Any) -> Any:
+    """Text a model double-escaped ("line one\\nline two" with a literal backslash-n) gets real line breaks.
+    Live check 2026-10-27: three poems were saved as one line each with visible "\\n"."""
+    if isinstance(value, str) and "\n" not in value and ("\\n" in value or "\\t" in value):
+        return value.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    return value
+
+
 def _clean_args(args: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: (_clean_path(v) if k in _PATH_KEYS else v) for k, v in args.items()}
+    return {k: (_clean_path(v) if k in _PATH_KEYS else _clean_text(v) if k in DATA_ONLY_KEYS else v)
+            for k, v in args.items()}
 
 
 class Planner:

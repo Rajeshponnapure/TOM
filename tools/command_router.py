@@ -118,6 +118,11 @@ class CommandRouter:
         if game is not None:
             return RouteDecision("system", "launch_game", "execute_game_launch", confidence=0.93,
                                  metadata={"game": game.name})
+        from tom_core import diagnostics
+        what = diagnostics.wants(lower)
+        if what:
+            return RouteDecision("system", "diagnostics", "execute_diagnostics", confidence=0.92,
+                                 metadata={"what": what})
         from tools import system_control
         control = system_control.parse(lower)
         if control is not None:
