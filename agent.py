@@ -2801,10 +2801,18 @@ class TomAgent:
         if window["status"] != "ready":
             return {"status": "needs_input" if window["status"] == "signin" else "error", "sent": False,
                     "response_type": "email_send", "message": window["message"]}
+        looked = await gw.inspect_draft(recipient, subject, window["hwnd"]) if hasattr(gw, "inspect_draft") else {}
+        if looked.get("ok") is False and "recipient" in looked.get("missing", []):
+            return {"status": "error", "sent": False, "response_type": "email_send",
+                    "message": f"Gmail opened, but I can't see {recipient} in the draft on screen, so I won't send it. "
+                               "The draft is still open in Chrome — check it there."}
+        seen_note = f"\n({looked['message']})" if looked.get("ok") else ""
+        sender = gw.account_in(window.get("title", "")) if hasattr(gw, "account_in") else ""
         approved = await asyncio.to_thread(
             self.approval_manager.request_approval,
             ApprovalRequest(action="send_email",
-                            summary=(f"Send this email from Gmail? (It's open in Chrome — you can check it there.)\n"
+                            summary=(f"Send this email from Gmail? (It's open in Chrome — you can check it there.)"
+                                     f"{seen_note}\n" + (f"From: {sender}\n" if sender else "") +
                                      f"To: {recipient}\nSubject: {subject}\n\n{body[:800]}"),
                             details={"to": recipient, "subject": subject}, risk_level="high"))
         if not approved:
@@ -2816,12 +2824,26 @@ class TomAgent:
         if pressed.get("status") != "pressed":
             pressed.setdefault("response_type", "email_send")
             return pressed
-        confirmed = await gw.verify_sent(recipient, subject, since)
+        # Which mailbox can prove it: TOM reads EMAIL_ADDRESS over IMAP. If Chrome's Gmail is that account,
+        # look in Sent; if the mail went TO that account (owner mailing themselves from another Gmail), look
+        # in its Inbox; otherwise only Gmail's own "Message sent" on screen is evidence (live check 2026-10-27:
+        # Chrome was signed into a different account, so Sent never showed it).
+        mailbox = (getattr(gw, "account", "") or "").lower()
+        if not sender or sender == mailbox:
+            confirmed, where = await gw.verify_sent(recipient, subject, since), "it's in your Sent folder"
+        elif recipient.lower() == mailbox:
+            confirmed, where = await gw.verify_sent(recipient, subject, since, folder="inbox"), \
+                f"it has arrived in {recipient}'s inbox"
+        else:
+            confirmed, where = (True if pressed.get("screen") else None), "Gmail confirmed it on screen"
         self.safety.log_action("EMAIL_SENT" if confirmed else "EMAIL_SEND_UNCONFIRMED", target=recipient,
                                status="SUCCESS" if confirmed else "UNCONFIRMED", message=f"Gmail web: {subject[:80]}")
+        how = "clicked Gmail's Send button" if pressed.get("method") == "button" else "pressed Gmail's send shortcut"
         if confirmed:
             return {"status": "success", "sent": True, "verified": True, "response_type": "email_send",
-                    "message": f"Sent from Gmail to {recipient} — it's in your Sent folder.\nSubject: {subject}"}
+                    "message": "Sent from Gmail" + (f" ({sender})" if sender else "") + f" to {recipient} — I {how}"
+                               + (f"; {pressed['screen']}" if pressed.get("screen") else "")
+                               + f"; {where}.\nSubject: {subject}"}
         why = ("I couldn't read your Sent folder to confirm it" if confirmed is None
                else "it hasn't appeared in your Sent folder yet")
         return {"status": "unverified", "sent": None, "response_type": "email_send",

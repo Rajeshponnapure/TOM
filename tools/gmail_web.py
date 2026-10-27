@@ -87,7 +87,7 @@ class GmailWeb:
                  windows: Optional[Callable[[], List[Tuple[int, str, str]]]] = None,
                  foreground: Optional[Callable[[], str]] = None,
                  focus: Optional[Callable[[int], None]] = None,
-                 poll: float = 0.5):
+                 poll: float = 0.5, screen=None):
         if profiles is None:
             from tools.chrome_profiles import ChromeProfileManager
             profiles = ChromeProfileManager()
@@ -98,6 +98,7 @@ class GmailWeb:
         self.foreground = foreground or _foreground_title
         self.focus = focus or _bring_to_front
         self.poll = poll
+        self._screen_tool = screen
         self.account = os.environ.get("EMAIL_ADDRESS", "").strip()
 
     # ── Chrome ────────────────────────────────────────────────────────────
@@ -159,6 +160,38 @@ class GmailWeb:
                 return {"status": "timeout", "message": "Gmail did not open in Chrome in time (no Gmail window)."}
             await asyncio.sleep(self.poll)
 
+    def _screen(self):
+        """The screen reader/clicker; a stand-in that reports "unavailable" when UI automation is off
+        (tests) and none was injected, so tests never photograph or click the owner's desktop."""
+        if getattr(self, "_screen_tool", None) is None:
+            if os.environ.get("TOM_DISABLE_UI_AUTOMATION") == "1":
+                self._screen_tool = _NoScreen()
+            else:
+                from tom_core.screen_control import ScreenControl
+                self._screen_tool = ScreenControl(hardware=self._hardware)
+        return self._screen_tool
+
+    async def inspect_draft(self, to: str, subject: str, hwnd: int) -> Dict[str, Any]:
+        """Read the Gmail window (Tesseract) and check the recipient and subject TOM filled in are really
+        there. {"ok": bool|None, "seen": [...], "missing": [...]}; ok=None when OCR isn't available."""
+        from tom_core.screen_control import window_box
+        sc = self._screen()
+        usable, why = sc.available()
+        if not usable:
+            return {"ok": None, "seen": [], "missing": [], "message": why}
+        self.focus(hwnd)
+        await asyncio.sleep(0.8)
+        lines = await asyncio.to_thread(sc.read, window_box(hwnd))
+        seen, missing = [], []
+        for label, value in (("recipient", to), ("subject", subject[:40])):
+            if value and sc.find(value, lines=lines, min_score=0.75):
+                seen.append(label)
+            elif value:
+                missing.append(label)
+        return {"ok": not missing, "seen": seen, "missing": missing,
+                "message": ("I can see the draft in Gmail with the " + " and ".join(seen) + " filled in."
+                            if seen else "I couldn't read the draft's fields on screen.")}
+
     async def send_open_draft(self, to: str, subject: str, hwnd: int) -> Dict[str, Any]:
         """Send the compose window that is open for (to, subject). Needs the owner's approval of exactly
         that recipient and subject (the same gate as every other email send)."""
@@ -178,11 +211,42 @@ class GmailWeb:
         if hw is None:
             from tools.hardware_control import HardwareControl
             hw = self._hardware = HardwareControl()
-        pressed = await asyncio.to_thread(hw.hotkey, "ctrl", "enter")
-        if pressed.get("status") != "success":
-            return {"status": "error", "sent": False,
-                    "message": f"Could not press Send in Gmail: {pressed.get('message', pressed)}"}
-        return {"status": "pressed", "sent": None}
+        # Look at the screen and click Gmail's own Send button, the way a person would; the keyboard
+        # shortcut is only the fallback when the button can't be seen (OCR unavailable or hidden).
+        from tom_core.screen_control import window_box
+        sc = self._screen()
+        can_see = sc.available()[0]
+        method, screen_note = "keyboard", ""
+        if can_see:
+            clicked = await asyncio.to_thread(sc.click_text, "Send", window_box(hwnd), False, "button")
+            if clicked.get("status") == "success":
+                method = "button"
+                await asyncio.sleep(2.0)
+                # The click missed if the form is still there: the Send button is still on screen.
+                still = [m for m in await asyncio.to_thread(sc.find_all, "Send", window_box(hwnd))
+                         if len(m.line.split()) <= 4]
+                if still:
+                    method = "keyboard"
+            elif clicked.get("status") == "blocked":
+                return {"status": "blocked", "sent": False, "message": clicked.get("message", "Blocked.")}
+        if method == "keyboard":
+            if self.foreground() and not re.search(r"gmail", self.foreground(), re.I):
+                return {"status": "blocked", "sent": False,
+                        "message": "Not sent: Gmail is no longer the window in front. The draft is still open."}
+            pressed = await asyncio.to_thread(hw.hotkey, "ctrl", "enter")
+            if pressed.get("status") != "success":
+                return {"status": "error", "sent": False,
+                        "message": f"Could not press Send in Gmail: {pressed.get('message', pressed)}"}
+        if can_see:
+            seen = await asyncio.to_thread(sc.wait_for, "Message sent", 8.0, window_box(hwnd))
+            screen_note = "Gmail showed \"Message sent\"" if seen else ""
+        return {"status": "pressed", "sent": None, "method": method, "screen": screen_note}
+
+    @staticmethod
+    def account_in(title: str) -> str:
+        """The Gmail account a window belongs to, from its title ("Compose Mail - me@gmail.com - Gmail")."""
+        m = re.search(r"([\w.+-]+@[\w-]+(?:\.[\w-]+)+)\s*-\s*Gmail", title or "")
+        return m.group(1).lower() if m else ""
 
     # ── the owner's mailbox (IMAP) ────────────────────────────────────────
 
@@ -242,9 +306,11 @@ class GmailWeb:
             return None
         return sorted(counts.values(), key=lambda e: -e["count"])[:limit]
 
-    async def verify_sent(self, to: str, subject: str, since: float, timeout: float = 45.0) -> Optional[bool]:
-        """True once a message to `to` with this subject is in Sent; False if it never appears;
-        None when the mailbox can't be read (then the outcome is reported as unverified)."""
+    async def verify_sent(self, to: str, subject: str, since: float, timeout: float = 45.0,
+                          folder: str = "sent") -> Optional[bool]:
+        """True once a message to `to` with this subject is in Sent (folder="sent") or has arrived in the
+        Inbox (folder="inbox" — used when the owner mails their own TOM mailbox from another Gmail account);
+        False if it never appears; None when the mailbox can't be read."""
         mail = await self._imap()
         if mail is None:
             return None
@@ -252,7 +318,7 @@ class GmailWeb:
         want = re.sub(r"\s+", " ", subject or "").strip().lower()
 
         def look() -> bool:
-            mail.select_folder(self._sent_folder(mail), readonly=True)
+            mail.select_folder(self._sent_folder(mail) if folder == "sent" else "INBOX", readonly=True)
             ids = mail.search(["SINCE", day, "TO", to])[-20:]
             if not ids:
                 return False
@@ -274,6 +340,12 @@ class GmailWeb:
             if time.monotonic() >= deadline:
                 return False
             await asyncio.sleep(max(self.poll, 0.01) * 6)
+
+
+class _NoScreen:
+    @staticmethod
+    def available():
+        return False, "UI automation is disabled"
 
 
 def _decode(value: str) -> str:
