@@ -51,8 +51,8 @@ def _app_with_quick_actions():
     return app
 
 
-def test_all_27_quick_actions_are_defined():
-    assert len(_app_with_quick_actions().quick_actions) == 27
+def test_all_28_quick_actions_are_defined():
+    assert len(_app_with_quick_actions().quick_actions) == 28        # 2026-10-27: + Website
 
 
 def test_every_quick_action_enters_its_mode():

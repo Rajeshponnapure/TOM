@@ -29,6 +29,20 @@ class CommandRouter:
     action" gate is checked LAST so it cannot shadow a concrete handler.
     """
 
+    _WEBSITE_BUILD = re.compile(
+        r"\b(?:create|make|build|design|develop|generate|code|set ?up|need|want)\b(?:\s+[\w'&.-]+){0,6}?\s+"
+        r"(?:website|web ?site|landing ?page|web ?page|home ?page|(?:a|an|my|our|new|business|small|simple|"
+        r"professional|modern)\s+site)\b")
+    _NOT_A_WEBSITE = re.compile(
+        r"\b(?:word|docx?|pdf|power ?point|pptx?|slides?|presentation|excel|spreadsheet|report|essay|"
+        r"screenshot|safe|safety|secure|scan|phishing)\b")
+
+    @classmethod
+    def is_website_build_request(cls, lower: str) -> bool:
+        """"build a website for my bakery", "create a landing page for our app" — not "open website X",
+        "is this website safe" or "make a report about website trends"."""
+        return bool(cls._WEBSITE_BUILD.search(lower)) and not cls._NOT_A_WEBSITE.search(lower)
+
     def route(self, command: str) -> RouteDecision:
         text = (command or "").strip()
         if "User request:" in text:
@@ -84,7 +98,7 @@ class CommandRouter:
                 return RouteDecision("communication", "open_whatsapp", "execute_open_whatsapp", confidence=0.93)
 
         # Content creation
-        if any(token in lower for token in ("create website", "make website")):
+        if self.is_website_build_request(lower):
             return RouteDecision("content", "create_website", "execute_website_creation", confidence=0.9)
 
         if any(token in lower for token in ("presentation", "pptx", "slide", "slides", "powerpoint presentation")):

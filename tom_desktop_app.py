@@ -1436,6 +1436,7 @@ class TomDesktopApp:
             {"icon": "\u229e", "label": "Excel",       "cmd": "Create an Excel spreadsheet for ",              "color": C["emerald"]},
             {"icon": "\u25ad", "label": "PowerPoint",  "cmd": "Create a professional PowerPoint about ",       "color": C["orange"]},
             {"icon": "\u22a0", "label": "PDF Report",  "cmd": "Create a professional PDF report about ",       "color": C["red"]},
+            {"icon": "\u25a6", "label": "Website",     "cmd": "Build a professional website for ",             "color": C["amber"]},
             {"icon": "\u2709", "label": "Email",       "cmd": "Write an email to ",                            "color": C["cyan"]},
             {"icon": "\u2295", "label": "Web Search",  "cmd": "Search the web for ",                           "color": C["purple"]},
             {"icon": "\u25b3", "label": "Analyze",     "cmd": "Analyze data: ",                                "color": C["amber"]},

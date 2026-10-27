@@ -1137,6 +1137,9 @@ class TomAgent:
             answered = await self._answer_pending_choice(command)
             if answered is not None:
                 return answered
+            answered = await self._answer_pending_site(command)
+            if answered is not None:
+                return answered
 
             # ── Long-term memory: meta commands, preferences, recall ──────
             mem_result = await self._memory_command(command)
@@ -1429,7 +1432,7 @@ class TomAgent:
                     result = await self._web_search(command, parsed)
 
                 # Website creation
-                elif "create website" in command_lower or "make website" in command_lower:
+                elif self.command_router.is_website_build_request(command_lower):
                     result = await self.execute_website_creation(command)
 
                 # File / image analysis
@@ -2292,53 +2295,69 @@ class TomAgent:
 
     # ── WEBSITE CREATION ────────────────────────────────────────────────
 
-    async def execute_website_creation(self, command: str) -> Dict[str, Any]:
-        safe_print(f"\nTOM WILL GENERATE A WEBSITE...\n")
-        try:
-            name_match = re.search(r'(?:for|called|named)\s+["\']?([a-zA-Z0-9_\-\s]+?)["\']?(?:\s+website|\s+site|$)',
-                                   command, re.IGNORECASE)
-            project_name = name_match.group(1).strip().replace(" ", "_").lower()[:30] if name_match else "premium_site"
-            target_root = self._extract_target_dir(command)
-            memory_context = self._build_memory_context(command)
+    async def execute_website_creation(self, command: str, brief=None) -> Dict[str, Any]:
+        """A professional website (tom_core.website): understand the business → ask once for the facts only
+        the owner knows (name, address, contact, hours) → write each section → render a multi-file site →
+        verify it → open the preview. Replaced one model call that had to return the whole site as a JSON
+        blob, which failed on bad JSON and produced a generic page with invented details (owner report
+        2026-10-27)."""
+        from langchain_core.prompts import ChatPromptTemplate
+        from tom_core import website
+        if brief is None:
+            brief = website.understand(command)
+            if website.should_ask(brief):
+                brief.asked = True
+                self._pending_site = {"brief": brief, "at": time.time()}
+                return {"status": "needs_input", "response_type": "website_questions",
+                        "message": website.question_text(brief)}
+        prompt = ChatPromptTemplate.from_messages([("system", "{system}"), ("user", "{user}")])
+        memory = self._build_memory_context(command)
 
-            prompt = self._safe_prompt([
-                ("system", compose_system_prompt(
-                    "You are a master frontend developer. Generate a premium, modern, responsive website. "
-                    "Return ONLY JSON with keys 'index_html' and 'style_css'. "
-                    "Write real, engaging content - no placeholders. Modern CSS with flexbox/grid.",
-                    "TOM", include_ui=True)),
-                ("user", "Conversation memory:\n{memory}\n\nBuild website for: {command}"),
-            ])
-            resp = await self._invoke_llm(prompt, {"memory": memory_context, "command": command},
-                                           "website", self.code_llm)
-            content = resp.content.strip()
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            payload = json.loads(content)
-            result = await self.file_tools.create_website(
-                project_name, payload.get("index_html"), payload.get("style_css"),
-                target_root=target_root or None)
-            if result.get("status") == "success":
-                safe_print(f"Website generated at: {result['path']}/")
-                preview_note = "Open index.html in your browser to view it."
-                try:
-                    import webbrowser
-                    index_path = os.path.join(result["path"], "index.html")
-                    if os.path.isfile(index_path):
-                        webbrowser.open("file:///" + index_path.replace(os.sep, "/"))
-                        preview_note = "Preview opened in your browser."
-                except Exception:
-                    pass
-                return {"status": "success",
-                        "message": f"Website '{project_name}' created successfully!\nBuilt in: {result['path']}\nFiles: index.html + style.css\n{preview_note}",
-                        "path": result["path"]}
-            # Friendly error instead of raw internal dict
-            err_detail = result.get("message") or result.get("error") or str(result)
-            return {"status": "error", "message": f"Could not write website files: {err_detail}"}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+        async def ask(system: str, user: str) -> str:
+            if memory:
+                user = f"{user}\n\nWhat TOM knows about the user's preferences:\n{memory[:800]}"
+            resp = await self._invoke_llm(prompt, {"system": system, "user": user}, "website", self.llm)
+            return getattr(resp, "content", "") or ""
+
+        safe_print(f"\nTOM WILL BUILD A {brief.blueprint.label.upper()} WEBSITE...\n")
+        try:
+            result = await website.build(brief, ask, progress=lambda m: safe_print(f"[WEBSITE] {m}"),
+                                         root=self._extract_target_dir(command) or None)
+        except PermissionError as exc:
+            return {"status": "blocked", "response_type": "website", "message": str(exc)}
+        except Exception as exc:
+            return {"status": "error", "response_type": "website",
+                    "message": f"I could not build the website: {type(exc).__name__}: {exc}"}
+        if result.get("index"):
+            self.file_tools.open_file(result["index"])
+            result["message"] += "\nPreview opened in your browser."
+        return result
+
+    async def _answer_pending_site(self, command: str) -> Optional[Dict[str, Any]]:
+        """The owner's reply to the website questions TOM asked; None when this message is something else."""
+        pending = getattr(self, "_pending_site", None)
+        if not pending:
+            return None
+        self._pending_site = None
+        if time.time() - pending.get("at", 0) > 30 * 60:
+            return None
+        if re.fullmatch(r"\s*(?:cancel|stop|never ?mind|forget it|no)\s*[.!]?\s*", command, re.IGNORECASE):
+            return {"status": "cancelled", "response_type": "website", "message": "Okay, I won't build the website."}
+        if self.command_router.route(command).handler not in ("generate_chat_response", "execute_website_creation") \
+                and not re.search(r"\d|@|:", command):
+            return None                                   # a different request, not an answer
+        from langchain_core.prompts import ChatPromptTemplate
+        from tom_core import website
+        # In Website mode a reply arrives wrapped in the mode's template; the owner's words are what count.
+        command = re.sub(r"^Build a professional website for\s+", "", command)
+        prompt = ChatPromptTemplate.from_messages([("system", "{system}"), ("user", "{user}")])
+
+        async def ask(system: str, user: str) -> str:
+            resp = await self._invoke_llm(prompt, {"system": system, "user": user}, "website_answers", self.fast_llm)
+            return getattr(resp, "content", "") or ""
+
+        brief = await website.extract_answers(pending["brief"], command, ask)
+        return await self.execute_website_creation(brief.request, brief=brief)
 
     # ── DELETE (guarded) ────────────────────────────────────────────────
 
