@@ -37,6 +37,17 @@ class CommandRouter:
         r"\b(?:word|docx?|pdf|power ?point|pptx?|slides?|presentation|excel|spreadsheet|report|essay|"
         r"screenshot|safe|safety|secure|scan|phishing)\b")
 
+    # "click Send", "click on the File menu", "double-click Recycle Bin" — screen control by what's visible
+    _SCREEN_CLICK = re.compile(r"^(?:please\s+)?(double[- ]?click|click|tap)\s+(?:on\s+)?(?:the\s+)?[\"']?(.+?)[\"']?"
+                               r"(?:\s+(?:button|link|tab|menu|icon|option))?\s*[.!]?$")
+    # "type Hello Ravi", "type: meeting at 4 pm" — into the focused app
+    _SCREEN_TYPE = re.compile(r"^(?:please\s+)?type\s*:?\s+[\"']?(.+?)[\"']?\s*$", re.I | re.S)
+
+    @staticmethod
+    def _original_case(text: str, lowered: str) -> str:
+        i = text.lower().find(lowered)
+        return text[i:i + len(lowered)] if i >= 0 else lowered
+
     _GAME_VERB = re.compile(
         r"^(?:please\s+|can you\s+|could you\s+|let'?s\s+|i want to\s+)?(?:play|start|launch|run|open|load)\s+"
         r"(?:the\s+|a\s+)?(?:game\s+)?(.+?)(?:\s+game)?(?:\s+(?:for me|on steam|on epic|now|please))*\s*[?.!]*$")
@@ -118,6 +129,16 @@ class CommandRouter:
         if game is not None:
             return RouteDecision("system", "launch_game", "execute_game_launch", confidence=0.93,
                                  metadata={"game": game.name})
+        m = self._SCREEN_CLICK.match(lower)
+        if m and not re.match(r"^(?:at\s+)?\d+\s*[, ]\s*\d+$", m.group(2)):        # coordinates: Hardware engine
+            return RouteDecision("system", "screen_click", "execute_screen_action", confidence=0.9,
+                                 metadata={"action": "double_click" if m.group(1).startswith("double") else "click",
+                                           "target": self._original_case(text, m.group(2))})
+        m = self._SCREEN_TYPE.match(text.strip())
+        if m:
+            words = re.sub(r"^(?:the\s+)?text\s*:?\s+", "", m.group(1), flags=re.I)     # "type text hello" → hello
+            return RouteDecision("system", "screen_type", "execute_screen_action", confidence=0.9,
+                                 metadata={"action": "type", "target": words})
         from tom_core import diagnostics
         what = diagnostics.wants(lower)
         if what:
@@ -172,8 +193,8 @@ class CommandRouter:
             return RouteDecision("files", "file_operation", "execute_file_or_read", confidence=0.88)
 
         # Screen
-        if any(token in lower for token in ("read screen", "analyze screen", "what is on screen",
-                                             "what's on screen", "scan screen", "inspect screen")):
+        if re.search(r"\b(?:read|analy[sz]e|scan|inspect|describe|look at|summari[sz]e|check)\b.{0,15}\bscreen\b"
+                     r"|\bwhat(?:'s| is| do you see)\b.{0,20}\bon\b.{0,12}\bscreen\b|\bwhat do you see\b", lower):
             return RouteDecision("screen", "read_screen", "execute_screen_read", confidence=0.93)
 
         # Open application / browser
