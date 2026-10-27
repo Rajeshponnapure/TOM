@@ -298,3 +298,26 @@ def test_website_safety_tests_https_instead_of_reading_the_typed_address(monkeyp
     monkeypatch.setattr(engine_router, "_probe_https", lambda d: "certificate problem — could not be verified")
     msg = er._run_websafety("is secure-login-verify1234.com safe?")["message"]
     assert "certificate error" in msg and "score 0/100" in msg
+
+
+def test_plans_name_known_folders_by_short_tokens_expanded_exactly():
+    """qwen3:8b copied the long workspace path wrongly and the folder landed outside the workspace."""
+    from tom_core.planning.planner import _clean_args, _known_folders
+    ws = _known_folders()["workspace"]
+    assert _clean_args({"path": "<workspace>/poems/poem1.txt"})["path"] == f"{ws}/poems/poem1.txt"
+    assert _clean_args({"path": "<Desktop>" + chr(10) + "otes.txt"})["path"] == _known_folders()["desktop"] + "/notes.txt"
+    assert _clean_args({"path": "C:/Users/x/file.txt"})["path"] == "C:/Users/x/file.txt"
+
+
+def test_a_named_folder_missing_from_the_plan_is_put_back():
+    from tom_core.planning.planner import Step, repair_named_folder
+    ws = "C:/W"
+    steps = [Step(id=1, tool="fs.make_dir", args={"path": ws}),
+             Step(id=2, tool="fs.write_text", args={"path": f"{ws}/poem1.txt", "content": "x"}),
+             Step(id=3, tool="fs.write_text", args={"path": "C:/elsewhere/keep.txt", "content": "y"})]
+    repair_named_folder("create a folder called poems with 3 short poems in my workspace", steps)
+    assert steps[0].args["path"] == "C:/W/poems" and steps[1].args["path"] == "C:/W/poems/poem1.txt"
+    assert steps[2].args["path"] == "C:/elsewhere/keep.txt"
+    ok = [Step(id=1, tool="fs.make_dir", args={"path": "C:/W/poems"})]
+    repair_named_folder("create a folder called poems", ok)
+    assert ok[0].args["path"] == "C:/W/poems"                                  # already right: untouched

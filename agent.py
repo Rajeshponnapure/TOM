@@ -4249,7 +4249,19 @@ class TomAgent:
         checks = []
         def _line(name, ok, detail=""):
             checks.append(f"  [{'ONLINE ' if ok else 'OFFLINE'}] {name}" + (f" — {detail}" if detail else ""))
-        _line("LLM config", True, f"{self.model_name} / code: {self.code_model_name}")
+        from tom_core.resources import model_router
+        if model_router.enabled():
+            try:
+                picks = {c: model_router.choose(t, self.model_name).model
+                         for c, t in (("code", "code_help"), ("writing", "document"), ("analysis", "analysis"),
+                                      ("chat", "chat"))}
+                routing = ", ".join(f"{c} → {m}" for c, m in picks.items())
+            except Exception as exc:
+                routing = f"routing unavailable ({type(exc).__name__})"
+            _line("LLM config", True, f"automatic per task: {routing} (fits measured VRAM now; "
+                                      f"TOM_MODEL_ROUTING=0 to use {self.model_name} for everything)")
+        else:
+            _line("LLM config", True, f"{self.model_name} / code: {self.code_model_name}")
         _line("RAG semantic memory", bool(self.rag and getattr(self.rag, 'available', False)))
         _line("Self-evolution", bool(self.evolution))
         _line("MCP connectors", bool(self.mcp))

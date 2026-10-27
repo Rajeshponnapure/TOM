@@ -108,9 +108,11 @@ _PLAN_SYSTEM = (
     "You turn a user's goal into a short plan of tool calls for TOM, a Windows assistant. "
     "Use ONLY these tools, exactly as named, with arguments matching their parameters:\n{tools}\n\n"
     "Rules: at most {max_steps} steps; use paths exactly as the user gives them, written with forward "
-    "slashes (C:/Users/x/file.txt); only when the user names a known folder without a path use: home "
-    "{home}, Desktop {desktop}, Downloads {downloads}; save NEW files in TOM's workspace {workspace} "
-    "unless the user names another place; a later step may use an earlier step's output by "
+    "slashes (C:/Users/x/file.txt); for a known folder write its short name in angle brackets and TOM "
+    "fills in the real path: <home>, <desktop>, <downloads>, <workspace> (e.g. <desktop>/notes.txt; a "
+    "folder called poems in the workspace is <workspace>/poems and its files <workspace>/poems/a.txt); "
+    "save NEW files under <workspace>/ unless the user names another place; a later step may use an "
+    "earlier step's output by "
     "writing {{{{N}}}} inside a string argument (N = step id); never invent tools; if the goal "
     "cannot be done with these tools, return an empty plan and say why in \"note\".\n"
     "Return ONLY JSON: {{\"steps\": [{{\"id\": 1, \"tool\": \"...\", \"args\": {{...}}, "
@@ -144,8 +146,15 @@ def _clean_path(value: Any) -> Any:
     backslashes (C:\\tmp → C:<TAB>mp), and a full path glued onto a base folder (Desktop\\C:\\tmp)."""
     if not isinstance(value, str):
         return value
-    for ch, esc in _CONTROL.items():
+    # "<workspace>/poems/a.txt" → the real folder. A model asked to copy a long absolute path dropped part
+    # of it, so the folder landed outside the workspace and the plan was blocked (live check 2026-10-27).
+    for ch, esc in _CONTROL.items():                       # first undo eaten escapes (<desktop>\notes → \n)
         value = value.replace(ch, esc)
+    m = re.match(r"^\s*<(home|desktop|downloads|workspace)>[\\/]?", value, re.I)
+    if m:
+        rest = value[m.end():].replace("\\", "/").lstrip("/")
+        base = _known_folders()[m.group(1).lower()]
+        return f"{base}/{rest}" if rest else base
     drives = list(_DRIVE.finditer(value))
     if len(drives) > 1:
         value = value[drives[-1].start():]
@@ -215,9 +224,40 @@ class Planner:
                     + note).strip()
         elif not steps and (not note or note.lower().startswith("goal")):
             note = "No available tool fits this request, so nothing was run."
+        repair_named_folder(goal, steps)
         for st in steps:
             annotate(st, self.registry)
         return Plan(goal, steps, note=note)
+
+
+_NAMED_FOLDER = re.compile(r"\b(?:folder|directory)\s+(?:called|named|titled)\s+[\"'“]?([\w .&-]{1,60}?)[\"'”]?"
+                           r"(?=\s+(?:with|in|on|at|inside|containing|and|that|which|for|to)\b|[,.;]|$)", re.I)
+
+
+def repair_named_folder(goal: str, steps: List["Step"]) -> None:
+    """"Create a folder called poems …": if the plan's create-folder step forgot the name (it made the
+    workspace itself, and the files landed in its root — live check 2026-10-27, qwen3:8b), put the named
+    folder back in, and move the files that step's folder would hold into it. Plans that already use the
+    name are untouched."""
+    m = _NAMED_FOLDER.search(goal or "")
+    if not m:
+        return
+    name = m.group(1).strip()
+    norm = lambda p: str(p).replace("\\", "/").rstrip("/")          # noqa: E731
+    paths = [norm(v) for st in steps for k, v in st.args.items() if k in _PATH_KEYS and isinstance(v, str)]
+    if any(name.lower() in [seg.lower() for seg in p.split("/")] for p in paths):
+        return
+    for st in steps:
+        if st.tool.endswith("make_dir") and isinstance(st.args.get("path"), str):
+            parent = norm(st.args["path"])
+            target = f"{parent}/{name}"
+            st.args["path"] = target
+            for other in steps:
+                for k, v in list(other.args.items()):
+                    if other is not st and k in _PATH_KEYS and isinstance(v, str) and \
+                            norm(v).rsplit("/", 1)[0] == parent:
+                        other.args[k] = f"{target}/{norm(v).rsplit('/', 1)[1]}"
+            return
 
 
 def annotate(step: Step, registry: ToolRegistry) -> Step:

@@ -133,6 +133,20 @@ Verified working as-is: documents/letters, email draft, web search, website, Web
 analysis, system info/brightness, skills, IoT/VLSI code, game scaffold, media resize, scaler, status,
 task report, self-evaluation. Full suite after the fixes: 923 passed, 15 skipped.
 
+### Third pass (2026-10-27/28): models per task, screen control, live email
+
+* **Automatic model per task** — `tom_core/resources/model_router.py`; benchmark and choices in
+  `docs/benchmarks/model-routing.md`. Live: code fix, documents, website, analysis, plans → qwen3:8b; chat
+  reuses the loaded model. Full 40-feature audit rerun with routing: 38 succeeded, 2 sends correctly
+  refused; one regression (Autonomous: the 8B model mangled the long workspace path) fixed with
+  `<workspace>`-style folder tokens and a named-folder repair — live: `poems/` with three real poems.
+* **Screen control by sight** — Tesseract 5.4 installed (UB-Mannheim, winget); `tom_core/screen_control.py`
+  reads, finds, clicks, types (Unicode via a fixed clipboard) and re-reads to confirm. Commands: "click X",
+  "double-click X", "type X", "read my screen" (which used to be answered by chat without looking).
+* **Live email to the owner** — written by TOM, opened in Gmail in Chrome's default profile, draft checked
+  on screen (recipient + exact subject), Send button clicked by sight, Gmail's "Message sent" seen, email
+  found in the recipient's inbox (26.7 s). TOM never clicks Send unless this exact draft is on screen.
+
 Known limits: Gmail's Ctrl+Enter send is not documented by Google for accounts with keyboard shortcuts
 off — the Sent-folder check is what decides success. Sleep via `SetSuspendState` may be refused on
 Modern Standby laptops (reported as such). TOM cannot play real-time games.
