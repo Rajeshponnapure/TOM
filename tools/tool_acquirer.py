@@ -39,6 +39,14 @@ _ALLOWED_GIT_HOSTS = ("github.com", "gitlab.com", "bitbucket.org",
                       "codeberg.org", "git.sr.ht")
 
 
+def _gate(tool: str, payload: dict):
+    """R3 policy gate (TOM-MIG-010): installing or cloning is a material change; the agent's approval
+    of this exact package/URL is consumed here instead of being asked for twice."""
+    from tom_core.policy.engine import ActionClass
+    from tom_core.tools.guard import enforce
+    return enforce(tool, ActionClass.MATERIAL_CHANGE, payload=payload, approval_action="tool_acquisition")
+
+
 class ToolAcquirer:
     def __init__(self):
         self._dir = os.path.join(str(workspace_root()), "acquired_tools")
@@ -52,6 +60,9 @@ class ToolAcquirer:
             return {"status": "error",
                     "message": (f"'{spec}' is not a valid PyPI package name, so TOM will not "
                                 "pass it to pip. Use a plain name like 'requests' or 'pandas==2.2.0'.")}
+        gate = _gate("tools.install", {"package": spec})
+        if not gate.allowed:
+            return gate.refusal()
         try:
             proc = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", spec],
@@ -84,6 +95,9 @@ class ToolAcquirer:
                     "message": ("TOM only clones public repos over https from "
                                 f"{', '.join(_ALLOWED_GIT_HOSTS)}. "
                                 f"'{url or 'that'}' is not one of them.")}
+        gate = _gate("tools.clone", {"url": url})
+        if not gate.allowed:
+            return gate.refusal()
         name = re.sub(r"[^A-Za-z0-9._-]+", "_", url.rstrip("/").split("/")[-1].replace(".git", "")) or "repo"
         os.makedirs(self._repos, exist_ok=True)
         dest = os.path.join(self._repos, name)

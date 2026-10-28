@@ -1,4 +1,8 @@
-"""Quick-action dispatch: every action reaches its intended handler (no window needed)."""
+"""Quick actions: every action switches TOM into a skill mode handled by the agent (no window needed).
+
+They used to open "Enter URL:"-style dialogs and call handlers directly, bypassing the agent
+(owner report 2026-10-21). Now each one only selects a tom_core.skill_modes mode.
+"""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -7,17 +11,7 @@ import pytest
 pytest.importorskip("tkinter")
 tom_desktop_app = pytest.importorskip("tom_desktop_app")
 
-# Actions that open a dedicated input prompt, by label -> handler name.
-PROMPTED = {
-    "Web Auto": "_handle_web_automation", "Multi-Agent": "_handle_multi_agent",
-    "Security": "_handle_security_check", "File Anal": "_handle_file_analysis",
-    "Data Anal": "_handle_data_analysis", "Autonomous": "_handle_autonomous",
-    "Hardware": "_handle_hardware", "Skill": "_handle_skill_query", "ML": "_handle_ml",
-    "IoT": "_handle_iot", "VLSI": "_handle_vlsi", "Env Setup": "_handle_env",
-    "News": "_handle_news", "Voice+": "_handle_voice_enhanced", "Game Dev": "_handle_game_dev",
-    "Blender 3D": "_handle_blender", "Media Edit": "_handle_media", "Auto Scaler": "_handle_scaler",
-    "Auto-Update": "_handle_auto_update",
-}
+from tom_core import skill_modes  # noqa: E402
 
 
 class _Var:
@@ -48,54 +42,33 @@ def _app_with_quick_actions():
                              "amber", "pink", "indigo")}
     app = tom_desktop_app.TomDesktopApp.__new__(tom_desktop_app.TomDesktopApp)
     app.quick_actions = eval(compile(ast.parse(expr, mode="eval"), "qa", "eval"), {"C": colors})
-    app.prompted = []
-    app._prompt_and_run = lambda prompt, handler: app.prompted.append(handler.__name__)
+    app.entered = []
+    app._enter_skill_mode = lambda key: app.entered.append(key)
+    app._prompt_and_run = lambda *a: pytest.fail("quick actions must not open input dialogs any more")
     app._show_view = lambda view: None
     app.input_var = _Var()
     app.input_entry = _Entry()
     return app
 
 
-def test_all_27_quick_actions_are_defined():
-    assert len(_app_with_quick_actions().quick_actions) == 27
+def test_all_28_quick_actions_are_defined():
+    assert len(_app_with_quick_actions().quick_actions) == 28        # 2026-10-27: + Website
 
 
-def test_each_quick_action_reaches_its_handler():
+def test_every_quick_action_enters_its_mode():
     app = _app_with_quick_actions()
     for qa in app.quick_actions:
-        app.prompted.clear()
-        app.input_var.value = ""
+        app.entered.clear()
         app._quick_action(qa["cmd"])
-        if qa["label"] in PROMPTED:
-            # e.g. "Security"'s command is "Check website safety: " — dispatch
-            # must go by label, not by searching the command text.
-            assert app.prompted == [PROMPTED[qa["label"]]], qa["label"]
-        else:
-            assert app.prompted == [], qa["label"]
-            assert app.input_var.value == qa["cmd"], qa["label"]
+        assert app.entered == [skill_modes.BY_LABEL[qa["label"]]], qa["label"]
 
 
-def test_hardware_commands_parse_coordinates_and_keep_case():
-    calls = []
-
-    class HW:
-        def is_available(self):
-            return True
-
-        def __getattr__(self, name):
-            return lambda *a, **k: calls.append((name, a)) or {"status": "success"}
-
+def test_mode_text_carries_the_mode_and_the_chosen_file():
     app = tom_desktop_app.TomDesktopApp.__new__(tom_desktop_app.TomDesktopApp)
-    app.hardware = HW()
-    app._append_chat = lambda role, text: None
-    app._enqueue = lambda fn, *a: None
-    cases = {
-        "move mouse to 500 500": ("move_mouse", (500, 500)),   # the dialog's own example
-        "click at 10, 20": ("click", (10, 20)),
-        "type Hello World": ("type_text", ("Hello World",)),   # case preserved
-        "scroll 5": ("scroll", (5,)),
-    }
-    for command, expected in cases.items():
-        calls.clear()
-        app._handle_hardware(command)
-        assert calls[0] == expected, command
+    app._skill_mode, app._mode_file = skill_modes.MODES["media"], r"C:\clips\a.mp4"
+    text, mode = skill_modes.split(app._mode_text("trim the first 5 seconds"))
+    assert mode.key == "media" and text == 'trim the first 5 seconds "C:\\clips\\a.mp4"'
+    app._skill_mode = None
+    assert app._mode_text("hello") == "hello"
+
+

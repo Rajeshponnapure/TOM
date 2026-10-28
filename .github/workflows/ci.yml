@@ -32,7 +32,7 @@ jobs:
           pip install -r requirements-ci.txt ruff
 
       - name: Syntax-compile all first-party modules
-        run: python -m compileall -q agent.py main.py tom_desktop_app.py safety tools agents demo tests
+        run: python -m compileall -q agent.py main.py tom_desktop_app.py safety tools tom_core agents demo tests
 
       - name: Lint (syntax errors, undefined names)
         run: ruff check .

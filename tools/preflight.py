@@ -88,6 +88,23 @@ ENGINE_TO_CAPABILITY = {
 }
 
 
+def _bin_ok(name: str) -> bool:
+    """On PATH — or, for Tesseract and Blender, in their standard install folders (neither installer adds
+    itself to PATH, so both were reported missing although installed)."""
+    if shutil.which(name):
+        return True
+    if name == "tesseract":
+        from tom_core.screen_control import find_tesseract
+        return bool(find_tesseract())
+    if name == "blender":
+        try:
+            from tools.blender_control import BlenderControl
+            return bool(BlenderControl().blender_path)
+        except Exception:
+            return False
+    return False
+
+
 def _mod_ok(name: str) -> bool:
     try:
         return importlib.util.find_spec(name) is not None
@@ -113,7 +130,7 @@ def check(capability_id: str) -> Dict[str, Any]:
         if not _mod_ok(m):
             missing.append(f"python module '{m}'")
     for b in spec.get("bins", []):
-        if not shutil.which(b):
+        if not _bin_ok(b):
             missing.append(f"executable '{b}'")
     svc = spec.get("svc")
     if svc and not _svc_ok(*svc):

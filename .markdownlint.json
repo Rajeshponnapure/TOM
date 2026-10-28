@@ -1,0 +1,8 @@
+{
+  "//": "TOM docs intentionally use HTML for the README landing page (centered logo, badges, feature tables, <details> sections) and ASCII diagrams. These rules flag that deliberate design, so they are disabled repo-wide. All other markdownlint rules stay on.",
+  "MD033": false,
+  "MD041": false,
+  "MD039": false,
+  "MD040": false,
+  "MD060": false
+}

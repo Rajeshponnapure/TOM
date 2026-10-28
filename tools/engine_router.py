@@ -44,6 +44,60 @@ def _extract_kv_list(command: str, key: str) -> Optional[Any]:
     return None
 
 
+def _probe_https(domain: str, timeout: float = 6.0) -> str:
+    """One HTTPS request with certificate verification: a short description of what happened, "" if no domain."""
+    if not domain or not re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", domain.lower()):
+        return ""
+    try:
+        import requests
+        r = requests.get(f"https://{domain}", timeout=timeout, allow_redirects=True, stream=True,
+                         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        final = r.url
+        r.close()
+        return f"valid HTTPS certificate; responded HTTP {r.status_code}" + (
+            f" (redirects to {final})" if final.rstrip("/") != f"https://{domain}" else "")
+    except Exception as exc:
+        name = type(exc).__name__
+        if "SSL" in name or "SSL" in str(exc)[:200]:
+            return f"certificate problem — the HTTPS certificate could not be verified ({name})"
+        return f"site did not answer over HTTPS ({name})"
+
+
+def _ml_predictions(command: str, res: Any, X: Optional[Any]) -> str:
+    """"... and predict for 5" — use the model that was just trained (live check 2026-10-27: the request
+    was ignored). Also states the fitted equation for a one-feature linear model."""
+    model = res.get("result") if isinstance(res, dict) else None
+    if model is None or not hasattr(model, "predict"):
+        return ""
+    out = ""
+    coef, icpt = getattr(model, "coef_", None), getattr(model, "intercept_", None)
+    try:
+        import numpy as np
+        if coef is not None and icpt is not None and np.ndim(coef) == 1 and len(coef) == 1 \
+                and not hasattr(model, "poly_features_"):
+            out += f"\nFitted line: y = {float(coef[0]):.4g}·x + {float(icpt):.4g}"
+    except Exception:
+        pass
+    m = re.search(r"\bpredict(?:ion)?s?\b(?:\s+(?:the\s+)?(?:value\s+)?(?:for|at|of|when\s+x\s*(?:is|=)|x\s*=))?\s*"
+                  r"(\[\[.*?\]\]|\[[^\]]*\]|-?\d+(?:\.\d+)?(?:\s*(?:,|and)\s*-?\d+(?:\.\d+)?)*)", command, re.I)
+    if not m:
+        return out
+    raw = m.group(1)
+    n_features = len(X[0]) if X and isinstance(X[0], (list, tuple)) else 1
+    if raw.startswith("[["):
+        rows = _safe_literal(raw)
+    else:
+        nums = [float(v) for v in re.findall(r"-?\d+(?:\.\d+)?", raw)]
+        rows = [[v] for v in nums] if n_features == 1 else [nums[:n_features]]
+    try:
+        feats = getattr(model, "poly_features_", None)
+        preds = model.predict(feats.transform(rows) if feats is not None else rows)
+        lines = [f"  x = {r[0] if len(r) == 1 else r} → {float(p):.4g}" for r, p in zip(rows, preds)]
+        return out + "\nPredictions:\n" + "\n".join(lines)
+    except Exception as exc:
+        return out + f"\n(Could not predict for {raw}: {exc})"
+
+
 def _extract_kv_num(command: str, key: str, default: int) -> int:
     m = re.search(rf"\b{key}\s*=\s*(\d+)", command)
     if m:
@@ -58,6 +112,65 @@ def _extract_quoted(command: str) -> Optional[str]:
     """Pull 'this exact text' / "this exact text" out of a command."""
     m = re.search(r"['\"]([^'\"]+)['\"]", command)
     return m.group(1) if m else None
+
+
+_HIDDEN_KEYS = frozenset({"status", "raw", "success"})
+
+
+def _fmt_scalar(value: Any) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, float):
+        return f"{value:.4g}"
+    return str(value)
+
+
+def humanize(value: Any, limit: int = 2400) -> str:
+    """An engine's result (nested dicts/lists) as readable lines instead of a Python repr.
+
+    Owner report 2026-10-21: answers like "Hardware: {'status': 'success', 'info': {...}}".
+    Code and other multi-line text are kept verbatim.
+    """
+    lines: List[str] = []
+
+    def label(key: str) -> str:
+        return key.replace("_", " ").strip().capitalize()
+
+    def walk(v: Any, indent: int, key: Optional[str]) -> None:
+        pad = "  " * indent
+        head = f"{label(key)}: " if key else ""
+        if isinstance(v, dict):
+            items = [(k, x) for k, x in v.items() if str(k) not in _HIDDEN_KEYS]
+            if key:
+                lines.append(f"{pad}{label(key)}:")
+            for k, x in items:
+                walk(x, indent + (1 if key else 0), str(k))
+        elif isinstance(v, (list, tuple)):
+            if not v:
+                lines.append(f"{pad}{head}none")
+            elif all(not isinstance(x, (dict, list, tuple)) for x in v):
+                shown = ", ".join(_fmt_scalar(x) for x in v[:12])
+                lines.append(f"{pad}{head}{shown}" + (f" … (+{len(v) - 12} more)" if len(v) > 12 else ""))
+            else:
+                if key:
+                    lines.append(f"{pad}{label(key)}:")
+                for x in v[:10]:
+                    walk(x, indent + 1, None)
+                    lines.append("")
+                if len(v) > 10:
+                    lines.append(f"{pad}  … {len(v) - 10} more")
+        else:
+            text = _fmt_scalar(v)
+            if "\n" in text:
+                lines.append(f"{pad}{head}\n{text}")
+            else:
+                lines.append(f"{pad}{head}{text}")
+
+    walk(value, 0, None)
+    out = "\n".join(line for i, line in enumerate(lines) if line or (i and lines[i - 1])).strip()
+    return out if len(out) <= limit else out[:limit] + " …"
 
 
 _VIDEO_EXT = r"[\w:\\/.\-]+\.(?:mp4|mov|avi|mkv|webm|flv|wmv)"
@@ -190,12 +303,25 @@ class EngineRouter:
             return "schedule"
         if re.search(r"\b(autonomous(ly)?\s+(task|execute|run|do)|execute autonomous)\b", c):
             return "autonomous"
+        if re.search(r"\bfix\b.*\b(failing|broken)?\s*tests?\b.*\b(in|at|for)\s+\S", c):
+            return "fixtests"
         if re.search(r"\b(multi[- ]agent|deploy (the )?agents?\b.*task|orchestrat)", c):
             return "orchestrator"
         if re.search(r"\b(verilog|vhdl|systemverilog|rtl design|testbench|fpga|freertos|soc design)\b", c):
             return "vlsi"
         if re.search(r"\b(esp32|esp8266|micropython|arduino|raspberry pi pico)\b", c) and \
            re.search(r"\b(code|firmware|sketch|generate|sensor|mqtt|pinout)\b", c):
+            return "iot"
+        # Live hardware over USB: "detect my iot devices", "scan i2c on COM5", "flash X to my esp32",
+        # "read serial from the board", "what's connected to my microcontroller".
+        if re.search(r"\b(detect|list|find|show|what(?:'s| is| are))\b.*\b(iot|microcontroller|serial|usb)\b.*\b(devices?|boards?|ports?|connected)\b", c) or \
+           re.search(r"\b(connected|plugged in)\b.*\b(boards?|microcontrollers?)\b|\b(list|show|detect)\b.*\bconnected\b.*\bboards?\b", c) or \
+           re.search(r"\bi2c\b.*\b(scan|wired|connected|devices?)\b|\bscan\b.*\bi2c\b", c) or \
+           re.search(r"\b(flash|upload|burn|program)\b.*\b(esp32|esp8266|arduino|pico|board|com\d|microcontroller)\b", c) or \
+           re.search(r"\bserial (monitor|port|console|output)\b", c) or \
+           (re.search(r"\b(read|monitor)\b.*\bserial\b", c) and
+            re.search(r"\b(board|device|port|baud|com\d|esp32|esp8266|arduino|pico|microcontroller)\b", c)) or \
+           re.search(r"\bwhat(?:'s| is)\b.*\b(connected|wired|plugged)\b.*\b(board|microcontroller|esp32|arduino|pico)\b", c):
             return "iot"
         if (re.search(r"\b(trim|cut|clip|concat(enate)?|combine|merge|join|caption|subtitle|"
                       r"text overlay|extract audio|resize|scale|mute|convert|color correct)\b", c) and
@@ -221,21 +347,33 @@ class EngineRouter:
         if "blender" in c:
             return "blender"
         if re.search(r"\b(scaffold|make|create|build)\b.*\b(pygame|unity|godot)\b", c) or \
-           re.search(r"\b(pygame|unity|godot)\b.*\b(game|script)\b", c):
+           re.search(r"\b(pygame|unity|godot)\b.*\b(game|script)\b", c) or \
+           (re.search(r"\b(make|create|build|develop|design|code|write|program)\b(?:\s+[\w'-]+){0,8}?\s+games?\b", c)
+            and not re.search(r"\b(play|in (?:the )?game|inside)\b", c)):
             return "gamedev"
         if re.search(r"\b(daily briefing|news briefing|tech(nology)? roundup|world events|"
                      r"trending topics|latest news)\b", c):
             return "news"
         if re.search(r"\b(create|make)\b.*\bvenv\b", c) or \
-           re.search(r"\b(check (dependency |package )?conflicts|migrate (to )?(python ?)?3\.11)\b", c):
+           re.search(r"\b(check (dependency |package )?conflicts|migrate (to )?(python ?)?3\.11)\b", c) or \
+           re.search(r"\b(dependency|package|version|pip)\s+conflicts?\b", c) or \
+           re.search(r"\b(outdated|installed)\s+(packages|dependencies)\b", c):
             return "deps"
         if re.search(r"\bupdate (tom|yourself|the system)\b", c) or c.startswith("auto-update"):
             return "autoupdate"
         if re.search(r"\b(analy[sz]e|detect)\b.*\bemotion\w*\b", c) or "emotional state" in c:
             return "voiceplus"
-        if re.search(r"\bwebsite safety\b|\bis (this|that) (web)?site safe\b", c):
+        if re.search(r"\bwebsite safety\b|\bis (this|that) (web)?site safe\b", c) or (
+                re.search(r"\b(safe|safety|scam|phishing|legit(imate)?|trust(worthy)?|malicious|fraud\w*)\b", c)
+                and re.search(r"(https?://\S+|www\.\S+|\b[a-z0-9-]+\.(?:com|in|org|net|io|co|ai|app|dev|info|xyz"
+                              r"|biz|me|ly)\b)", command_lower)):       # c has addresses removed
             return "websafety"
-        if re.search(r"\b(verify|check)\b.*\b(localhost|web ?app|webapp)\b", c) or \
+        # The URL itself is removed from `c`, so look for it in the original text.
+        if re.search(r"\b(verify|check|test|debug|diagnose)\b.*\b(localhost|web ?app|webapp)\b", c) or \
+           re.search(r"\b(verify|check|test|debug|diagnose|auto[- ]?debug)\b.*(localhost|127\.0\.0\.1|\bport\s*\d{2,5}\b)",
+                     command_lower) or \
+           re.search(r"\b(verify|check|test)\b.*https?://\S+.*\b(loads?|works?|is up|is running|responds?)\b",
+                     command_lower) or \
            c.startswith("verify website"):
             return "webauto"
         if re.search(r"\b(revert|undo|roll ?back|restore)\b.*\b(downloads|folder|files|changes|what you (?:have )?done)\b", c) or \
@@ -269,6 +407,7 @@ class EngineRouter:
            re.search(r"\b(my )?(network|ip)\b.*\b(info|overview|address|details)\b", c) or \
            re.search(r"\bwhat'?s my (ip|local ip|network)\b", c) or \
            re.search(r"\b(scan|check)\b.*\bports?\b", c) or \
+           re.search(r"\b(open|listening)\s+ports?\b|\bports?\b.*\b(open|listening)\b", c) or \
            re.search(r"\bnetwork\b.*\b(overview|diagnostics?|scan)\b", c):
             return "network"
         return None
@@ -282,6 +421,8 @@ class EngineRouter:
         try:
             if key == "orchestrator":
                 result: Any = await self._run_orchestrator(c)
+            elif key == "fixtests":
+                result = await self._run_fixtests(c)
             elif key == "autonomous":
                 result = await self._run_autonomous(c)
             elif key == "webauto":
@@ -419,6 +560,26 @@ class EngineRouter:
             r"\b(linear|ridge|lasso|logistic|knn|svm|tree|forest|random_forest|"
             r"kmeans|dbscan|arima|holt|naive_bayes|gradient|adaboost)\b", c)
         algo = algo_match.group(1) if algo_match else None
+        series = _extract_kv_list(command, "data")
+
+        # No data, no run: a question ("how would I forecast monthly sales?") used to be answered
+        # with a model trained on built-in demo numbers (owner report 2026-10-21). Demo runs only
+        # when asked for explicitly.
+        if not (X or series) and not re.search(r"\b(demo|example|sample)\b", c):
+            return {"status": "needs_input", "response_type": "engine_ml",
+                    "message": "To train or run a model I need data: give values like X=[[1],[2],[3]] "
+                               "y=[2,4,6] (or data=[...] for a forecast), attach a CSV with Data Anal, "
+                               "or say 'demo' to see it on sample numbers."}
+
+        # The engine's own names ("linearregression", "decisiontreeregressor", …).
+        regression_names = {"linear": "linearregression", "tree": "decisiontreeregressor",
+                            "forest": "randomforestregressor", "random_forest": "randomforestregressor",
+                            "gradient": "gradientboostingregressor", "adaboost": "adaboostregressor",
+                            "svm": "svr"}
+        classifier_names = {"logistic": "logisticregression", "svm": "svc", "tree": "decisiontreeclassifier",
+                            "forest": "randomforestclassifier", "random_forest": "randomforestclassifier",
+                            "gradient": "gradientboostingclassifier", "adaboost": "adaboostclassifier",
+                            "naive_bayes": "naivebayes"}
 
         if "auto" in c and "ml" in c:
             dX, dy = X or self._DEMO_XY[0], y or self._DEMO_XY[1]
@@ -427,26 +588,34 @@ class EngineRouter:
             res = eng.cluster(algo or "kmeans", X or self._DEMO_CLUSTER)
         elif re.search(r"\bclassif", c):
             dX, dy = (X or self._DEMO_CLS[0]), (y or self._DEMO_CLS[1])
-            res = eng.classify(algo or "knn", dX, dy)
+            res = eng.classify(classifier_names.get(algo, algo or "knn"), dX, dy)
         elif re.search(r"\banomal", c):
             res = eng.detect_anomalies(algo or "isolation_forest", X or self._DEMO_ANOM)
         elif re.search(r"time[- ]series|forecast|arima|holt", c):
-            series = _extract_kv_list(command, "data") or self._DEMO_SERIES
-            res = eng.time_series(algo or "arima", series)
+            res = eng.time_series(algo or "arima", series or self._DEMO_SERIES)
         else:  # regression default
             dX, dy = (X or self._DEMO_XY[0]), (y or self._DEMO_XY[1])
-            res = eng.regression(algo or "linear", dX, dy)
+            res = eng.regression(regression_names.get(algo, algo or "linearregression"), dX, dy)
 
-        note = "" if (X and y) or (X and "cluster" in c) else \
-            "\n(Demo data used — supply X=[[...]] y=[...] or a CSV for real runs.)"
-        return self._ok("engine_ml", f"ML result:\n{str(res)[:1800]}{note}", raw=res)
+        note = "" if (X and y) or (X and "cluster" in c) or series else \
+            "\n(Demo data used, as you asked — supply X=[[...]] y=[...] or a CSV for real runs.)"
+        if isinstance(res, dict) and str(res.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_ml", "raw": res,
+                    "message": f"The ML engine could not run this: {res.get('message', res)}"}
+        extra = _ml_predictions(command, res, X)
+        return self._ok("engine_ml", f"ML result:\n{humanize(res)}{extra}{note}", raw=res)
 
     # ── IoT ──────────────────────────────────────────────────────────────
     def _run_iot(self, command: str) -> Dict[str, Any]:
+        c = command.lower()
+        # Live hardware over USB-serial ("detect my iot devices", "scan i2c on COM5", "flash this to
+        # my esp32", "read serial") — distinct from generating firmware text below.
+        live = self._run_iot_live(command, c)
+        if live is not None:
+            return live
         eng = self._get("iot")
         if not eng:
             return self._unavailable("IoT", "")
-        c = command.lower()
         board_m = re.search(r"\b(esp32|esp8266|arduino(?: uno| nano)?|pico|raspberry pi pico)\b", c)
         board = (board_m.group(1).replace("raspberry pi ", "") if board_m else "esp32").replace(" ", "_")
         comps = re.findall(r"\b(dht11|dht22|bme280|bmp180|ds18b20|pir|hc-sr04|relay|servo|led|oled|lcd)\b", c)
@@ -459,9 +628,90 @@ class EngineRouter:
         elif proto_m and ("protocol" in c or "broker" in c or not comps):
             res = eng.generate_protocol_code(proto_m.group(1), "client")
         else:
-            res = eng.generate_esp_code(board, comps or ["dht11"],
-                                        protocol=proto_m.group(1) if proto_m else "mqtt")
-        return self._ok("engine_iot", f"IoT code generated:\n{str(res)[:1800]}", raw=res)
+            res = eng.generate_esp_code(board, comps or ["dht11"],      # the engine reads "protocols"
+                                        protocols=[proto_m.group(1) if proto_m else "mqtt"])
+        if isinstance(res, dict) and str(res.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_iot", "raw": res,
+                    "message": f"IoT: {res.get('message', 'failed')}"}
+        return self._ok("engine_iot", f"IoT code generated:\n{humanize(res, limit=4000)}", raw=res)
+
+    _COM_RE = re.compile(r"\b(COM\d{1,3}|/dev/tty\w+)\b", re.I)
+
+    def _run_iot_live(self, command: str, c: str) -> Optional[Dict[str, Any]]:
+        """Talk to a board that is physically plugged in. Returns None when the command is really about
+        generating firmware text (handled by the code generator above)."""
+        wants_detect = re.search(r"\b(detect|list|find|show|what(?:'s| is| are))\b.*\b(devices?|boards?|ports?|"
+                                 r"connected|plugged|wired|microcontroller|serial|usb)\b", c) or \
+            re.search(r"\b(connected|plugged in)\b.*\b(iot|devices?|boards?|microcontroller)\b", c)
+        wants_i2c = "i2c" in c and re.search(r"\b(scan|list|detect|what|find|wired|connected)\b", c)
+        wants_flash = re.search(r"\b(flash|upload|burn|write|deploy|program|push)\b", c) and \
+            re.search(r"\b(board|esp32|esp8266|arduino|pico|device|com\d|microcontroller|chip|firmware|it|this)\b", c)
+        wants_read = re.search(r"\bserial (monitor|port|console|output)\b", c) or \
+            (re.search(r"\b(read|monitor|show|check)\b.*\bserial\b", c) and
+             re.search(r"\b(board|device|port|baud|com\d|esp32|esp8266|arduino|pico|microcontroller)\b", c)) or \
+            re.search(r"\bis\b.*\b(board|esp32|arduino|pico)\b.*\b(working|running|alive)\b", c)
+        if not (wants_detect or wants_i2c or wants_flash or wants_read):
+            return None
+        try:
+            from tools.iot_live import LiveIoT
+        except Exception as exc:
+            return {"status": "error", "response_type": "engine_iot_live",
+                    "message": f"Live IoT needs pyserial: {exc}. Install it with "
+                               "'python -m pip install pyserial platformio'."}
+        live = LiveIoT()
+        port_m = self._COM_RE.search(command)
+        device = port_m.group(1) if port_m else ""
+        try:
+            if wants_detect and not (wants_flash or wants_i2c):
+                r = live.detect()
+            elif wants_i2c:
+                allow = bool(re.search(r"\bflash\b|\bscanner\b|\byes\b", c))
+                r = live.scan_i2c(device, allow_flash=allow)
+            elif wants_read:
+                secs = _extract_kv_num(command, "seconds", 6)
+                r = live.read(device, seconds=float(secs))
+            elif wants_flash:
+                r = self._iot_flash(command, c, live, device)
+            else:
+                r = live.detect()
+        except Exception as exc:
+            return {"status": "error", "response_type": "engine_iot_live",
+                    "message": f"Live IoT failed: {type(exc).__name__}: {exc}"}
+        r.setdefault("response_type", "engine_iot_live")
+        return r
+
+    def _iot_flash(self, command: str, c: str, live, device: str) -> Dict[str, Any]:
+        """Get the firmware to flash — a named source file, or generate it from the request — then flash
+        it (LiveIoT.flash gates the write with the policy engine)."""
+        import os as _os
+        source = ""
+        file_m = re.search(r"\b([\w./\\-]+\.(?:ino|cpp|c))\b", command)
+        if file_m:
+            from tom_core import user_files
+            hits = user_files.find(file_m.group(1))
+            if hits and _os.path.isfile(hits[0]):
+                source = open(hits[0], encoding="utf-8", errors="replace").read()
+            elif not hits:
+                return {"status": "error", "response_type": "engine_iot_live",
+                        "message": f"I couldn't find {file_m.group(1)} in your folders. Give me its full path."}
+        if not source:
+            # generate firmware from the request (DHT11 blink-style default if nothing specific)
+            eng = self._get("iot")
+            board_m = re.search(r"\b(esp32|esp8266|arduino|uno|nano|mega|pico)\b", c)
+            board = (board_m.group(1) if board_m else "esp32")
+            comps = re.findall(r"\b(dht11|dht22|bme280|bmp180|ds18b20|pir|hc-sr04|relay|servo|led|oled|lcd)\b", c)
+            gen = eng.generate_esp_code(board if board in ("esp32", "esp8266") else "esp32",
+                                        comps or ["led"], protocols=["mqtt"]) if eng else {}
+            source = gen.get("result", "") if isinstance(gen, dict) else ""
+            if not source:
+                return {"status": "needs_input", "response_type": "engine_iot_live",
+                        "message": "Tell me what to flash: a source file (e.g. \"flash blink.ino to COM5\") "
+                                   "or what the firmware should do (e.g. \"flash a DHT11 reader to my esp32\")."}
+        board_hint = ""
+        bm = re.search(r"\b(esp32-s3|esp32-c3|esp32|esp8266|nodemcu|uno|nano|mega|pico|arduino)\b", c)
+        if bm:
+            board_hint = bm.group(1)
+        return live.flash(source, device=device, board_hint=board_hint, what="your firmware")
 
     # ── VLSI ─────────────────────────────────────────────────────────────
     def _run_vlsi(self, command: str) -> Dict[str, Any]:
@@ -542,11 +792,15 @@ class EngineRouter:
         elif "system info" in c:
             r = eng.get_system_info()
         else:
-            return self._ok("engine_hardware",
-                            "Hardware commands: move mouse to X Y · click [at X Y] · double/right click · "
-                            "type text <...> · press key <k> · screenshot · volume up/down/to N · "
-                            "mute/unmute · system info")
-        return self._ok("engine_hardware", f"Hardware: {str(r)[:600]}", raw=r)
+            return {"status": "needs_input", "response_type": "engine_hardware",
+                    "message": "Hardware commands: move mouse to X Y · click [at X Y] · double/right click · "
+                               "type text <...> · press key <k> · screenshot · volume up/down/to N · "
+                               "mute/unmute · system info"}
+        if isinstance(r, dict) and str(r.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_hardware", "raw": r,
+                    "message": f"Hardware: {r.get('message', 'failed')}"}
+        extra = {"path": r["path"]} if isinstance(r, dict) and r.get("path") else {}
+        return self._ok("engine_hardware", humanize(r), raw=r, **extra)
 
     # ── Auto-scaler (resource management, parallel execution) ────────────
     def _run_scaler(self, command: str) -> Dict[str, Any]:
@@ -570,7 +824,7 @@ class EngineRouter:
             res = eng.detect_resources()
         body = res.get("result", res) if isinstance(res, dict) else res
         return self._ok("engine_scaler",
-                        f"Auto-scaler: {res.get('message', '')}\n{str(body)[:1500]}", raw=res)
+                        f"Auto-scaler: {res.get('message', '')}\n{humanize(body)}", raw=res)
 
     # ── Network diagnostics (own LAN / this host, read-only) ─────────────
     def _run_network(self, command: str) -> Dict[str, Any]:
@@ -579,7 +833,8 @@ class EngineRouter:
             return self._unavailable("Network diagnostics", "")
         c = command.lower()
         # Port scan: "scan ports on 192.168.1.10" / "scan my ports".
-        if re.search(r"\b(scan|check)\b.*\bports?\b", c):
+        if re.search(r"\b(scan|check)\b.*\bports?\b", c) or \
+                re.search(r"\b(open|listening)\s+ports?\b|\bports?\b.*\b(open|listening)\b", c):
             host_m = re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", command)
             host = host_m.group(1) if host_m else "127.0.0.1"
             return eng.scan_ports(host)
@@ -703,15 +958,24 @@ class EngineRouter:
         if not eng:
             return self._unavailable("Game Dev", "")
         c = command.lower()
-        if "unity" in c or "godot" in c:
-            engine_name = "unity" if "unity" in c else "godot"
-            res = eng.generate_script(engine_name, command)
+        # A real, verified game (tom_core.games): written, then run headless in its engine before
+        # TOM calls it ready. "script" requests (a C#/GDScript snippet) keep the old generator.
+        if re.search(r"\b(script|snippet)\b", c) and not re.search(r"\bgames?\b", c) and ("unity" in c or "godot" in c):
+            res = eng.generate_script("unity" if "unity" in c else "godot", command)
+            return self._ok("engine_gamedev", humanize(res, limit=4000), raw=res)
+        from tom_core.games import godot, studio, unity
+        if "godot" in c:
+            res = godot.create(command)
+        elif "unity" in c:
+            res = unity.create(command)
         else:
-            name_m = re.search(r"(?:called|named)\s+([a-zA-Z0-9_]+)", c)
-            genre_m = re.search(r"\b(platformer|shooter|puzzle|runner|rpg)\b", c)
-            res = eng.scaffold_pygame(name_m.group(1) if name_m else "my_game",
-                                      genre_m.group(1) if genre_m else "platformer")
-        return self._ok("engine_gamedev", f"Game dev:\n{str(res)[:1500]}", raw=res)
+            res = studio.GameStudio(write_code=getattr(self, "write_game_code", None)).create(command)
+        status = res.get("status", "error")
+        out = {"status": "success" if status == "success" else status, "response_type": "engine_gamedev",
+               "message": res.get("message", ""), "raw": res, "verified": bool(res.get("verified"))}
+        if res.get("path"):
+            out["path"] = res["path"]
+        return out
 
     # ── Blender ──────────────────────────────────────────────────────────
     def _run_blender(self, command: str) -> Dict[str, Any]:
@@ -719,8 +983,10 @@ class EngineRouter:
         if not eng:
             return self._unavailable("Blender", "", "blender")
         if not eng.is_available():
-            return self._ok("engine_blender",
-                            "Blender is not installed (or not found). Install Blender and retry.")
+            return {"status": "error", "response_type": "engine_blender",
+                    "message": "Blender is not installed (or TOM can't find it), so nothing was built. "
+                               "Install Blender from blender.org, or set BLENDER_PATH to blender.exe, "
+                               "and ask again."}
         task = re.sub(r"^blender\s*", "", command, flags=re.I).strip() or "cube"
         res = eng.generate_and_execute(task)
         # _ok() hardcodes status="success" -- it used to be returned unconditionally
@@ -737,14 +1003,25 @@ class EngineRouter:
             extra["path"] = res["path"]
         if res.get("paths"):
             extra["paths"] = res["paths"]
-        return self._ok("engine_blender", f"Blender:\n{str(res)[:1200]}", **extra)
+        return self._ok("engine_blender", f"Blender:\n{humanize(res)}", **extra)
 
     # ── News ─────────────────────────────────────────────────────────────
     def _run_news(self, command: str) -> Dict[str, Any]:
+        # Current, dated articles with their own links (tools.news_briefing); the older feed engine is only a
+        # fallback — its feeds returned stale SEO pages with the feed URL as every link (live check 2026-10-27).
+        from tools import news_briefing
+        c = command.lower()
+        topic = ""
+        m = re.search(r"(?:news|headlines|updates)\s+(?:on|about|for|regarding)\s+(.+)|search(?: news)?(?: for)?\s+(.+)", c)
+        if m:
+            topic = (m.group(1) or m.group(2) or "").strip(" ?.!")
+        kind = "tech" if re.search(r"\btech", c) else "world" if "world" in c else "daily"
+        brief = news_briefing.build(kind, topic=topic)
+        if brief["status"] == "success":
+            return self._ok("engine_news", brief["message"], raw={"count": brief["count"]})
         eng = self._get("news")
         if not eng:
-            return self._unavailable("News", "", "news")
-        c = command.lower()
+            return {"status": "error", "response_type": "engine_news", "message": brief["message"]}
         if "tech" in c:
             res = eng.technology_roundup()
         elif "world" in c:
@@ -756,8 +1033,14 @@ class EngineRouter:
             res = eng.search_news(q)
         else:
             res = eng.daily_briefing()
-        msg = res.get("briefing") or res.get("summary") or res.get("message") or str(res)
-        return self._ok("engine_news", str(msg)[:2000], raw=res)
+        if isinstance(res, dict) and str(res.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_news", "raw": res,
+                    "message": f"News: {res.get('message', 'failed')}"}
+        # The headlines themselves, not just "61 stories across 5 sections".
+        payload = res.get("result") if isinstance(res, dict) and isinstance(res.get("result"), dict) else {}
+        msg = (payload.get("markdown") or res.get("briefing") or res.get("summary")
+               or res.get("message") or humanize(res))
+        return self._ok("engine_news", str(msg)[:3500], raw=res)
 
     # ── Dependencies / Env ───────────────────────────────────────────────
     def _run_deps(self, command: str) -> Dict[str, Any]:
@@ -778,7 +1061,13 @@ class EngineRouter:
             r = eng.install_package(pkg)
         else:
             r = eng.list_installed()
-        return self._ok("engine_deps", f"Env/Deps: {str(r)[:1500]}", raw=r)
+        if isinstance(r, dict) and str(r.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_deps", "raw": r,
+                    "message": f"Env/Deps: {r.get('message', 'failed')}"}
+        if "conflict" in c and isinstance(r, dict):
+            import sys as _sys
+            return self._ok("engine_deps", f"Dependency check ({_sys.executable}):\n{r.get('message', '')}", raw=r)
+        return self._ok("engine_deps", f"Env/Deps:\n{humanize(r)}", raw=r)
 
     # ── Auto-update ──────────────────────────────────────────────────────
     def _run_autoupdate(self, command: str) -> Dict[str, Any]:
@@ -796,7 +1085,15 @@ class EngineRouter:
             r = eng.get_update_history()
         else:
             r = eng.check_git_updates()  # safest default — never auto full_update
-        return self._ok("engine_autoupdate", f"Auto-update: {str(r)[:1200]}", raw=r)
+        if isinstance(r, list) and not r:
+            return self._ok("engine_autoupdate", "No updates have been applied yet (the update history is empty).",
+                            raw=r)
+        if isinstance(r, dict) and str(r.get("status", "")).lower() == "error":
+            return {"status": "error", "response_type": "engine_autoupdate", "raw": r,
+                    "message": f"Auto-update: {r.get('message', 'failed')}"}
+        if isinstance(r, dict) and r.get("message") and "behind" in r:        # check_git_updates: already readable
+            return self._ok("engine_autoupdate", r["message"], raw=r)
+        return self._ok("engine_autoupdate", f"Auto-update:\n{humanize(r)}", raw=r)
 
     # ── Voice+ (text emotion only — audio needs the GUI/voice mode) ─────
     def _run_voiceplus(self, command: str) -> Dict[str, Any]:
@@ -806,7 +1103,19 @@ class EngineRouter:
         m = re.search(r"(?:text\s*:\s*)(.+)$", command, flags=re.I | re.S)
         text = m.group(1).strip() if m else command
         r = eng.analyze_emotional_state(text)
-        return self._ok("engine_voiceplus", f"Emotion analysis: {str(r)[:1200]}", raw=r)
+        result = r.get("result", r) if isinstance(r, dict) else r
+        if isinstance(result, dict):
+            scores = {k: v for k, v in (result.get("emotion_scores") or {}).items() if v}
+            lines = [f"Main emotion: {result.get('dominant_emotion', 'unknown')} "
+                     f"(confidence {_fmt_scalar(result.get('emotion_confidence'))})"]
+            if scores:
+                lines.append("Detected: " + ", ".join(f"{k} {_fmt_scalar(v)}" for k, v in
+                                                      sorted(scores.items(), key=lambda kv: -kv[1])))
+            if result.get("crisis_detected"):
+                lines.append("Crisis language detected — if you are in danger, please contact local "
+                             "emergency services or a crisis line now.")
+            return self._ok("engine_voiceplus", "\n".join(lines), raw=r)
+        return self._ok("engine_voiceplus", f"Emotion analysis:\n{humanize(r)}", raw=r)
 
     # ── Autonomous (async) ───────────────────────────────────────────────
     async def _run_autonomous(self, command: str) -> Dict[str, Any]:
@@ -815,8 +1124,45 @@ class EngineRouter:
             return self._unavailable("Autonomous agent", "")
         task = re.sub(r"^(execute\s+)?autonomous(ly)?\s*(task)?\s*:?\s*", "", command, flags=re.I).strip()
         res = await eng.execute(task or command)
-        msg = res.get("message") or res.get("summary") or str(res)
-        return self._ok("engine_autonomous", str(msg)[:2000], raw=res)
+        if res.get("status") != "success":
+            # failed / unverified / partial / nothing plannable: never reported as done
+            return {"status": res.get("status", "error"), "response_type": "engine_autonomous",
+                    "message": res.get("message", ""), "raw": res}
+        extra = {"paths": res["paths"]} if res.get("paths") else {}
+        return self._ok("engine_autonomous", str(res.get("message", ""))[:4000], raw=res,
+                        verified=res.get("verified", False), **extra)
+
+    # ── Coding workflow (AT-013) ──────────────────────────────────────────
+    async def _run_fixtests(self, command: str) -> Dict[str, Any]:
+        from tom_core import projects
+        m = re.search(r"\b(?:in|at|for)\s+[\"']?([A-Za-z]:[\\/][^\"']+|[./~][^\"'\s]+)", command)
+        named = re.search(r"\b(?:in|at|for)\s+(?:the\s+|my\s+)?(?:project\s+)?[\"']?([\w .-]+?)[\"']?\s*(?:project)?$",
+                          command, re.I)
+        profile = projects.get(m.group(1).strip()) if m else (projects.get(named.group(1)) if named else None)
+        if not m and not profile:
+            return {"status": "needs_input", "response_type": "engine_fixtests",
+                    "message": "Which project folder? For example: fix the failing tests in C:/code/myapp "
+                               "(or save it once: add project myapp at C:/code/myapp with tests: pytest -q)"}
+        repo = profile["root"] if profile and not m else os.path.expanduser(m.group(1).strip().rstrip(".").strip())
+        test_cmd = (profile or {}).get("test_command") or ""
+        agent = self._agent
+        if agent is None or not hasattr(agent, "_invoke_llm"):
+            return self._unavailable("Coding workflow", "")
+
+        async def ask(system, user):
+            from langchain_core.prompts import ChatPromptTemplate
+            prompt = ChatPromptTemplate.from_messages([("system", "{system}"), ("user", "{user}")])
+            resp = await agent._invoke_llm(prompt, {"system": system, "user": user}, "fix_tests",
+                                           getattr(agent, "code_llm", None) or agent.llm)
+            return getattr(resp, "content", "") or ""
+
+        from tom_core.coding import fix_failing_tests
+        import shlex
+        res = await fix_failing_tests(repo, ask, test_cmd=shlex.split(test_cmd, posix=False) if test_cmd else None)
+        if res.get("status") != "success":
+            return {"status": res.get("status", "error"), "response_type": "engine_fixtests",
+                    "message": res.get("message", ""), "raw": res}
+        return self._ok("engine_fixtests", res["message"][:6000], raw=res, verified=res.get("verified", False))
 
     # ── Multi-agent orchestrator (lives on the agent) ────────────────────
     async def _run_orchestrator(self, command: str) -> Dict[str, Any]:
@@ -824,9 +1170,12 @@ class EngineRouter:
         if not orch:
             return self._unavailable("Multi-agent orchestrator", "")
         task = re.sub(r"^deploy multi[- ]agent task\s*:?\s*", "", command, flags=re.I).strip()
-        res = await orch.execute_task(task or command)
+        res = await orch.execute_task(task or command, coordinate=True)
         msg = res.get("message") or res.get("result") or str(res)
-        return self._ok("engine_orchestrator", str(msg)[:2000], raw=res)
+        if res.get("status") not in ("success",):
+            return {"status": res.get("status", "error"), "response_type": "engine_orchestrator",
+                    "message": str(msg), "raw": res}
+        return self._ok("engine_orchestrator", str(msg)[:4000], raw=res)
 
     # ── Web automation: verify a URL / localhost app ─────────────────────
     async def _run_webauto(self, command: str) -> Dict[str, Any]:
@@ -835,15 +1184,24 @@ class EngineRouter:
             return self._unavailable("Web automation", "Playwright must be installed.", "webauto")
         m = re.search(r"(https?://\S+|localhost:?\d*|\b\d{2,5}\b)", command, re.I)
         if not m:
-            return self._ok("engine_webauto",
-                            "Give me a URL or localhost port, e.g. 'verify web app on localhost:3000'.")
+            return {"status": "needs_input", "response_type": "engine_webauto",
+                    "message": "Give me a URL or localhost port, e.g. 'verify web app on localhost:3000'."}
         target = m.group(1).rstrip(".,:;")
         if target.isdigit():
             target = f"http://localhost:{target}"
         elif not target.startswith("http"):
             target = "http://" + target
+        if re.search(r"\b(debug|fix|diagnose)\b", command, re.I) and hasattr(wa, "auto_debug_loop"):
+            res = await wa.auto_debug_loop(target, max_iterations=3)
+            return self._ok("engine_webauto",
+                            f"Auto-debug ({target}): {res.get('message', 'done')} "
+                            f"({res.get('total_iterations', 0)} iterations)", raw=res)
         res = await wa.wait_and_verify(target)
-        return self._ok("engine_webauto", f"Web verification ({target}): {str(res)[:1200]}", raw=res)
+        ok = isinstance(res, dict) and str(res.get("status", "")).lower() in ("success", "ok", "passed")
+        if isinstance(res, dict) and not ok:
+            return {"status": "error", "response_type": "engine_webauto", "raw": res,
+                    "message": f"Web verification of {target} failed:\n{humanize(res)}"}
+        return self._ok("engine_webauto", f"Web verification of {target}:\n{humanize(res)}", raw=res)
 
     # ── Website safety analysis (SafetyGuards) ───────────────────────────
     def _run_websafety(self, command: str) -> Dict[str, Any]:
@@ -852,10 +1210,40 @@ class EngineRouter:
             return self._unavailable("Website safety analyzer", "")
         m = re.search(r"(https?://\S+|www\.\S+|[a-z0-9-]+(?:\.[a-z0-9-]+)+\S*)", command, re.I)
         if not m:
-            return self._ok("engine_websafety",
-                            "Give me a URL to check, e.g. 'check website safety: example.com'.")
+            return {"status": "needs_input", "response_type": "engine_websafety",
+                    "message": "Give me a URL to check, e.g. 'is example.com safe?'."}
         res = safety.analyze_website(m.group(1).rstrip(".,:;"))
-        return self._ok("engine_websafety", f"Website safety: {str(res)[:1200]}", raw=res)
+        if isinstance(res, dict):
+            probe = _probe_https(res.get("domain") or "") if res.get("trust_level") not in ("trusted", "blocked", "local") \
+                else ""
+            if probe and isinstance(res.get("flags"), list):
+                # "example.com" typed without https:// used to be scored as "no https" (live check 2026-10-27);
+                # the site itself is now tested.
+                res["flags"] = [f for f in res["flags"] if f != "no_https"]
+                if probe.startswith("valid"):
+                    res["flags"].append("valid_https_certificate")
+                    res["score"] = min(100, int(res.get("score", 50)) + 20)
+                elif probe.startswith("certificate"):
+                    res["flags"].append("certificate_error")
+                    res["score"] = max(0, int(res.get("score", 50)) - 25)
+                    res["recommendation"] = "avoid"
+                score = int(res.get("score", 50))
+                res["trust_level"] = "likely_safe" if score >= 70 else "uncertain" if score >= 40 else "suspicious"
+                if score >= 70 and res.get("recommendation") == "proceed_with_caution":
+                    res["recommendation"] = "looks safe — still don't enter passwords from a link you didn't expect"
+            if isinstance(res.get("score"), (int, float)):
+                res["score"] = max(0, min(100, int(res["score"])))
+            flags = ", ".join(str(f).replace("_", " ") for f in res.get("flags") or []) or "none"
+            verdict = str(res.get("recommendation", "unknown")).replace("_", " ")
+            text = (f"Website safety for {res.get('domain', m.group(1))}:\n"
+                    f"Trust level: {str(res.get('trust_level', 'unknown')).replace('_', ' ')} "
+                    f"(score {res.get('score', '?')}/100)\n"
+                    f"Signals: {flags}\n" + (f"Live check: {probe}\n" if probe else "") +
+                    f"Recommendation: {verdict}\n"
+                    "(Address heuristics plus one HTTPS request to the site — the page itself is not opened or "
+                    "rendered. For a link in an email, also check the sender.)")
+            return self._ok("engine_websafety", text, raw=res)
+        return self._ok("engine_websafety", f"Website safety:\n{humanize(res)}", raw=res)
 
     # ── Code runner (subprocess + timeout, ALWAYS behind approval) ───────
     async def _run_coderun(self, command: str) -> Dict[str, Any]:
@@ -866,8 +1254,8 @@ class EngineRouter:
         js_m = re.search(r"([\w\-./\\:]+\.js)\b", command)
         m = re.search(r"([\w\-./\\:]+\.py)\b", command)
         if not (shell_m or js_m or m):
-            return self._ok("engine_coderun",
-                            "Tell me what to run: a .py/.js file, or 'run shell: <command>'.")
+            return {"status": "needs_input", "response_type": "engine_coderun",
+                    "message": "Tell me what to run: a .py/.js file, or 'run shell: <command>'."}
         path = (js_m or m).group(1) if (js_m or m) else ""
         run_kind = "shell" if shell_m else ("node" if js_m else "python")
         agent = self._agent
@@ -879,10 +1267,11 @@ class EngineRouter:
         approved = await _aio.to_thread(
             agent.approval_manager.request_approval,
             ApprovalRequest(action="run_code", summary=f"Run {run_kind}: {shell_m.group(1) if shell_m else path}",
-                            details={"path": path}, risk_level="high"))
+                            details={"target": shell_m.group(1) if shell_m else path}, risk_level="high"))
         if not approved:
             return {"status": "cancelled", "response_type": "engine_coderun",
                     "message": "Code run cancelled by user."}
+        # The CodeRunner method itself passes the policy engine (it consumes this approval).
         if run_kind == "shell":
             res = eng.run_shell(shell_m.group(1))
             label = "shell"
@@ -925,6 +1314,15 @@ class EngineRouter:
         if not approved:
             return {"status": "cancelled", "response_type": "engine_fileops",
                     "message": "File operation cancelled. (Plan was: " + plan["message"][:200] + ")", **extras}
+        # R3 policy gate: moves in the user's own folder are a material change the user just approved
+        # (protected locations stay blocked; the approval above is consumed, not asked again).
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import aenforce
+        gate = await aenforce("fs.organize", ActionClass.MATERIAL_CHANGE, payload={"folder": plan.get("folder", "")},
+                              paths=[plan.get("folder", "")], approval_action="file_ops",
+                              manager=agent.approval_manager)
+        if not gate.allowed:
+            return {**gate.refusal(), "response_type": "engine_fileops", **extras}
         from tools.file_ops import FileOps
         ops = FileOps()
         res = ops.execute_plan(plan)
@@ -969,6 +1367,13 @@ class EngineRouter:
             if not approved:
                 return {"status": "cancelled", "response_type": "engine_fileops",
                         "message": "Undo cancelled. (Plan was: " + plan["message"] + ")"}
+            from tom_core.policy.engine import ActionClass
+            from tom_core.tools.guard import aenforce
+            gate = await aenforce("fs.organize_undo", ActionClass.MATERIAL_CHANGE,
+                                  payload={"operation": "undo", "count": len(plan["moves"])},
+                                  approval_action="file_ops", manager=agent.approval_manager)
+            if not gate.allowed:
+                return {**gate.refusal(), "response_type": "engine_fileops"}
             undone = ops.execute_undo_plan(plan)
             return self._ok("engine_fileops", undone["message"],
                             completed_moves=undone.get("completed_moves") or [])

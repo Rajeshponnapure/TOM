@@ -176,3 +176,10 @@ class InstagramAgentController:
             "report_path": current.get("report_path"),
             "recent_runs": current.get("recent_runs", []),
         }
+
+
+# R3: starting a background agent that acts on its own is a material change — approval required.
+from tom_core.policy.engine import ActionClass as _ActionClass  # noqa: E402
+from tom_core.tools.guard import guard_methods as _guard_methods  # noqa: E402
+
+_guard_methods(InstagramAgentController, ("start",), "instagram_agent", _ActionClass.MATERIAL_CHANGE, approval_action="start_agent")

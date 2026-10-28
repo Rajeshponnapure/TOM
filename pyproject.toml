@@ -10,6 +10,9 @@ requires-python = ">=3.11,<3.12"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--basetemp=.pytest_tmp"
+markers = [
+    "characterization: pins current TOM behaviour for the PRD v1.1 refactor (tests/characterization)",
+]
 
 [tool.ruff]
 line-length = 120

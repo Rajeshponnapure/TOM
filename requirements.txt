@@ -51,11 +51,22 @@ pytesseract==0.3.13
 opencv-python==4.13.0.92
 apscheduler==3.11.2
 
-# Voice Interface
+# Voice Interface (local by default — tom_core/voice; cloud engines are opt-in, ADR-005)
 SpeechRecognition==3.16.1
+PyAudio==0.2.14                      # microphone capture (was 'install manually'; wheels exist for py3.11)
+faster-whisper==1.2.1                # local speech-to-text; loads existing model caches only, never downloads
 pyttsx3==2.99
-edge-tts==7.2.8
+edge-tts==7.2.8                      # online neural voices, used only with TOM_TTS_ENGINE=edge
 pygame==2.6.1
+winrt-runtime==3.2.1; sys_platform == "win32"                         # Windows voices (TTS worker process)
+winrt-Windows.Media.SpeechSynthesis==3.2.1; sys_platform == "win32"
+winrt-Windows.Storage.Streams==3.2.1; sys_platform == "win32"
+winrt-Windows.Foundation==3.2.1; sys_platform == "win32"
+winrt-Windows.Foundation.Collections==3.2.1; sys_platform == "win32"
+
+# Desktop UI (PySide6 interface; the Tkinter app needs nothing extra) and resource monitoring
+PySide6==6.12.0
+psutil==7.2.2
 
 # Web search & content
 beautifulsoup4==4.14.3
@@ -67,7 +78,15 @@ googlesearch-python==1.3.0
 pytest==9.0.3
 
 
-# Optional (install separately if needed)
-# PyAudio (Windows issues -> install manually)
-# pip install pipwin
-# pipwin install pyaudio
+# PyAudio is now pinned above (official Windows wheels for Python 3.11).
+
+# Live IoT devices (C15) and phone pairing (C16)
+pyserial==3.5
+paho-mqtt==2.1.0
+qrcode[pil]==8.2
+
+# Fast screen capture for the game autopilot (30-60+ fps, vs pyautogui's disk saves)
+mss==9.0.2
+
+# Windows .lnk shortcuts → the game they launch (BlueStacks / Steam / Epic links; tools/game_library)
+pywin32==312; sys_platform == "win32"

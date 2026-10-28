@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-from tools.project_paths import PROJECT_ROOT, project_path_str
+from tools.project_paths import PROJECT_ROOT, workspace_path
 
 try:
     import pandas as pd
@@ -52,7 +52,7 @@ class DataAnalysisEngine:
     SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".json", ".parquet", ".feather", ".tsv", ".txt"}
 
     def __init__(self, output_dir: str = None):
-        self.output_dir = output_dir or project_path_str("output", "analysis")
+        self.output_dir = output_dir or str(workspace_path("analysis"))   # deliverables live in the workspace
         os.makedirs(self.output_dir, exist_ok=True)
         self._last_results: Dict[str, Any] = {}
 

@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 _RESPONSE = Dict[str, Any]
 
 def _ok(result=None, message='OK'):
+    if isinstance(result, str):
+        result = fix_code_newlines(result)      # generated code must have real line breaks
     return {'status': 'success', 'result': result, 'message': message}
 
 def _err(message):
@@ -212,7 +214,46 @@ def _has_i2c(components):
 
 DQ = chr(34)
 
-def _build_includes(components, has_protocols):
+def fix_code_newlines(code: str) -> str:
+    """Turn the literal "\\n" sequences used as line breaks into real line breaks.
+
+    Many generators build firmware with "...\\n" (a backslash and an n), so whole blocks came out
+    on one line and did not compile (measured 2026-10-21: 67 such sequences in one ESP32 sketch).
+    Inside C string/char literals "\\n" is a real escape and is kept.
+    """
+    out = []
+    i, n = 0, len(code)
+    quote = ""
+    while i < n:
+        ch = code[i]
+        if quote:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(code[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in "\"'":
+            quote = ch
+            out.append(ch)
+        elif ch == "\\" and i + 1 < n and code[i + 1] == "n":
+            out.append("\n")
+            i += 2
+            continue
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _wifi_header(board) -> str:
+    return "#include <ESP8266WiFi.h>" if "8266" in str(board) else "#include <WiFi.h>"
+
+
+def _build_includes(components, has_protocols, board="esp32"):
     lines = []
     lines.append("#include <Arduino.h>")
     if _has_i2c(components):
@@ -261,11 +302,13 @@ def _build_includes(components, has_protocols):
     if "MAX9814" in components or "I2S_MEMS" in components:
         lines.append("#include <driver/i2s.h>")
     proto_set = set(has_protocols)
+    # The board decides the Wi-Fi header (this checked the protocol list for "esp32", so every
+    # ESP32 sketch got ESP8266WiFi.h).
     if "mqtt" in proto_set:
-        lines.append("#include <WiFi.h>" if "esp32" in str(proto_set) else "#include <ESP8266WiFi.h>")
+        lines.append(_wifi_header(board))
         lines.append("#include <PubSubClient.h>")
-    if "wifi" in proto_set:
-        lines.append("#include <WiFi.h>" if "esp32" in str(proto_set) else "#include <ESP8266WiFi.h>")
+    if "wifi" in proto_set and _wifi_header(board) not in lines:
+        lines.append(_wifi_header(board))
     if "websocket" in proto_set:
         lines.append("#include <WebSocketsClient.h>")
     if "http" in proto_set or "rest" in proto_set:
@@ -306,7 +349,7 @@ def _build_wifi_setup():
     s += '    delay(500);' + chr(10)
     s += '    Serial.print(".");' + chr(10)
     s += '  }' + chr(10)
-    s += '  Serial.println("\\\\nWiFi connected. IP: " + WiFi.localIP().toString());' + chr(10)
+    s += '  Serial.println("\\nWiFi connected. IP: " + WiFi.localIP().toString());' + chr(10)
     s += '}' + chr(10)
     return s
 
@@ -953,7 +996,7 @@ def _esp_code(board, components, wifi, mqtt, user_pins=None, deep_sleep=False, p
     lines.append("// TOM IoT Engine -- Generated " + board.upper() + " Firmware")
     lines.append("// ============================================================")
     lines.append("")
-    lines.append(_build_includes(components, protocols))
+    lines.append(_build_includes(components, protocols, board))
     lines.append("")
     lines.append(_build_wifi_config(wifi))
     lines.append("")

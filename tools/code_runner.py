@@ -107,3 +107,14 @@ class CodeRunner:
             return {"status": "error", "message": f"Shell command timed out after {timeout}s."}
         except Exception as exc:
             return {"status": "error", "message": f"Shell run failed: {exc}"}
+
+
+# R3 (TOM-MIG-010): running code is a material change. Each run method passes the policy engine
+# with the exact file or command as payload; the engine router's approval of that same target is
+# consumed here, so the user is asked once.
+from tom_core.policy.engine import ActionClass as _ActionClass  # noqa: E402
+from tom_core.tools.guard import guard_methods as _guard_methods  # noqa: E402
+
+_guard_methods(CodeRunner, ("run_python_file", "run_python_code", "run_node_file", "run_shell"), "code",
+               _ActionClass.MATERIAL_CHANGE, approval_action="run_code")
+

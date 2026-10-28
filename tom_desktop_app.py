@@ -71,6 +71,8 @@ if getattr(sys, "frozen", False):
 os.environ.setdefault("VOICE_INPUT_ENABLED", "true")
 os.environ.setdefault("VOICE_OUTPUT_ENABLED", "true")
 
+from tom_core import skill_modes  # noqa: E402  (after .env: nothing here reads the environment)
+
 # ── New v3 tool imports ───────────────────────────────────────────────
 try:
     from tools.data_analysis import DataAnalysisEngine
@@ -777,7 +779,12 @@ class VoiceUIWindow:
     Dedicated voice conversation window with 3D animated orb.
     Opens when user clicks the Voice button.
     Shows Tom's logo with reactive animations for listening/speaking/thinking states.
+
+    Push to talk (default, same flow as the PySide6 app): one press = one request.
+    Hands-free: the continuous listen → answer loop until Stop or "bye".
     """
+
+    _TALK_LABEL = "\U0001F3A4  Push to talk"
 
     def __init__(self, parent: tk.Tk, desktop_app):
         self.parent = parent
@@ -800,7 +807,8 @@ class VoiceUIWindow:
         self._state = "idle"  # idle, listening, processing, speaking
         self._audio_level = 0.0
         self._running = True
-        self._conversation_active = False
+        self._conversation_active = False      # hands-free loop running
+        self._ptt_active = False               # a push-to-talk turn is running
         self._agent_future = None
 
         self._particles = []
@@ -842,7 +850,7 @@ class VoiceUIWindow:
                 pass
 
         # Status label
-        self.status_var = tk.StringVar(value="Press the button to start")
+        self.status_var = tk.StringVar(value="Press Push to talk and speak")
         self.status_label = tk.Label(w, textvariable=self.status_var,
                                      bg=C["bg"], fg=C["cyan"],
                                      font=("Segoe UI", 13, "bold"))
@@ -869,14 +877,24 @@ class VoiceUIWindow:
         btn_frame = tk.Frame(w, bg=C["bg"])
         btn_frame.pack(pady=(20, 0))
 
-        self.start_btn = tk.Button(btn_frame, text="\u25b6  Start Conversation",
+        self.talk_btn = tk.Button(btn_frame, text=self._TALK_LABEL,
+                                  command=self._push_to_talk,
+                                  bg=C["blue"], fg="#ffffff",
+                                  activebackground="#2563eb",
+                                  activeforeground="#ffffff",
+                                  relief="flat", bd=0,
+                                  padx=18, pady=10,
+                                  font=("Segoe UI", 11, "bold"), cursor="hand2")
+        self.talk_btn.pack(side="left", padx=(0, 10))
+
+        self.start_btn = tk.Button(btn_frame, text="\u25b6  Hands-free",
                                    command=self._start_conversation,
-                                   bg=C["blue"], fg="#ffffff",
-                                   activebackground="#2563eb",
-                                   activeforeground="#ffffff",
+                                   bg=C["surface2"], fg=C["text"],
+                                   activebackground=C["border2"],
+                                   activeforeground=C["text"],
                                    relief="flat", bd=0,
-                                   padx=24, pady=10,
-                                   font=("Segoe UI", 11, "bold"), cursor="hand2")
+                                   padx=14, pady=10,
+                                   font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.start_btn.pack(side="left", padx=(0, 10))
 
         self.stop_btn = tk.Button(btn_frame, text="\u25a0  Stop",
@@ -885,8 +903,8 @@ class VoiceUIWindow:
                                   activebackground=C["border2"],
                                   activeforeground=C["red"],
                                   relief="flat", bd=0,
-                                  padx=20, pady=10,
-                                  font=("Segoe UI", 11, "bold"),
+                                  padx=14, pady=10,
+                                  font=("Segoe UI", 10, "bold"),
                                   cursor="hand2", state="disabled")
         self.stop_btn.pack(side="left")
 
@@ -919,8 +937,8 @@ class VoiceUIWindow:
 
     def _bind_shortcuts(self):
         self.window.bind("<Escape>", lambda e: self._on_close())
-        self.window.bind("<Return>", lambda e: self._start_conversation()
-                         if not self._conversation_active else None)
+        self.window.bind("<Return>", lambda e: self._push_to_talk())
+        self.window.bind("<Control-space>", lambda e: self._push_to_talk())
 
     def _animate(self):
         if not self._running:
@@ -1053,19 +1071,101 @@ class VoiceUIWindow:
         except Exception:
             pass
 
-    def _start_conversation(self):
-        if self._conversation_active:
-            return
+    def _ready_to_listen(self) -> bool:
+        if self._conversation_active or self._ptt_active:
+            return False
         if not self.app.voice:
             self._append_transcript("System", "Voice tools not available.")
-            return
+            return False
         if not self.app.agent_ready:
             self._append_transcript("System", "TOM is still initializing...")
+            return False
+        if self.app.voice_mode_enabled or self.app.processing:
+            self._append_transcript("System", "TOM's main window is still busy with a request.")
+            return False
+        return True
+
+    def _set_buttons(self, busy: bool):
+        state = "disabled" if busy else "normal"
+        self.talk_btn.configure(state=state)
+        self.start_btn.configure(state=state)
+        self.stop_btn.configure(state="normal" if busy else "disabled")
+
+    def _ask(self, heard: str) -> str:
+        """Run one spoken request through TaskService (interface="voice") and return the reply text."""
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self.app.agent.execute_task(heard, interface="voice"), self.app._loop)
+            self._agent_future = future
+            response = future.result(timeout=120)
+            if isinstance(response, dict):
+                response = response.get("message", str(response))
+            response = str(response).strip()
+        except Exception as e:
+            response = f"Sorry, I hit an error: {e}"
+        return response or "I didn't have a good answer for that."
+
+    def _push_to_talk(self):
+        """One spoken request per press — the same flow as the PySide6 window.
+
+        Pressing again while listening ("Done") ends the request immediately.
+        """
+        from tom_core.voice import push_to_talk
+        if self._ptt_active:
+            push_to_talk.finish(self.app.voice)
+            return
+        if not self._ready_to_listen():
+            return
+        self._ptt_active = True
+        self._set_buttons(busy=True)
+        self.talk_btn.configure(text="■  Done", state="normal")
+        self._set_state("listening")
+
+        def _turn():
+            voice = self.app.voice
+            try:
+                error = push_to_talk.prepare(voice)      # this window is for talking: voice on
+                if error:
+                    self._enqueue(lambda e=error: self._append_transcript(
+                        "System", f"Voice input could not start: {e}"))
+                    return
+                voice.on_audio_level = self._on_audio_level
+                voice.on_state_change = self._on_voice_state
+                heard = push_to_talk.capture(voice)
+                self._enqueue(lambda: self.talk_btn.configure(text=self._TALK_LABEL, state="disabled"))
+                self._enqueue(lambda m=heard.message: self._append_transcript("System", m))
+                if not heard.text or not self._ptt_active:
+                    return
+                self._enqueue(lambda t=heard.text: self._append_transcript("You", t))
+                self._enqueue(lambda: self._set_state("processing"))
+                response = self._ask(heard.text)
+                if not self._ptt_active:
+                    return                               # Stop was pressed while TOM was thinking
+                self._enqueue(lambda r=response: self._append_transcript("TOM", r))
+                self._enqueue(lambda: self._set_state("speaking"))
+                voice.speak(response[:500])
+            except Exception as e:
+                self._enqueue(lambda m=f"Error: {e}": self._append_transcript("System", m))
+            finally:
+                self._enqueue(self._on_ptt_end)
+
+        threading.Thread(target=_turn, name="tom-tk-voice-turn", daemon=True).start()
+
+    def _on_ptt_end(self):
+        self._ptt_active = False
+        if not self._running:
+            return                                       # window already closed
+        self._set_state("idle")
+        self._set_buttons(busy=False)
+        self.talk_btn.configure(text=self._TALK_LABEL)
+        self.sub_status_var.set("Press Push to talk (Enter) for the next request")
+
+    def _start_conversation(self):
+        if not self._ready_to_listen():
             return
 
         self._conversation_active = True
-        self.start_btn.configure(state="disabled")
-        self.stop_btn.configure(state="normal")
+        self._set_buttons(busy=True)
         self._set_state("listening")
 
         def _voice_loop():
@@ -1080,7 +1180,7 @@ class VoiceUIWindow:
                 voice.output_enabled = True
                 if not voice._recognizer:
                     voice._setup_input()
-                if not (voice._edge_tts_ok or voice._tts_engine):
+                if not (voice._tts_adapter or voice._tts_engine):
                     voice._setup_output()
                 if not voice.input_enabled or not voice._recognizer:
                     err = voice._input_error or "microphone unavailable"
@@ -1089,8 +1189,9 @@ class VoiceUIWindow:
                     return
                 voice.on_audio_level = self._on_audio_level
                 voice.on_state_change = self._on_voice_state
+                voice.warm_up_recognizer()   # speech model loads while the greeting plays
 
-                greeting = "Hey! I'm TOM. What can I help you with?"
+                greeting = "Hello, I'm TOM. How can I help you?"
                 self._enqueue(lambda: self._append_transcript("TOM", greeting))
                 self._enqueue(lambda: self._set_state("speaking"))
                 voice.speak(greeting)
@@ -1136,28 +1237,14 @@ class VoiceUIWindow:
                     lower = heard.lower().strip()
                     if lower in ("stop", "exit", "quit", "goodbye", "bye",
                                  "stop listening", "thanks bye", "that's all"):
-                        farewell = "Alright, talk to you later!"
+                        farewell = "Okay. I'll be here whenever you need me."
                         self._enqueue(lambda: self._append_transcript("TOM", farewell))
                         self._enqueue(lambda: self._set_state("speaking"))
                         voice.speak(farewell)
                         break
 
                     self._enqueue(lambda: self._set_state("processing"))
-
-                    try:
-                        future = asyncio.run_coroutine_threadsafe(
-                            self.app.agent.execute_task(heard), self.app._loop)
-                        self._agent_future = future
-                        response = future.result(timeout=120)
-                        if isinstance(response, dict):
-                            response = response.get("message", str(response))
-                        response = str(response).strip()
-                    except Exception as e:
-                        response = f"Sorry, I hit an error: {e}"
-
-                    if not response:
-                        response = "I didn't have a good answer for that."
-
+                    response = self._ask(heard)
                     self._enqueue(lambda r=response: self._append_transcript("TOM", r))
                     self._enqueue(lambda: self._set_state("speaking"))
                     voice.speak(response[:500])
@@ -1167,12 +1254,17 @@ class VoiceUIWindow:
                 err_msg = f"Error: {e}"
                 self._enqueue(lambda m=err_msg: self._append_transcript("System", m))
             finally:
+                try:
+                    self.app.voice.release_recognizer()   # free the speech model's VRAM (RRM-006)
+                except Exception:
+                    pass
                 self._enqueue(self._on_conversation_end)
 
         threading.Thread(target=_voice_loop, daemon=True).start()
 
     def _stop_conversation(self):
         self._conversation_active = False
+        self._ptt_active = False
         if self._agent_future is not None and not self._agent_future.done():
             self._agent_future.cancel()
         if self.app.voice:
@@ -1182,11 +1274,12 @@ class VoiceUIWindow:
 
     def _on_conversation_end(self):
         self._conversation_active = False
+        if not self._running:
+            return                                       # window already closed
         self._set_state("idle")
-        self.start_btn.configure(state="normal")
-        self.stop_btn.configure(state="disabled")
+        self._set_buttons(busy=False)
         self.status_var.set("Conversation ended")
-        self.sub_status_var.set("Press Start to begin again")
+        self.sub_status_var.set("Press Push to talk or Hands-free to begin again")
 
     def _set_state(self, state: str):
         self._state = state
@@ -1211,6 +1304,7 @@ class VoiceUIWindow:
 
     def _on_voice_state(self, state: str, text: str):
         state_map = {"listening": "listening", "processing": "processing",
+                     "transcribing": "processing",
                      "speaking": "speaking", "idle": "idle", "error": "idle",
                      "ready": "listening"}
         new_state = state_map.get(state, "idle")
@@ -1245,9 +1339,17 @@ class VoiceUIWindow:
     def _on_close(self):
         self._running = False
         self._conversation_active = False
-        if self.app.voice:
+        self._ptt_active = False
+        voice = self.app.voice
+        if voice:
             try:
-                self.app.voice.stop_conversation_mode()
+                voice.stop_speaking()
+                voice.stop_conversation_mode()
+                # Detach this window's callbacks so later listening elsewhere doesn't drive a dead orb.
+                if voice.on_state_change == self._on_voice_state:
+                    voice.on_state_change = None
+                if voice.on_audio_level == self._on_audio_level:
+                    voice.on_audio_level = None
             except Exception:
                 pass
         try:
@@ -1334,6 +1436,7 @@ class TomDesktopApp:
             {"icon": "\u229e", "label": "Excel",       "cmd": "Create an Excel spreadsheet for ",              "color": C["emerald"]},
             {"icon": "\u25ad", "label": "PowerPoint",  "cmd": "Create a professional PowerPoint about ",       "color": C["orange"]},
             {"icon": "\u22a0", "label": "PDF Report",  "cmd": "Create a professional PDF report about ",       "color": C["red"]},
+            {"icon": "\u25a6", "label": "Website",     "cmd": "Build a professional website for ",             "color": C["amber"]},
             {"icon": "\u2709", "label": "Email",       "cmd": "Write an email to ",                            "color": C["cyan"]},
             {"icon": "\u2295", "label": "Web Search",  "cmd": "Search the web for ",                           "color": C["purple"]},
             {"icon": "\u25b3", "label": "Analyze",     "cmd": "Analyze data: ",                                "color": C["amber"]},
@@ -1641,7 +1744,7 @@ class TomDesktopApp:
         act_wrap.pack(fill="x")
         tk.Label(act_wrap, text="ACTIONS", bg=C["bg"], fg=C["text2"], font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 6))
 
-        self.voice_btn = tk.Button(act_wrap, text="  \u266a  Voice Mode", command=self._toggle_voice_mode,
+        self.voice_btn = tk.Button(act_wrap, text=self._TALK_LABEL, command=self._push_to_talk,
             bg=C["surface2"], fg=C["text"], activebackground=C["blue"], activeforeground=C["text"],
             relief="flat", bd=0, padx=12, pady=9, anchor="w", font=("Segoe UI", 9, "bold"), cursor="hand2")
         self.voice_btn.pack(fill="x", pady=(0, 6))
@@ -1652,16 +1755,12 @@ class TomDesktopApp:
         self.run_btn.pack(fill="x")
 
         v2_actions = [
-            # These actions need task-specific input.  Calling their handlers
-            # directly used to raise a missing ``detail`` argument error.
-            ("  \u2699  Web Auto",    lambda: self._prompt_and_run(
-                "Enter URL or localhost port to verify:", self._handle_web_automation), C["cyan"]),
-            ("  \u25c6  Auto-Debug",  lambda: self._prompt_and_run(
-                "Enter URL or localhost port to debug:", self._handle_auto_debug), C["orange"]),
-            ("  \u2606  Multi-Agent", lambda: self._prompt_and_run(
-                "Describe the multi-agent task:", self._handle_multi_agent), C["purple"]),
-            ("  \u2714  Security",    lambda: self._prompt_and_run(
-                "Enter URL to check safety:", self._handle_security_check), C["red"]),
+            # Each switches TOM into a mode (tom_core.skill_modes); these used to open raw
+            # "Enter URL:" dialogs and call handlers directly, bypassing the agent.
+            ("  \u2699  Web Auto",    lambda: self._enter_skill_mode("webauto"), C["cyan"]),
+            ("  \u25c6  Auto-Debug",  lambda: self._enter_skill_mode("webauto"), C["orange"]),
+            ("  \u2606  Multi-Agent", lambda: self._enter_skill_mode("multiagent"), C["purple"]),
+            ("  \u2714  Security",    lambda: self._enter_skill_mode("security"), C["red"]),
             ("  \u25ce  System Check", self._run_system_verification, C["emerald"]),
         ]
         for text, cmd, color in v2_actions:
@@ -2157,6 +2256,24 @@ class TomDesktopApp:
         self.attach_label.pack(side="left", padx=8, pady=6)
         self.attach_display.pack_forget()
 
+        # ── Active quick-action mode (tom_core.skill_modes) ──────────────
+        self._skill_mode = None
+        self._mode_file = ""
+        self.mode_bar = tk.Frame(self.attach_frame, bg="#132036", padx=10, pady=6)
+        self.mode_title = tk.Label(self.mode_bar, text="", bg="#132036", fg=C["cyan"],
+                                   font=("Segoe UI", 9, "bold"), anchor="w")
+        self.mode_title.grid(row=0, column=0, sticky="w")
+        tk.Button(self.mode_bar, text="✕  Exit mode", command=self._exit_skill_mode,
+                  bg="#132036", fg=C["muted"], activebackground=C["border2"], activeforeground=C["text"],
+                  relief="flat", bd=0, padx=8, pady=0, font=("Segoe UI", 8), cursor="hand2"
+                  ).grid(row=0, column=1, sticky="e")
+        self.mode_hint = tk.Label(self.mode_bar, text="", bg="#132036", fg=C["text2"],
+                                  font=("Segoe UI", 8), anchor="w", justify="left", wraplength=760)
+        self.mode_hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 4))
+        self.mode_examples = tk.Frame(self.mode_bar, bg="#132036")
+        self.mode_examples.grid(row=2, column=0, columnspan=2, sticky="w")
+        self.mode_bar.columnconfigure(0, weight=1)
+
         bottom_bar = tk.Frame(parent, bg=C["bg"], padx=24, pady=12)
         bottom_bar.grid(row=3, column=0, sticky="ew")
         bottom_bar.columnconfigure(0, weight=1)
@@ -2237,9 +2354,11 @@ class TomDesktopApp:
             relief="flat", bd=0, padx=14, pady=8, font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.mute_btn.grid(row=0, column=2)
 
-        self.mic_btn = tk.Button(input_row, text="\u266a", command=self._on_mic_click,
+        # Push-to-talk: one spoken request, sent as a voice task and answered aloud (Ctrl+Space)
+        self.mic_btn = tk.Button(input_row, text=self._MIC_LABEL, command=self._push_to_talk,
             bg=C["surface2"], fg=C["text2"], activebackground=C["surface"], activeforeground=C["blue"],
-            relief="flat", bd=0, padx=14, pady=8, font=("Segoe UI", 13), cursor="hand2")
+            disabledforeground=C["cyan"],
+            relief="flat", bd=0, padx=14, pady=8, font=("Segoe UI", 10, "bold"), cursor="hand2")
         self.mic_btn.grid(row=0, column=3)
 
         self.send_btn = tk.Button(input_row, text="Send  \u25b6", command=self.send_message,
@@ -2252,6 +2371,12 @@ class TomDesktopApp:
             relief="flat", bd=0, padx=12, pady=8, font=("Segoe UI", 9, "bold"),
             cursor="hand2", state="disabled")
         self.stop_btn.grid(row=0, column=5, padx=(6, 0))
+
+        # FR-006: pause every task before its next action (nothing is cancelled); click again to resume
+        self.pause_btn = tk.Button(input_row, text="⏸ Pause", command=self._toggle_pause,
+            bg=C["surface2"], fg=C["text2"], activebackground=C["border2"], activeforeground=C["blue"],
+            relief="flat", bd=0, padx=12, pady=8, font=("Segoe UI", 9, "bold"), cursor="hand2")
+        self.pause_btn.grid(row=0, column=6, padx=(6, 0))
 
         fb_row = tk.Frame(bottom_bar, bg=C["bg"])
         fb_row.grid(row=2, column=0, sticky="ew", pady=(6, 0))
@@ -2434,11 +2559,18 @@ class TomDesktopApp:
                 font=("Segoe UI", 8, "italic"), wraplength=540, justify="center").pack()
 
         self._chat_bubbles.append(bubble)
+        if not self._rendering_chat_history:
+            # One layout pass per message the user sees arrive. While a saved chat is being
+            # rendered this is done once at the end — per-bubble layout made switching to a
+            # 500-message chat take 7.7 s (measured 2026-10-21).
+            self._finish_chat_layout()
+            if role == "assistant":
+                self._refresh_chat_history()
+
+    def _finish_chat_layout(self, to_top: bool = False):
         self.chat_inner.update_idletasks()
         self.chat_canvas.configure(scrollregion=self.chat_canvas.bbox("all"))
-        self.chat_canvas.yview_moveto(1.0)
-        if role == "assistant" and not self._rendering_chat_history:
-            self._refresh_chat_history()
+        self.chat_canvas.yview_moveto(0.0 if to_top else 1.0)
 
     def _refresh_chat_history(self):
         """Refresh the left chat list without reading or changing old sessions."""
@@ -2484,21 +2616,40 @@ class TomDesktopApp:
             self._render_active_chat_session()
             self.chat_subtitle_var.set("Viewing saved chat. Send a message to continue it.")
 
-    def _render_active_chat_session(self):
+    # Messages drawn when a saved chat is opened; older ones load on request ("Show earlier").
+    _HISTORY_PAGE = 30
+
+    def _render_active_chat_session(self, limit: int = 0):
         memory = getattr(self.agent, "chat_memory", None)
         if memory is None:
             return
+        limit = limit or self._HISTORY_PAGE
         self._rendering_chat_history = True
         try:
             for bubble in self._chat_bubbles:
                 bubble.destroy()
             self._chat_bubbles = []
-            for message in memory.messages:
-                role = message.get("role", "assistant")
-                if role in ("user", "assistant"):
-                    self._append_chat(role, str(message.get("text", "")))
+            shown = [m for m in memory.messages if m.get("role") in ("user", "assistant")]
+            hidden = len(shown) - limit
+            if hidden > 0:
+                self._add_show_earlier(hidden, limit)
+                shown = shown[-limit:]
+            for message in shown:
+                self._append_chat(message.get("role", "assistant"), str(message.get("text", "")))
         finally:
             self._rendering_chat_history = False
+        self._finish_chat_layout(to_top=limit > self._HISTORY_PAGE)
+
+    def _add_show_earlier(self, hidden: int, limit: int):
+        bubble = tk.Frame(self.chat_inner, bg=C["surface"])
+        bubble.pack(fill="x", padx=16, pady=(8, 4))
+        more = min(hidden, self._HISTORY_PAGE)
+        tk.Button(bubble, text=f"↑  Show {more} earlier message{'s' if more != 1 else ''}"
+                               f"  ({hidden} not shown)",
+                  command=lambda: self._render_active_chat_session(limit + self._HISTORY_PAGE),
+                  bg=C["surface2"], fg=C["text2"], activebackground=C["border2"], activeforeground=C["text"],
+                  relief="flat", bd=0, padx=12, pady=4, font=("Segoe UI", 8), cursor="hand2").pack()
+        self._chat_bubbles.append(bubble)
 
     def _delete_chat_session(self):
         """Delete the currently selected chat session."""
@@ -2716,12 +2867,49 @@ class TomDesktopApp:
             return txt
 
         self.memory_result_text = _panel(0, "RECALL / REFLECTION")
-        self.memory_recent_text = _panel(1, "RECENTLY STORED")
+        self.memory_recent_text = _panel(1, "WHAT I REMEMBER  (#number · confidence · source)")
+
+        # R5 / AT-015: correct or forget one memory by its number
+        edit = tk.Frame(parent, bg=C["bg"], padx=24)
+        edit.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        edit.columnconfigure(3, weight=1)
+        tk.Label(edit, text="Memory #", bg=C["bg"], fg=C["text2"], font=("Segoe UI", 9)).grid(row=0, column=0)
+        self.memory_id_entry = tk.Entry(edit, width=6, bg=C["surface2"], fg=C["text"], insertbackground=C["text"],
+                                        relief="flat", font=("Segoe UI", 10))
+        self.memory_id_entry.grid(row=0, column=1, padx=(4, 10), ipady=4)
+        tk.Label(edit, text="New wording", bg=C["bg"], fg=C["text2"], font=("Segoe UI", 9)).grid(row=0, column=2)
+        self.memory_fix_entry = tk.Entry(edit, bg=C["surface2"], fg=C["text"], insertbackground=C["text"],
+                                         relief="flat", font=("Segoe UI", 10))
+        self.memory_fix_entry.grid(row=0, column=3, sticky="ew", padx=(4, 10), ipady=4)
+        for col, (label, kind) in enumerate((("Correct", "correct"), ("Forget", "forget")), start=4):
+            tk.Button(edit, text=label, command=lambda k=kind: self._memory_edit(k), bg=C["surface2"],
+                      fg=C["red"] if kind == "forget" else C["text"], activebackground=C["border2"],
+                      relief="flat", bd=0, padx=12, pady=5, font=("Segoe UI", 9, "bold"),
+                      cursor="hand2").grid(row=0, column=col, padx=(0, 6))
         tk.Button(parent, text="\u21ba  Refresh", command=self._refresh_memory_view,
                   bg=C["surface2"], fg=C["text2"], activebackground=C["border2"],
                   activeforeground=C["text"], relief="flat", bd=0, padx=12, pady=8,
                   font=("Segoe UI", 9), cursor="hand2").grid(
-                      row=3, column=0, columnspan=2, sticky="ew", padx=24, pady=(8, 16))
+                      row=4, column=0, columnspan=2, sticky="ew", padx=24, pady=(8, 16))
+
+    def _memory_edit(self, kind: str):
+        """Correct or forget the memory whose number is typed (same code path as the chat commands)."""
+        agent = getattr(self, "agent", None)
+        mid = self.memory_id_entry.get().strip().lstrip("#")
+        if agent is None or not mid.isdigit():
+            self._set_text(self.memory_result_text, "Type the memory's number (shown as #N on the right) first.")
+            return
+        if kind == "correct":
+            words = self.memory_fix_entry.get().strip()
+            if not words:
+                self._set_text(self.memory_result_text, "Type the corrected wording first.")
+                return
+            out = agent._memory_controls(f"correct memory {mid}: {words}")
+        else:
+            out = agent._memory_controls(f"forget memory {mid}")
+        self._set_text(self.memory_result_text, (out or {}).get("message", ""))
+        self.memory_fix_entry.delete(0, tk.END)
+        self._refresh_memory_view()
 
     @staticmethod
     def _set_text(widget, content: str):
@@ -2749,11 +2937,10 @@ class TomDesktopApp:
             f"{mem.status_line()}{total_str}   ·   this session: {st['retained']} stored, "
             f"{st['failed']} failed, {st['recalled']} recalls, {st['reflected']} reflections")
         lines = []
-        for item in mem.recent_journal(limit=30):
-            tags = item.get("tags") or []
-            kind = "RULE" if "preference" in tags else "TASK"
-            words = (item.get("metadata") or {}).get("user_words") or item.get("content", "")
-            lines.append(f"[{kind}] {item.get('timestamp', '')[:16].replace('T', ' ')}\n{words}\n")
+        for h in mem.list_memories(limit=40):           # the store itself: forgotten items are really gone
+            kind = "RULE" if h.is_preference else "TASK"
+            conf = f" · {h.confidence:.2f}" if h.confidence is not None else ""
+            lines.append(f"#{h.id}  [{kind}{conf} · {h.source or 'tom'}]  {h.when}\n{h.text}\n")
         self._set_text(self.memory_recent_text,
                        "\n".join(lines) or "Nothing stored yet. Correct TOM once "
                                            "(e.g. \"always put PDFs in Invoices\") and it will show up here.")
@@ -2790,7 +2977,7 @@ class TomDesktopApp:
         def work():
             try:
                 fut = asyncio.run_coroutine_threadsafe(
-                    agent.execute_task("what have you learned about me"), self._loop)
+                    agent.execute_task("what have you learned about me", interface="desktop"), self._loop)
                 msg = str(fut.result(timeout=90).get("message", ""))
             except Exception as exc:
                 msg = f"Reflection failed: {exc}"
@@ -3149,9 +3336,18 @@ class TomDesktopApp:
             pass
         self.root.after(1000, self._tick_clock)
 
-    def _animate_orb(self):
+    def _ui_hidden(self) -> bool:
         try:
-            if self.orb_canvas.winfo_exists():
+            return self.root.state() == "iconic"
+        except Exception:
+            return False
+
+    def _animate_orb(self):
+        # 3.9 ms per frame (measured 2026-10-21): 30 fps forever cost ~12 % of the UI thread in
+        # every view. Animate smoothly only while TOM is working, slowly when idle, not when minimized.
+        busy = self.processing or not self.agent_ready or self.voice_mode_enabled
+        try:
+            if not self._ui_hidden() and self.orb_canvas.winfo_exists():
                 w = self.orb_canvas.winfo_width()
                 h = self.orb_canvas.winfo_height()
                 if w > 10 and h > 10:
@@ -3161,7 +3357,7 @@ class TomDesktopApp:
                 self.orb.draw()
         except Exception:
             pass
-        self.root.after(33, self._animate_orb)
+        self.root.after(40 if busy else 100, self._animate_orb)
 
     def _on_agent_progress(self, message: str):
         """Show agent progress in the status bar and update the last thinking bubble."""
@@ -3200,18 +3396,20 @@ class TomDesktopApp:
         """30 fps animation loop driving the holographic dashboard canvas."""
         if not getattr(self, "_holo_anim_running", False):
             return
-        if hasattr(self, "_holo") and self.active_view == "dashboard":
+        if hasattr(self, "_holo") and self.active_view == "dashboard" and not self._ui_hidden():
             try:
                 self._holo.draw()
             except Exception:
                 pass
-        self.root.after(33, self._holo_anim_loop)
+        # 15.6 ms per frame (measured): 30 fps used half the UI thread on the dashboard. 15 fps.
+        self.root.after(66, self._holo_anim_loop)
 
     def _refresh_dashboard(self):
         """Push current stats into the holo dashboard and update legacy metric_vars."""
         # Legacy vars (used by charts view)
         self.metric_vars.get("messages", tk.StringVar()).set(str(self.activity_counts["messages"]))
-        self.metric_vars.get("voice",    tk.StringVar()).set("On" if self.voice_mode_enabled else "Off")
+        self.metric_vars.get("voice",    tk.StringVar()).set(
+            "Listening" if self.voice_mode_enabled else ("Ready" if self.voice else "Off"))
         self.metric_vars.get("agent",    tk.StringVar()).set(self.agent_profiles[self.active_agent_key]["label"])
         self.metric_vars.get("focus",    tk.StringVar()).set(self.active_view.title())
         self.metric_vars.get("docs",     tk.StringVar()).set(str(self.activity_counts["documents"]))
@@ -3328,53 +3526,86 @@ class TomDesktopApp:
                 self.root.after(33, self._render_chart_canvas)
 
     def _quick_action(self, cmd_prefix: str):
-        # Dispatch on the action's label: several command texts don't contain
-        # their keyword ("Check website safety: " vs "Security"), which sent
-        # those actions to the plain chat prefill instead of their prompt.
-        key = next((qa["label"] for qa in self.quick_actions if qa["cmd"] == cmd_prefix), cmd_prefix)
-        if "Web Auto" in key:
-            self._prompt_and_run("Enter URL or localhost port to verify:", self._handle_web_automation)
-        elif "Multi-Agent" in key:
-            self._prompt_and_run("Describe the multi-agent task:", self._handle_multi_agent)
-        elif "Security" in key:
-            self._prompt_and_run("Enter URL to check safety:", self._handle_security_check)
-        elif "File Anal" in key:
-            self._prompt_and_run("Enter file path to analyze:", self._handle_file_analysis)
-        elif "Data Anal" in key:
-            self._prompt_and_run("Enter file path or description for data analysis:", self._handle_data_analysis)
-        elif "Autonomous" in key:
-            self._prompt_and_run("Describe the autonomous task to execute:", self._handle_autonomous)
-        elif "Hardware" in key:
-            self._prompt_and_run("Describe hardware action (e.g., 'move mouse to 500 500', 'click', 'type Hello'):", self._handle_hardware)
-        elif "Skill" in key:
-            self._prompt_and_run("Enter skill name or question (e.g., 'design', 'data engineering', 'what skills are loaded?'):", self._handle_skill_query)
-        elif "ML" in key:
-            self._prompt_and_run("ML task (e.g., 'regression linear X=[1,2,3] y=[2,4,6]', 'classify knn', 'auto_ml', 'cluster kmeans', 'ts arima'):", self._handle_ml)
-        elif "IoT" in key:
-            self._prompt_and_run("IoT task (e.g., 'esp32 dht11 mqtt', 'micropython esp8266', 'protocol mqtt broker', 'sensor bme280'):", self._handle_iot)
-        elif "VLSI" in key:
-            self._prompt_and_run("VLSI task (e.g., 'verilog counter width=8', 'rtl fsm states=4', 'embedded stm32 gpio', 'freertos tasks=3'):", self._handle_vlsi)
-        elif "Env" in key:
-            self._prompt_and_run("Env task (e.g., 'create venv', 'install flask', 'update all', 'migrate 3.11', 'check conflicts', 'analyze project'):", self._handle_env)
-        elif "News" in key:
-            self._prompt_and_run("News task (e.g., 'daily briefing', 'tech roundup', 'world events', 'search AI advances', 'trending'):", self._handle_news)
-        elif "Voice+" in key:
-            self._prompt_and_run("Voice+ task (e.g., 'analyze emotion text: I feel sad', 'start conversation', 'assess mental state', 'speak Hello world'):", self._handle_voice_enhanced)
-        elif "Game Dev" in key:
-            self._prompt_and_run("Game dev command (e.g., 'scaffold pygame my_game platformer', 'script unity player movement', 'engines', 'installed'):", self._handle_game_dev)
-        elif "Blender" in key:
-            self._prompt_and_run("Blender command (e.g., 'cube', 'sphere', 'terrain', 'house', 'lights', 'render', 'animation', 'list'):", self._handle_blender)
-        elif "Media Edit" in key or "Media" in key:
-            self._prompt_and_run("Media edit (e.g., 'trim video C:/clip.mp4 from 5s for 10s', 'apply sepia filter to photo C:/pic.png', 'resize photo C:/pic.png to 800x600'):", self._handle_media)
-        elif "Auto Scaler" in key or "Scaler" in key:
-            self._prompt_and_run("Auto scaler (e.g., 'status', 'system resources', 'performance report', 'simulate load with 20 tasks', 'optimal workers for io-bound tasks'):", self._handle_scaler)
-        elif "Auto-Update" in key:
-            self._prompt_and_run("Auto-update command (e.g., 'check', 'pull', 'pip', 'full', 'research <topic>', 'trending', 'history'):", self._handle_auto_update)
-        else:
-            self._show_view("chat")
-            self.input_var.set(cmd_prefix)
+        """A quick action switches TOM into that kind of work (tom_core.skill_modes).
+
+        It used to open a dialog asking for a raw URL / fixed syntax and call a handler directly,
+        bypassing the agent (owner report 2026-10-21). Now the next message — typed, clicked from
+        the examples, or spoken — goes through the agent with the mode as a hint.
+        """
+        label = next((qa["label"] for qa in self.quick_actions if qa["cmd"] == cmd_prefix), "")
+        mode_key = skill_modes.BY_LABEL.get(label)
+        if mode_key:
+            self._enter_skill_mode(mode_key)
+            return
+        self._legacy_quick_action(cmd_prefix)
+
+    def _enter_skill_mode(self, mode_key: str):
+        mode = skill_modes.MODES[mode_key]
+        self._skill_mode = mode
+        self._mode_file = ""
+        self._show_view("chat")
+        self.mode_title.configure(text=f"●  {mode.label} mode")
+        self.mode_hint.configure(text=mode.hint + ("  Click an example or type your own request." if mode.examples
+                                                    else ""))
+        for child in self.mode_examples.winfo_children():
+            child.destroy()
+        for example in mode.examples:
+            tk.Button(self.mode_examples, text=example, command=lambda e=example: self._send_mode_example(e),
+                      bg=C["surface2"], fg=C["text"], activebackground=C["border2"], activeforeground=C["text"],
+                      relief="flat", bd=0, padx=8, pady=3, font=("Segoe UI", 8), cursor="hand2"
+                      ).pack(side="left", padx=(0, 6))
+        self.mode_bar.pack(fill="x", pady=(0, 4))
+        if mode.needs_file:
+            self._pick_mode_file(mode)
+        try:
             self.input_entry.focus_set()
-            self.input_entry.icursor(tk.END)
+        except Exception:
+            pass
+
+    _MODE_FILE_TYPES = {
+        "data": [("Data files", "*.csv *.xlsx *.xls *.json *.tsv"), ("All files", "*.*")],
+        "media": [("Video and photos", "*.mp4 *.mov *.avi *.mkv *.webm *.png *.jpg *.jpeg *.gif *.bmp *.webp"),
+                  ("All files", "*.*")],
+        "any": [("All files", "*.*")],
+    }
+
+    def _pick_mode_file(self, mode):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(parent=self.root, title=f"TOM — choose a file for {mode.label}",
+                                          filetypes=self._MODE_FILE_TYPES.get(mode.needs_file, [("All files", "*.*")]))
+        if path:
+            self._mode_file = os.path.normpath(path)
+            self.mode_title.configure(text=f"●  {mode.label} mode  —  {os.path.basename(path)}")
+            self._append_chat("meta", f"{mode.label}: using {self._mode_file}. Ask what you want to know or do.")
+        else:
+            self._append_chat("meta", f"{mode.label}: no file chosen. Use \U0001F4CE File to pick one, "
+                                      "or type the file's full path in your request.")
+
+    def _exit_skill_mode(self):
+        self._skill_mode = None
+        self._mode_file = ""
+        self.mode_bar.pack_forget()
+
+    def _send_mode_example(self, example: str):
+        if self.processing:
+            return
+        self.send_message(text=example)
+
+    def _mode_text(self, text: str) -> str:
+        """The text sent to the agent for the active mode (tag + the chosen file, if any)."""
+        mode = self._skill_mode
+        if mode is None:
+            return text
+        if self._mode_file:
+            text = f"{text} \"{self._mode_file}\""
+        return skill_modes.tag(text, mode.key)
+
+    def _legacy_quick_action(self, cmd_prefix: str):
+        """An action without a mode: put its text in the chat box for the user to complete."""
+        self._show_view("chat")
+        self.input_var.set(cmd_prefix)
+        self.input_entry.focus_set()
+        self.input_entry.icursor(tk.END)
 
     def _ask_approval(self, request) -> bool:
         """Approval dialog for the agent; callable from any thread.
@@ -3406,79 +3637,79 @@ class TomDesktopApp:
         self._append_chat("meta", f"{'Approved' if answer['ok'] else 'Denied'}: {request.action}")
         return answer["ok"]
 
-    def _prompt_and_run(self, prompt_text: str, handler):
-        import tkinter.simpledialog as sd
-        result = sd.askstring("TOM", prompt_text, parent=self.root)
-        if result:
-            # Run off the UI thread: several handlers do network or long
-            # subprocess work (news feeds, pip, git, renders) that froze the
-            # window until they finished. Handlers only report via
-            # _append_chat/_enqueue, which are safe from any thread.
-            threading.Thread(target=handler, args=(result.strip(),), daemon=True).start()
+    # \u2500\u2500 Push-to-talk (PRD \u00a77) \u2014 the same flow as the PySide6 app \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # One press = one spoken request: listen until the user stops talking (or presses again = Done),
+    # recognise it on this machine by default, run the words through TaskService exactly like a
+    # typed message but with interface="voice", and read the reply aloud unless Mute is on.
+    # voice_mode_enabled is True from the press until the words are recognised.
+    _TALK_LABEL = "  \U0001F3A4  Push to talk"
+    _MIC_LABEL = "\U0001F3A4  Talk"
 
-    def _toggle_voice_mode(self):
+    def _push_to_talk(self):
         if not self.voice:
             reason = getattr(self, "voice_init_error", "")
             self._append_chat("meta", "Voice tools are not available"
                               + (f": {reason}" if reason else " in this environment.")
                               + " Type 'voice check' in chat for a full diagnosis.")
             return
-        if not self.voice_mode_enabled:
-            self.voice.input_enabled = True
-            self.voice.output_enabled = True
-            self.voice._setup_input()
-            self.voice._setup_output()
-            status = self.voice.status()
-            if not status["voice_input_enabled"]:
-                self._append_chat("meta", f"Voice mode could not start: {status.get('voice_input_error', 'unknown error')}")
-                return
-            self.voice_mode_enabled = True
-            self.voice_btn.configure(text="  \u266a  Voice: ON", bg=C["blue"], fg="#ffffff")
-
-            if self.agent_ready and self.agent:
-                self._show_view("chat")
-
-                def _on_voice_status(state, text):
-                    self._enqueue(self._append_chat, "meta", f"[{state.upper()}] {text}")
-                    if state == "listening":
-                        self._enqueue(self._set_status, "Listening...")
-                        self._enqueue(setattr, self.orb, "status", "loading")
-                    elif state == "processing":
-                        self._enqueue(self._set_status, "Processing...")
-                        self._enqueue(setattr, self.orb, "status", "loading")
-                    elif state == "speaking":
-                        self._enqueue(self._set_status, "Speaking...")
-                        self._enqueue(setattr, self.orb, "status", "ready")
-                    elif state in ("idle", "error"):
-                        self._enqueue(self._set_status, "Ready")
-                        self._enqueue(self._stop_voice_ui)
-                        self._enqueue(setattr, self.orb, "status", "ready")
-
-                self.voice.start_conversation_mode(
-                    process_fn=self.agent.generate_voice_response,
-                    on_status=_on_voice_status,
-                )
-                self._append_chat("assistant",
-                    "Voice mode activated! I'm listening. Speak naturally \u2014 say 'stop' or 'bye' to end the conversation.")
-            else:
-                self._append_chat("meta", "Voice mode enabled. TOM is still initializing...")
-        else:
-            self._stop_voice_ui()
+        if not self.agent_ready:
+            self._append_chat("meta", "TOM is still initializing. Please wait.")
+            return
+        if self.voice_mode_enabled:
+            from tom_core.voice import push_to_talk
+            push_to_talk.finish(self.voice)           # pressed again: the request is complete
+            self._set_status("Recognising...")
+            return
+        if self.processing:
+            self._append_chat("meta", "TOM is still answering the last request. Press Talk when it's done.")
+            return
+        window = self._voice_ui_window
+        if window is not None and (window._conversation_active or window._ptt_active):
+            self._append_chat("meta", "The Voice window is using the microphone right now.")
+            return
+        self.voice_mode_enabled = True
+        self._set_talk_buttons(listening=True)
+        self._show_view("chat")
+        self._set_status("Listening...")
+        self._append_chat("meta", "Listening\u2026 speak now. Take your time; press Talk again when you're done.")
         self._refresh_dashboard()
 
-    def _stop_voice_ui(self):
+        def _listen():
+            from tom_core.voice import push_to_talk
+            try:
+                error = push_to_talk.prepare(self.voice, speak=False)    # keep the Mute setting
+                heard = (push_to_talk.Heard("", f"Voice input could not start: {error}") if error
+                         else push_to_talk.capture(self.voice))
+            except Exception as exc:
+                heard = push_to_talk.Heard("", f"Voice error: {exc}")
+            self._enqueue(self._on_push_to_talk_heard, heard)
+
+        threading.Thread(target=_listen, name="tom-tk-listen", daemon=True).start()
+
+    def _on_push_to_talk_heard(self, heard):
         self.voice_mode_enabled = False
-        if self.voice:
-            self.voice.stop_conversation_mode()
-            # Restore the flags from startup (env/.env controlled) instead of
-            # hard-disabling: forcing output off here also silenced spoken
-            # chat replies for the rest of the session after one toggle.
-            self.voice.input_enabled = os.environ.get(
-                "VOICE_INPUT_ENABLED", "true").lower() == "true"
-            self.voice.output_enabled = os.environ.get(
-                "VOICE_OUTPUT_ENABLED", "true").lower() == "true"
-        self.voice_btn.configure(text="  \u266a  Voice Mode", bg=C["surface2"], fg=C["text"])
+        self._set_talk_buttons(listening=False)
         self._set_status("Ready")
+        self._append_chat("meta", heard.message)
+        if heard.text and self.processing:
+            # A typed message was sent while the microphone was open.
+            self._append_chat("meta", f"Not sent (TOM is busy): \u201c{heard.text}\u201d")
+        elif heard.text:
+            self.activity_counts["voice"] += 1
+            self.recent_events.append(f"Voice: {heard.text[:60]}")
+            self.send_message(text=heard.text, interface="voice")
+            return
+        self._refresh_dashboard()
+
+    def _set_talk_buttons(self, listening: bool):
+        # While listening the same buttons read "Done": pressing them ends the request.
+        if listening:
+            self.voice_btn.configure(text="  \u25a0  Done talking", bg=C["blue"], fg="#ffffff")
+        else:
+            self.voice_btn.configure(text=self._TALK_LABEL, bg=C["surface2"], fg=C["text"])
+        mic = getattr(self, "mic_btn", None)
+        if mic is not None:
+            mic.configure(text="\u25a0  Done" if listening else self._MIC_LABEL)
 
     def _run_active_agent_action(self):
         if self.processing:
@@ -3506,100 +3737,69 @@ class TomDesktopApp:
         self._voice_ui_window = VoiceUIWindow(self.root, self)
         self._show_view("chat")
 
-    def _on_mic_click(self):
-        if not self.voice:
-            self._append_chat("meta", "Voice tools not available.")
-            return
-        if not getattr(self.voice, "input_enabled", False):
-            err = getattr(self.voice, "_input_error", "Voice input disabled.")
-            self._append_chat("meta", f"Voice input unavailable: {err}")
-            return
-        if self.processing:
-            return
-        self._append_chat("meta", "Listening for your voice...")
-        try:
-            self.mic_btn.configure(state="disabled")
-        except Exception:
-            pass
-
-        def listen_and_insert():
-            try:
-                out = self.voice.listen_once()
-                if out.get("status") == "success" and out.get("text"):
-                    recognized = out["text"]
-                    self.activity_counts["voice"] += 1
-                    self.recent_events.append(f"Voice: {recognized}")
-                    self._enqueue(self._refresh_dashboard)
-                    self._enqueue(self._append_chat, "meta", f"Voice captured: {recognized}")
-                    self._enqueue(self.input_var.set, recognized)
-                else:
-                    self._enqueue(self._append_chat, "meta", f"Voice: {out.get('message')}")
-            except Exception as exc:
-                self._enqueue(self._append_chat, "meta", f"Voice listen failed: {exc}")
-            finally:
-                self._enqueue(lambda: self.mic_btn.configure(state="normal"))
-
-        self.input_entry.focus_set()
-        threading.Thread(target=listen_and_insert, daemon=True).start()
-
     _VOICE_TRIGGER_WORDS = (
         "talk", "voice mode", "talk to me", "let's talk", "lets talk",
         "voice chat", "conversation mode", "hey tom let's talk",
         "start voice", "start talking",
     )
 
-    def send_message(self):
+    def send_message(self, text: str | None = None, interface: str = "desktop"):
+        """Send the chat box (typed), or `text` heard by push-to-talk with interface="voice"."""
         if self.processing:
             return
         if not self.agent_ready:
             self._append_chat("meta", "TOM is still initializing. Please wait.")
             return
-        text = self.input_var.get().strip()
-        if not text or (hasattr(self, '_input_has_placeholder') and self._input_has_placeholder):
-            return
+        if text is None:
+            text = self.input_var.get().strip()
+            if not text or (hasattr(self, '_input_has_placeholder') and self._input_has_placeholder):
+                return
 
-        if text.lower().strip() in self._VOICE_TRIGGER_WORDS:
+            if text.lower().strip() in self._VOICE_TRIGGER_WORDS:
+                self.input_var.set("")
+                self._push_to_talk()
+                return
+
             self.input_var.set("")
-            self._toggle_voice_mode()
-            return
-
-        self.input_var.set("")
         self.last_user_message = text
 
-        # Handle attachments — route images/files to analyze_file
+        # Handle attachments — an image/file goes to the agent's file analysis, through the agent
+        # like every other request (task record, safety, memory); this used to call
+        # agent.analyze_file straight from the UI.
         attached_files = list(self._attachments) if self._attachments else []
         self._clear_attachments()
+        attachment_path = ""
+        text_shown = False
 
         if attached_files:
             # Show image previews in chat for image attachments
             for atype, apath in attached_files:
                 if atype == "image":
                     self._append_chat_image("user", apath, text)
+                    text_shown = True
 
-            # Route to analyze_file for image/file attachments
             image_paths = [p for t, p in attached_files if t == "image"]
             file_paths = [p for t, p in attached_files if t == "file"]
             link_paths = [p for t, p in attached_files if t == "link"]
 
             if image_paths or file_paths:
-                analyze_path = (image_paths + file_paths)[0]
-                question = text if text else "Analyze this in detail. Describe what you see."
-                if not any(ap[0] == "image" for ap in attached_files):
-                    self._append_chat("user", text if text else f"Analyze: {os.path.basename(analyze_path)}")
-                self._append_chat("meta", f"TOM is analyzing {os.path.basename(analyze_path)}...")
-                self.send_btn.configure(state="disabled")
-                self.stop_btn.configure(state="normal")
-                self.orb.status = "loading"
-                self.processing = True
-                threading.Thread(target=self._process_file_analysis,
-                                 args=(analyze_path, question), daemon=True).start()
-                return
+                attachment_path = (image_paths + file_paths)[0]
+                if not text:
+                    text = "Analyze this in detail. Describe what you see."
             elif link_paths:
                 text = f"Analyze this web page: {link_paths[0]}" + (f"\n{text}" if text else "")
 
         full_text = text
         prefix = self.agent_profiles[self.active_agent_key]["prefix"].strip()
-        routed = f"{prefix}\n\nUser request: {full_text}" if prefix else full_text
+        mode = getattr(self, "_skill_mode", None)       # set when the chat view is built
+        if attachment_path and not (mode is not None and mode.needs_file):
+            routed = skill_modes.tag(f'{full_text} "{attachment_path}"', "file")
+        elif mode is not None:                                # a quick-action mode takes precedence
+            if attachment_path:
+                self._mode_file = attachment_path              # e.g. Media Edit on the attached clip
+            routed = self._mode_text(full_text)
+        else:
+            routed = f"{prefix}\n\nUser request: {full_text}" if prefix else full_text
 
         self.activity_counts["messages"] += 1
         if self.active_agent_key == "email":
@@ -3609,14 +3809,17 @@ class TomDesktopApp:
 
         self.recent_events.append(f"{self.agent_profiles[self.active_agent_key]['label']}: {text[:60]}")
         self._refresh_dashboard()
-        self._append_chat("user", text)
+        if not text_shown:
+            self._append_chat("user", text)
         self._append_chat("meta", f"TOM is thinking...")
 
         self.send_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.orb.status = "loading"
         self.processing = True
-        threading.Thread(target=self._process_message, args=(routed,), daemon=True).start()
+        from tom_core.policy import get_policy
+        get_policy().resume()                      # a new request lifts an earlier Stop
+        threading.Thread(target=self._process_message, args=(routed, interface), daemon=True).start()
 
         # Update header
         self._status_phrases = ["Processing...", "Thinking...", "Analyzing...", "Working..."]
@@ -3624,10 +3827,10 @@ class TomDesktopApp:
         self._status_char_idx = 0
         self._status_direction = 1
 
-    def _process_message(self, text: str):
+    def _process_message(self, text: str, interface: str = "desktop"):
         future = None
         try:
-            future = asyncio.run_coroutine_threadsafe(self.agent.execute_task(text), self._loop)
+            future = asyncio.run_coroutine_threadsafe(self.agent.execute_task(text, interface=interface), self._loop)
             self._active_task_future = future
             result = future.result(timeout=180)
             if future is not self._active_task_future:
@@ -3651,14 +3854,30 @@ class TomDesktopApp:
             elif future is self._active_task_future:
                 self._enqueue(self._on_response_ready, f"Error: {exc}", None, None)
 
+    def _toggle_pause(self):
+        from tom_core.policy import get_policy
+        policy = get_policy()
+        if policy.paused:
+            policy.unpause()
+            self.pause_btn.configure(text="⏸ Pause", fg=C["text2"])
+            self._set_status("Resumed")
+        else:
+            policy.pause()
+            self.pause_btn.configure(text="▶ Resume", fg=C["blue"])
+            self._set_status("Paused — tasks wait before their next action")
+
     def _cancel_active_work(self):
-        """Stop a pending task and any currently spoken response."""
+        """Stop a pending task and any currently spoken response (PRD §11.2 emergency stop)."""
+        from tom_core.policy import get_policy
+        get_policy().halt("Stop pressed in the desktop app")      # no new tool calls start
+        if get_policy().paused:                                   # a stop also ends any pause
+            get_policy().unpause()
+            if getattr(self, "pause_btn", None) is not None:
+                self.pause_btn.configure(text="⏸ Pause", fg=C["text2"])
         future = self._active_task_future
         if future is not None and not future.done():
             future.cancel()
-        if self.voice_mode_enabled:
-            self._stop_voice_ui()
-        elif self.voice:
+        if self.voice:
             self.voice.stop_speaking()
             self.voice.stop_conversation_mode()
         self._active_task_future = None
@@ -3937,15 +4156,6 @@ class TomDesktopApp:
 
     # ── New Action Handlers ────────────────────────────────────────────
 
-    def _handle_web_automation(self, detail: str):
-        if not self.agent or not self.agent_ready:
-            self._append_chat("meta", "TOM is still initializing.")
-            return
-        if not detail:
-            self._append_chat("meta", "Provide a URL or localhost port to verify.")
-            return
-        threading.Thread(target=self._run_web_automation, args=(detail,), daemon=True).start()
-
     def _run_web_automation(self, detail: str):
         try:
             future = asyncio.run_coroutine_threadsafe(
@@ -3972,15 +4182,6 @@ class TomDesktopApp:
             return await self.agent.browser_tools.wait_and_verify(url)
         return {"status": "error", "message": "Web automation not available"}
 
-    def _handle_multi_agent(self, detail: str):
-        if not self.orchestrator:
-            self._append_chat("meta", "Multi-agent system not available.")
-            return
-        if not detail:
-            self._append_chat("meta", "Describe the task for the multi-agent system.")
-            return
-        threading.Thread(target=self._run_multi_agent, args=(detail,), daemon=True).start()
-
     def _run_multi_agent(self, detail: str):
         try:
             future = asyncio.run_coroutine_threadsafe(
@@ -3991,35 +4192,6 @@ class TomDesktopApp:
             self._enqueue(self._append_chat, "assistant", f"[Multi-Agent] {msg}")
         except Exception as exc:
             self._enqueue(self._append_chat, "meta", f"[Multi-Agent Error] {exc}")
-
-    def _handle_security_check(self, detail: str):
-        if not detail:
-            self._append_chat("meta", "Provide a URL to check.")
-            return
-        try:
-            from safety.guards import SafetyGuards
-            safety = SafetyGuards()
-            analysis = safety.analyze_website(detail)
-            score = analysis.get("score", 0)
-            trust = analysis.get("trust_level", "unknown")
-            flags = analysis.get("flags", [])
-            rec = analysis.get("recommendation", "unknown")
-            msg = (
-                f"[Security Check] {detail}\n"
-                f"  Trust Level: {trust}\n"
-                f"  Safety Score: {score}/100\n"
-                f"  Flags: {', '.join(flags) if flags else 'none'}\n"
-                f"  Recommendation: {rec}"
-            )
-            self._enqueue(self._append_chat, "assistant", msg)
-        except Exception as exc:
-            self._enqueue(self._append_chat, "meta", f"[Security Error] {exc}")
-
-    def _handle_auto_debug(self, detail: str):
-        if not detail:
-            self._append_chat("meta", "Provide a URL to auto-debug.")
-            return
-        threading.Thread(target=self._run_auto_debug, args=(detail,), daemon=True).start()
 
     def _run_auto_debug(self, detail: str):
         try:
@@ -4043,15 +4215,6 @@ class TomDesktopApp:
 
     # ── v3 Tool Handlers ────────────────────────────────────────────────
 
-    def _handle_file_analysis(self, detail: str):
-        if not self.file_analyzer:
-            self._append_chat("meta", "File Analyzer not available.")
-            return
-        if not detail or not os.path.exists(detail):
-            self._append_chat("meta", f"File not found: {detail}")
-            return
-        threading.Thread(target=self._run_file_analysis, args=(detail,), daemon=True).start()
-
     def _run_file_analysis(self, filepath: str):
         try:
             result = self.file_analyzer.analyze(filepath)
@@ -4061,12 +4224,6 @@ class TomDesktopApp:
         except Exception as exc:
             err_msg = f"[File Analysis Error] {exc}"
             self._enqueue(lambda m=err_msg: self._append_chat("meta", m))
-
-    def _handle_data_analysis(self, detail: str):
-        if not self.data_analysis:
-            self._append_chat("meta", "Data Analysis Engine not available.")
-            return
-        threading.Thread(target=self._run_data_analysis, args=(detail,), daemon=True).start()
 
     def _run_data_analysis(self, detail: str):
         try:
@@ -4095,15 +4252,6 @@ class TomDesktopApp:
             err_msg = f"[Data Analysis Error] {exc}"
             self._enqueue(lambda m=err_msg: self._append_chat("meta", m))
 
-    def _handle_autonomous(self, detail: str):
-        if not self.autonomous:
-            self._append_chat("meta", "Autonomous Agent not available.")
-            return
-        if not detail:
-            self._append_chat("meta", "Describe the task for the autonomous agent.")
-            return
-        threading.Thread(target=self._run_autonomous, args=(detail,), daemon=True).start()
-
     def _run_autonomous(self, detail: str):
         try:
             self._enqueue(lambda: self._append_chat("meta", f"[Autonomous] Starting task: {detail[:80]}..."))
@@ -4123,242 +4271,6 @@ class TomDesktopApp:
             err_msg = f"[Autonomous Error] {exc}"
             self._enqueue(lambda m=err_msg: self._append_chat("meta", m))
 
-    def _handle_hardware(self, detail: str):
-        """Execute a hardware control command."""
-        if not self.hardware or not self.hardware.is_available():
-            self._append_chat("meta", "[Hardware Control not available - install pyautogui: pip install pyautogui]")
-            return
-        raw = detail.strip()
-        detail = raw.lower()
-        # Coordinates may come with filler words ("move mouse to 500 500",
-        # "click at 10, 20"), so pick the numbers out instead of splitting.
-        nums = [int(n) for n in re.findall(r"-?\d+", detail)]
-        response_msg = ""
-        try:
-            if detail.startswith("move") or detail.startswith("move mouse"):
-                if len(nums) >= 2:
-                    x, y = nums[0], nums[1]
-                    r = self.hardware.move_mouse(x, y)
-                    response_msg = f"Moved mouse to ({x}, {y})"
-                else:
-                    response_msg = "Usage: move mouse <x> <y>"
-            elif detail.startswith("click"):
-                if len(nums) >= 2:
-                    r = self.hardware.click(nums[0], nums[1])
-                    response_msg = f"Clicked at ({nums[0]}, {nums[1]})"
-                else:
-                    r = self.hardware.click()
-                    pos = self.hardware.get_mouse_position()
-                    response_msg = f"Clicked at current position"
-            elif detail.startswith("right") or detail.startswith("right click"):
-                r = self.hardware.right_click()
-                response_msg = "Right clicked"
-            elif detail.startswith("double") or detail.startswith("double click"):
-                r = self.hardware.double_click()
-                response_msg = "Double clicked"
-            elif detail.startswith("type"):
-                # Type the user's original text, not the lowercased copy.
-                text = raw[len("type"):].strip().strip("\"'")
-                r = self.hardware.type_text(text)
-                response_msg = f"Typed {len(text)} characters"
-            elif detail.startswith("press"):
-                key = detail.replace("press", "", 1).strip()
-                r = self.hardware.press_key(key)
-                response_msg = f"Pressed key: {key}"
-            elif detail.startswith("scroll"):
-                clicks = nums[0] if nums else 3
-                r = self.hardware.scroll(clicks)
-                response_msg = f"Scrolled {clicks} clicks"
-            elif detail.startswith("screenshot") or detail.startswith("ss"):
-                r = self.hardware.screenshot()
-                response_msg = f"Screenshot saved: {r.get('path', '')}"
-            elif detail.startswith("position") or detail.startswith("where"):
-                pos = self.hardware.get_mouse_position()
-                response_msg = f"Mouse position: ({pos.get('x')}, {pos.get('y')})"
-            elif detail.startswith("focus"):
-                title = detail.replace("focus", "", 1).strip()
-                r = self.hardware.focus_window(title)
-                response_msg = f"Focused window: {title}"
-            elif detail.startswith("volume"):
-                parts = detail.replace("volume", "").strip().split()
-                if not parts:
-                    v = self.hardware.get_volume()
-                    if v.get("status") == "success":
-                        response_msg = f"Volume: {v['percent']}% {'(muted)' if v.get('muted') else ''}"
-                    else:
-                        response_msg = v.get("message", "Volume unknown")
-                elif parts[0] == "up":
-                    r = self.hardware.volume_up()
-                    response_msg = f"Volume up: {r.get('percent', '?')}%"
-                elif parts[0] == "down":
-                    r = self.hardware.volume_down()
-                    response_msg = f"Volume down: {r.get('percent', '?')}%"
-                elif parts[0] == "mute":
-                    r = self.hardware.mute_audio()
-                    response_msg = "Audio muted"
-                elif parts[0] == "unmute":
-                    r = self.hardware.unmute_audio()
-                    response_msg = "Audio unmuted"
-                else:
-                    try:
-                        level = int(parts[0]) / 100.0
-                        r = self.hardware.set_volume(level)
-                        response_msg = f"Volume set to {parts[0]}%"
-                    except ValueError:
-                        response_msg = "Usage: volume [up|down|mute|unmute|<percent>]"
-            elif detail.startswith("speaker"):
-                r = self.hardware.open_speaker_settings()
-                response_msg = r.get("message", "Open speaker settings")
-            elif detail.startswith("mixer"):
-                r = self.hardware.open_volume_mixer()
-                response_msg = r.get("message", "Open volume mixer")
-            elif detail.startswith("sysinfo") or detail.startswith("system info"):
-                r = self.hardware.get_system_info()
-                if r.get("status") == "success":
-                    info = r["info"]
-                    response_msg = "System Info:\n"
-                    for k, v in info.items():
-                        response_msg += f"  {k}: {v}\n"
-                else:
-                    response_msg = r.get("message", "System info not available")
-            elif detail.startswith("display") or detail.startswith("monitor"):
-                r = self.hardware.get_display_info()
-                if r.get("status") == "success":
-                    response_msg = f"Displays: {r.get('count', 0)}\n"
-                    for d in r.get("displays", []):
-                        response_msg += f"  {d.get('width')}x{d.get('height')}\n"
-                else:
-                    response_msg = r.get("message", "Display info not available")
-            else:
-                response_msg = ("Available commands: move mouse <x> <y>, click [x y], "
-                               "right click, double click, type <text>, press <key>, "
-                               "scroll <clicks>, screenshot, position, focus <window>, "
-                               "volume [up|down|mute|unmute|<percent>], speaker, mixer, "
-                               "sysinfo, display")
-        except Exception as exc:
-            response_msg = f"Hardware error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[Hardware] {response_msg}"))
-
-    def _handle_skill_query(self, detail: str):
-        """Query the skill system for domain knowledge."""
-        if not self.skills:
-            self._append_chat("meta", "[Skill System not available]")
-            return
-        detail = detail.strip()
-        response_lines = []
-        try:
-            if "?" in detail or "what" in detail.lower() or "how" in detail.lower():
-                skills = self.skills.search_skills(detail)
-                if skills:
-                    response_lines.append(f"Found relevant skills: {', '.join(skills[:5])}")
-                    context = self.skills.get_context_for_task(detail)
-                    if context:
-                        response_lines.append("Context:\n" + context[:2000])
-                else:
-                    response_lines.append("No skills matched your query.")
-            elif detail.lower() in ("list", "ls", "all", "loaded"):
-                skill_list = self.skills.list_skills()
-                response_lines.append(f"Loaded skills ({len(skill_list)}):")
-                for s in skill_list:
-                    response_lines.append(f"  - {s}")
-            else:
-                content = self.skills.get_skill_by_domain(detail)
-                if content:
-                    lines = content.split("\n")
-                    response_lines.append(f"Skill: {detail}")
-                    response_lines.append("\n".join(lines[:80]))
-                else:
-                    skills = self.skills.search_skills(detail)
-                    if skills:
-                        response_lines.append(f"Query '{detail}' matched: {', '.join(skills[:5])}")
-                    else:
-                        response_lines.append(f"No skill found for '{detail}'. Use 'list' to see available skills.")
-        except Exception as exc:
-            response_lines.append(f"Skill query error: {exc}")
-        self._enqueue(lambda: self._append_chat("assistant", "\n".join(response_lines)))
-
-    def _handle_ml(self, detail: str):
-        """Handle ML tasks."""
-        if not self.ml_engine:
-            self._append_chat("meta", "[ML Engine not available]")
-            return
-        detail = detail.strip()
-        response_msg = ""
-        try:
-            parts = detail.split()
-            if not parts:
-                response_msg = ("Usage: ML <category> <params>. Categories: regression, classify, cluster, "
-                               "dimreduce, deep, timeseries, anomaly, ensemble, feateng, tune, evaluate, "
-                               "crossval, automl, list")
-            elif parts[0] == "list":
-                cats = ["regression (13)", "classification (15)", "clustering (10)",
-                        "dim reduction (8)", "ensemble (6)", "deep learning (3)",
-                        "time series (7)", "anomaly detection (5)", "feature eng (12)",
-                        "hyperparameter tuning (4)", "cross validation (6)"]
-                response_msg = "ML Engine: 89 algorithms\n" + "\n".join(f"  - {c}" for c in cats)
-            elif parts[0] == "auto" or parts[0] == "automl":
-                response_msg = "AutoML: automatic algorithm selection."
-                data_match = self._parse_ml_data(" ".join(parts[1:]))
-                if data_match:
-                    X, y = data_match
-                    res = self.ml_engine.auto_ml(X, y)
-                    response_msg = f"AutoML: {res.get('best_algorithm', 'N/A')} with CV score {res.get('best_score', 'N/A')}\n"
-                    response_msg += res.get("report", "No report generated.")
-            elif parts[0] == "regression" or parts[0] == "reg":
-                algo = parts[1] if len(parts) > 1 else "linear"
-                data = self._parse_ml_data(" ".join(parts[2:]))
-                if data:
-                    X, y = data
-                    res = self.ml_engine.regression(algo, X, y)
-                    response_msg = f"Regression ({algo}): {res.get('message', 'OK')}"
-                    if "metrics" in res:
-                        response_msg += f"\n{res['metrics']}"
-                    if "code" in res:
-                        response_msg += f"\n{res['code'][:500]}"
-                else:
-                    res = self.ml_engine.regression(algo, [[1],[2],[3]], [2,4,6])
-                    response_msg = f"Regression demo ({algo}): {res.get('message', 'OK')}"
-            elif parts[0] == "classify" or parts[0] == "class":
-                algo = parts[1] if len(parts) > 1 else "knn"
-                data = self._parse_ml_data(" ".join(parts[2:]))
-                if data:
-                    X, y = data
-                    res = self.ml_engine.classify(algo, X, y)
-                    response_msg = f"Classification ({algo}): {res.get('message', 'OK')}"
-                else:
-                    res = self.ml_engine.classify(algo, [[1],[2],[3],[4]], [0,0,1,1])
-                    response_msg = f"Classification demo ({algo}): {res.get('message', 'OK')}"
-            elif parts[0] == "cluster":
-                algo = parts[1] if len(parts) > 1 else "kmeans"
-                data = self._parse_ml_data(" ".join(parts[2:]), has_y=False)
-                if data:
-                    X = data
-                    res = self.ml_engine.cluster(algo, X)
-                    response_msg = f"Clustering ({algo}): {res.get('message', 'OK')}"
-                else:
-                    res = self.ml_engine.cluster(algo, [[1,2],[2,3],[8,9],[9,10]])
-                    response_msg = f"Clustering demo ({algo}): {res.get('message', 'OK')}"
-            elif parts[0] == "ts" or parts[0] == "timeseries":
-                algo = parts[1] if len(parts) > 1 else "sma"
-                import ast
-                data_match = " ".join(parts[2:]).strip()
-                response_msg = f"Time Series ({algo}): Use full dataset in tools. Running with sample data."
-                res = self.ml_engine.time_series(algo, [10,12,15,14,18,20,22,25])
-                response_msg = f"Time Series ({algo}): {res.get('message', 'OK')}"
-            elif parts[0] == "anomaly":
-                algo = parts[1] if len(parts) > 1 else "isolation_forest"
-                res = self.ml_engine.detect_anomalies(algo, [[1],[2],[10],[3],[4],[100]])
-                response_msg = f"Anomaly Detection ({algo}): {res.get('message', 'OK')}"
-            elif parts[0] == "tune":
-                response_msg = "Hyperparameter tuning: use gridsearch/randomsearch with full dataset."
-            elif parts[0] == "evaluate":
-                response_msg = "Model evaluation: use evaluate(y_true, y_pred, task_type)."
-            else:
-                response_msg = f"Unknown ML command: {parts[0]}. Use 'list' to see available categories."
-        except Exception as exc:
-            response_msg = f"ML Error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[ML] {response_msg}"))
-
     def _parse_ml_data(self, text, has_y=True):
         """Parse simple inline data like X=[1,2,3] y=[2,4,6]."""
         import ast
@@ -4375,350 +4287,6 @@ class TomDesktopApp:
         except Exception:
             pass
         return None
-
-    def _handle_iot(self, detail: str):
-        """Handle IoT tasks."""
-        if not self.iot_engine:
-            self._append_chat("meta", "[IoT Engine not available]")
-            return
-        detail = detail.strip()
-        response_msg = ""
-        try:
-            parts = detail.lower().split()
-            if not parts:
-                response_msg = ("Usage: IoT <type> <params>. Types: esp32, esp8266, micropython, "
-                               "protocol, sensor, backend, pinout, architecture, config, list")
-            elif parts[0] == "list":
-                boards = ["esp32", "esp8266", "micropython"]
-                protocols = ["mqtt", "http", "websocket", "coap", "ble", "lora", "i2c", "spi", "uart"]
-                sensors = ["dht11", "dht22", "bme280", "hc-sr04", "pir", "bh1750", "ssd1306", "gps"]
-                response_msg = (f"Boards: {', '.join(boards)}\n"
-                               f"Protocols: {', '.join(protocols)}\n"
-                               f"Sensors: {', '.join(sensors)}")
-            elif parts[0] in ("esp32", "esp8266"):
-                comps = [p for p in parts[1:] if p not in ("mqtt", "wifi", "http")]
-                has_mqtt = "mqtt" in parts
-                res = self.iot_engine.generate_esp_code(parts[0], comps or ["dht11"])
-                response_msg = f"IoT Firmware ({parts[0]}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "micropython":
-                comps = [p for p in parts[1:] if p not in ("mqtt", "wifi")]
-                res = self.iot_engine.generate_micropython(parts[1] if len(parts) > 1 else "esp32", comps or ["dht11"])
-                response_msg = f"MicroPython ({parts[1] if len(parts) > 1 else 'esp32'}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "protocol":
-                proto = parts[1] if len(parts) > 1 else "mqtt"
-                res = self.iot_engine.generate_protocol_code(proto, "client")
-                response_msg = f"Protocol ({proto}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "sensor":
-                sensor = parts[1] if len(parts) > 1 else "dht11"
-                res = self.iot_engine.generate_sensor_code(sensor, "i2c")
-                response_msg = f"Sensor ({sensor}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "backend":
-                backend = parts[1] if len(parts) > 1 else "aws"
-                res = self.iot_engine.generate_backend_code(backend, "mqtt")
-                response_msg = f"Backend ({backend}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "pinout":
-                comps = parts[1:] or ["dht11", "led"]
-                res = self.iot_engine.generate_pinout(comps, "esp32")
-                response_msg = f"Pinout (ESP32 + {', '.join(comps)}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "architecture" or parts[0] == "arch":
-                use_case = parts[1] if len(parts) > 1 else "smart_home"
-                res = self.iot_engine.generate_architecture(use_case, ["dht11", "led"])
-                response_msg = f"Architecture ({use_case}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "config":
-                device = parts[1] if len(parts) > 1 else "esp32"
-                res = self.iot_engine.generate_config(device)
-                response_msg = f"Config ({device}):\n{res.get('result', '')[:2000]}"
-            else:
-                response_msg = f"Unknown IoT command: {parts[0]}. Use 'list' to see available options."
-        except Exception as exc:
-            response_msg = f"IoT Error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[IoT] {response_msg}"))
-
-    def _handle_vlsi(self, detail: str):
-        """Handle VLSI and embedded systems tasks."""
-        if not self.vlsi_engine:
-            self._append_chat("meta", "[VLSI Engine not available]")
-            return
-        detail = detail.strip()
-        response_msg = ""
-        try:
-            parts = detail.lower().split()
-            if not parts:
-                response_msg = ("Usage: VLSI <type> <params>. Types: verilog, vhdl, systemverilog, "
-                               "rtl, embedded, freertos, zephyr, assembly, testbench, fpga, soc, list")
-            elif parts[0] == "list":
-                caps = ["HDL: verilog, vhdl, systemverilog",
-                        "RTL: adder, multiplier, counter, fsm, alu, ram, rom, fifo, cordic, fir/iir",
-                        "Embedded: stm32, avr, pic, riscv, msp430",
-                        "RTOS: freertos, zephyr, rtthread",
-                        "Assembly: arm, avr, riscv, x86",
-                        "Testbench: verilog, vhdl, systemverilog",
-                        "FPGA: xilinx, intel, lattice",
-                        "SoC: riscv, arm_cortex_m, custom"]
-                response_msg = "VLSI Engine capabilities:\n" + "\n".join(f"  - {c}" for c in caps)
-            elif parts[0] in ("verilog", "vhdl", "systemverilog", "sv"):
-                module = parts[1] if len(parts) > 1 else "counter"
-                width = 8
-                for p in parts[2:]:
-                    if p.startswith("width="):
-                        width = int(p.split("=")[1])
-                res = self.vlsi_engine.generate_hdl(parts[0], module, width=width)
-                response_msg = f"HDL ({parts[0]} - {module}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "rtl":
-                dt = parts[1] if len(parts) > 1 else "adder"
-                width = 8
-                for p in parts[2:]:
-                    if p.startswith("width="):
-                        width = int(p.split("=")[1])
-                res = self.vlsi_engine.generate_rtl(dt, width=width)
-                response_msg = f"RTL ({dt}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "embedded" or parts[0] == "emb":
-                target = parts[1] if len(parts) > 1 else "stm32"
-                peri = parts[2] if len(parts) > 2 else "gpio"
-                res = self.vlsi_engine.generate_embedded_c(target, peri)
-                response_msg = f"Embedded C ({target} - {peri}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] in ("freertos", "zephyr", "rtthread", "rtos"):
-                rtos = parts[0]
-                count = 2
-                for p in parts[1:]:
-                    if p.startswith("tasks="):
-                        count = int(p.split("=")[1])
-                task_names = [f"task{i}" for i in range(count)]
-                res = self.vlsi_engine.generate_rtos(rtos, task_names)
-                response_msg = f"RTOS ({rtos}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] in ("asm", "assembly"):
-                arch = parts[1] if len(parts) > 1 else "arm"
-                routine = parts[2] if len(parts) > 2 else "delay"
-                res = self.vlsi_engine.generate_assembly(arch, routine)
-                response_msg = f"Assembly ({arch} - {routine}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "testbench" or parts[0] == "tb":
-                lang = parts[1] if len(parts) > 1 else "verilog"
-                module = parts[2] if len(parts) > 2 else "counter"
-                res = self.vlsi_engine.generate_testbench(lang, module)
-                response_msg = f"Testbench ({lang} - {module}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "fpga":
-                vendor = parts[1] if len(parts) > 1 else "xilinx"
-                design = parts[2] if len(parts) > 2 else "top"
-                res = self.vlsi_engine.generate_fpga_flow(vendor, design)
-                response_msg = f"FPGA ({vendor} - {design}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "soc":
-                soc_type = parts[1] if len(parts) > 1 else "riscv"
-                comps = [p for p in parts[2:] if not p.startswith("width=")]
-                width = 32
-                for p in parts[2:]:
-                    if p.startswith("width="):
-                        width = int(p.split("=")[1])
-                res = self.vlsi_engine.generate_soc(soc_type, comps or ["uart", "gpio"], width=width)
-                response_msg = f"SoC ({soc_type}):\n{res.get('result', '')[:2000]}"
-            elif parts[0] == "timing":
-                freq = 100
-                for p in parts[1:]:
-                    if p.startswith("freq="):
-                        freq = int(p.split("=")[1])
-                res = self.vlsi_engine.analyze_timing("generic design", freq)
-                response_msg = f"Timing Analysis ({freq}MHz):\n{res.get('result', '')[:2000]}"
-            else:
-                response_msg = f"Unknown VLSI command: {parts[0]}. Use 'list' to see available options."
-        except Exception as exc:
-            response_msg = f"VLSI Error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[VLSI] {response_msg}"))
-
-    def _handle_env(self, detail: str):
-        if not self.dep_manager:
-            self._append_chat("meta", "[Dependency Manager not available]")
-            return
-        detail = detail.strip().lower()
-        response_msg = ""
-        try:
-            parts = detail.split()
-            if not parts:
-                response_msg = "Usage: Env <command>. Commands: create venv, install <pkg>, update <pkg>, downgrade <pkg> <ver>, migrate 3.11, check conflicts, analyze, list, ensure"
-            elif parts[0] == "create" and "venv" in parts:
-                path = parts[2] if len(parts) > 2 else "."
-                r = self.dep_manager.create_venv(path)
-                response_msg = r.get("message", "VenV created")
-            elif parts[0] == "install":
-                pkg = parts[1] if len(parts) > 1 else None
-                if pkg:
-                    ver = parts[2] if len(parts) > 2 and parts[2] not in ("upgrade", "--upgrade") else None
-                    upgrade = "upgrade" in parts or "--upgrade" in parts
-                    r = self.dep_manager.install_package(pkg, version=ver, upgrade=upgrade)
-                    response_msg = r.get("message", f"Installed {pkg}")
-                else:
-                    response_msg = "Specify a package name"
-            elif parts[0] == "update":
-                pkg = parts[1] if len(parts) > 1 else None
-                if pkg:
-                    r = self.dep_manager.update_package(pkg)
-                    response_msg = r.get("message", f"Updated {pkg}")
-                else:
-                    response_msg = "Specify a package name"
-            elif parts[0] == "downgrade":
-                pkg = parts[1] if len(parts) > 1 else None
-                ver = parts[2] if len(parts) > 2 else None
-                if pkg and ver:
-                    r = self.dep_manager.downgrade_package(pkg, ver)
-                    response_msg = r.get("message", f"Downgraded {pkg} to {ver}")
-                else:
-                    response_msg = "Usage: downgrade <package> <version>"
-            elif parts[0] == "migrate" and "3.11" in detail:
-                r = self.dep_manager.migrate_to_python311()
-                response_msg = r.get("message", "Migration complete")
-                if r.get("result"):
-                    response_msg += "\n" + str(r["result"])[:500]
-            elif "conflict" in parts or parts[0] == "check":
-                pkgs = parts[1:] if len(parts) > 1 else None
-                r = self.dep_manager.check_conflicts(pkgs)
-                response_msg = r.get("message", "Conflict check done")
-                if r.get("result"):
-                    response_msg += "\n" + str(r["result"])[:500]
-            elif parts[0] == "analyze":
-                path = parts[1] if len(parts) > 1 else "."
-                r = self.dep_manager.analyze_project(path)
-                response_msg = r.get("message", "Analysis done")
-                if r.get("result"):
-                    res = r["result"]
-                    response_msg += f"\nFiles: {res.get('total_files', 'N/A')}, LOC: {res.get('total_loc', 'N/A')}, Dependencies: {res.get('dependencies', 'N/A')}"
-            elif parts[0] == "list":
-                r = self.dep_manager.list_installed()
-                if r.get("result"):
-                    pkgs = r["result"][:30]
-                    response_msg = f"Installed ({len(pkgs)} shown):\n" + "\n".join(f"  {p['name']}=={p['version']}" for p in pkgs)
-                else:
-                    response_msg = r.get("message", "No packages listed")
-            elif parts[0] == "ensure":
-                r = self.dep_manager.ensure_tom_dependencies()
-                response_msg = r.get("message", "Dependencies verified")
-            else:
-                response_msg = f"Unknown env command: {parts[0]}. Use 'list' for available commands."
-        except Exception as exc:
-            response_msg = f"Env Error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[Env] {response_msg}"))
-
-    def _handle_news(self, detail: str):
-        if not self.news_agent:
-            self._append_chat("meta", "[News Agent not available]")
-            return
-        detail = detail.strip().lower()
-        response_msg = ""
-        try:
-            parts = detail.split()
-            if not parts:
-                response_msg = "Usage: News <command>. Commands: daily briefing, tech roundup, world events, search <query>, trending, update knowledge"
-            elif "daily" in detail or "briefing" in detail:
-                r = self.news_agent.daily_briefing()
-                response_msg = r.get("message", "Daily briefing")
-                if r.get("result"):
-                    result = r["result"]
-                    for category, articles in result.items():
-                        if isinstance(articles, list):
-                            response_msg += f"\n\n{category.upper()}:"
-                            for a in articles[:3]:
-                                title = a.get("title", "N/A") if isinstance(a, dict) else str(a)[:80]
-                                response_msg += f"\n  - {title}"
-            elif "tech" in detail:
-                r = self.news_agent.technology_roundup()
-                response_msg = r.get("message", "Tech roundup")
-                if r.get("result"):
-                    for k, v in r["result"].items():
-                        if isinstance(v, list):
-                            response_msg += f"\n\n{k.upper()}:"
-                            for a in v[:3]:
-                                response_msg += f"\n  - {a.get('title', str(a)[:80]) if isinstance(a, dict) else str(a)[:80]}"
-            elif "world" in detail:
-                r = self.news_agent.world_events()
-                response_msg = r.get("message", "World events")
-                if r.get("result"):
-                    for k, v in r["result"].items():
-                        if isinstance(v, list):
-                            response_msg += f"\n\n{k.upper()}:"
-                            for a in v[:3]:
-                                response_msg += f"\n  - {a.get('title', str(a)[:80]) if isinstance(a, dict) else str(a)[:80]}"
-            elif parts[0] == "search":
-                query = " ".join(parts[1:])
-                if query:
-                    r = self.news_agent.search_news(query)
-                    response_msg = r.get("message", f"Search: {query}")
-                    if r.get("result"):
-                        for a in r["result"][:5]:
-                            title = a.get("title", str(a)[:80]) if isinstance(a, dict) else str(a)[:80]
-                            response_msg += f"\n  - {title}"
-                else:
-                    response_msg = "Specify a search query"
-            elif "trending" in detail:
-                r = self.news_agent.get_trending_topics()
-                response_msg = r.get("message", "Trending")
-                if r.get("result"):
-                    for topic, count in list(r["result"].items())[:10]:
-                        response_msg += f"\n  - {topic}"
-            elif "update" in detail:
-                r = self.news_agent.update_knowledge_base()
-                response_msg = r.get("message", "Knowledge base updated")
-            else:
-                response_msg = f"Unknown news command: {parts[0]}"
-        except Exception as exc:
-            response_msg = f"News Error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[News] {response_msg}"))
-
-    def _handle_voice_enhanced(self, detail: str):
-        if not self.voice_enhanced:
-            self._append_chat("meta", "[Voice Enhanced not available]")
-            return
-        detail = detail.strip()
-        response_msg = ""
-        try:
-            parts = detail.lower().split()
-            if not parts:
-                response_msg = "Usage: Voice+ <command>. Commands: analyze emotion text:<text>, start conversation, assess, speak <text>"
-            if "analyze" in parts and "emotion" in parts:
-                text = detail.split("text:")[1].strip() if "text:" in detail else " ".join(parts[2:])
-                if text:
-                    r = self.voice_enhanced.detect_emotion(text=text)
-                    response_msg = r.get("message", "Emotion analysis")
-                    if r.get("result"):
-                        emotion = r["result"].get("emotion", "N/A")
-                        confidence = r["result"].get("confidence", "N/A")
-                        response_msg += f"\nEmotion: {emotion} (confidence: {confidence})"
-                else:
-                    response_msg = "Provide text to analyze"
-            elif "assess" in parts or "psychiatric" in detail:
-                text = detail.split(":")[1].strip() if ":" in detail else " ".join(parts[1:])
-                if text:
-                    r = self.voice_enhanced.psychiatric_assessment([{"text": text, "speaker": "user"}])
-                    response_msg = r.get("message", "Assessment")
-                    if r.get("result"):
-                        for k, v in r["result"].items():
-                            response_msg += f"\n{k}: {v}"
-                else:
-                    response_msg = "Provide conversation text for assessment"
-            elif "speak" in parts or "say" in parts:
-                text = detail.split("speak")[-1].strip() if "speak" in detail else detail.split("say")[-1].strip()
-                if text:
-                    r = self.voice_enhanced.speak_text(text)
-                    response_msg = r.get("message", f"Speaking: {text[:50]}")
-                else:
-                    response_msg = "Provide text to speak"
-            elif "empathy" in detail or "empathetic" in detail:
-                text = detail.split(":")[1].strip() if ":" in detail else detail.split(None, 1)[1] if len(parts) > 1 else ""
-                if text:
-                    emotion = {"emotion": "sad", "confidence": 0.8}
-                    response_text = self.voice_enhanced.generate_empathetic_response(text, emotion)
-                    response_msg = f"Empathetic response: {response_text[:500]}"
-                else:
-                    response_msg = "Provide text for empathetic response"
-            elif "start" in detail or "converse" in detail or "conversation" in detail:
-                r = self.voice_enhanced.start_conversation_mode()
-                response_msg = r.get("message", "Conversation mode started")
-            elif "stop" in detail:
-                r = self.voice_enhanced.stop_conversation_mode()
-                response_msg = r.get("message", "Conversation mode stopped")
-                if r.get("result"):
-                    response_msg += f"\nSummary: {str(r['result'])[:200]}"
-            else:
-                response_msg = f"Unknown Voice+ command: {parts[0]}"
-        except Exception as exc:
-            response_msg = f"Voice+ Error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[Voice+] {response_msg}"))
 
     def _init_creative_tools(self):
         """Initialize Game Dev, Blender, Auto-Update tools."""
@@ -4756,216 +4324,11 @@ class TomDesktopApp:
 
     # ── Creative Tool Handlers ───────────────────────────────────────────
 
-    def _handle_game_dev(self, detail: str):
-        if not self.game_dev:
-            self._append_chat("meta", "[Game Dev Engine not available]")
-            return
-        detail = detail.strip().lower()
-        response_msg = ""
-        try:
-            parts = detail.split()
-            if not parts:
-                response_msg = ("Usage: Game dev <command>. Commands:\n"
-                               "  scaffold pygame <name> [genre] — Create PyGame project\n"
-                               "  script <engine> <task> — Generate game script snippet\n"
-                               "  unity <name> — Scaffold Unity project structure\n"
-                               "  engines — List supported game engines\n"
-                               "  installed — Check what's installed on system")
-            elif parts[0] == "scaffold" and parts[1] == "pygame":
-                name = parts[2] if len(parts) > 2 else "my_game"
-                genre = parts[3] if len(parts) > 3 else "platformer"
-                r = self.game_dev.scaffold_pygame(name, genre)
-                response_msg = r.get("message", "Game scaffolded")
-                if r.get("path"):
-                    response_msg += f"\nPath: {r['path']}"
-                    response_msg += f"\nFiles: {', '.join(r.get('files', []))}"
-            elif parts[0] == "script":
-                engine = parts[1] if len(parts) > 1 else "pygame"
-                task = " ".join(parts[2:]) or "game logic"
-                r = self.game_dev.generate_script(engine, task)
-                if r.get("status") == "success":
-                    response_msg = f"Generated {engine} script:\n{r.get('code', '')[:2000]}"
-                else:
-                    response_msg = r.get("message", "Script generation failed")
-            elif parts[0] == "unity":
-                name = parts[1] if len(parts) > 1 else "MyProject"
-                r = self.game_dev.build_unity_project(name)
-                response_msg = r.get("message", "Unity project created")
-                if r.get("path"):
-                    response_msg += f"\nPath: {r['path']}"
-            elif parts[0] == "engines":
-                engines = self.game_dev.list_engines()
-                response_msg = "Supported game engines:\n" + "\n".join(f"  - {e} ({l})" for e, l in engines.items())
-            elif parts[0] == "installed":
-                installed = self.game_dev.detect_installed_engines()
-                response_msg = "Detected on system:\n" + "\n".join(f"  - {e}: {s}" for e, s in installed.items())
-            else:
-                response_msg = f"Unknown game dev command: {parts[0]}. Type 'game dev' for help."
-        except Exception as exc:
-            response_msg = f"Game Dev Error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[Game Dev] {response_msg}"))
-
-    def _handle_blender(self, detail: str):
-        if not self.blender:
-            self._append_chat("meta", "[Blender Control not available]")
-            return
-        detail = detail.strip().lower()
-        response_msg = ""
-        try:
-            parts = detail.split()
-            if not parts:
-                caps = self.blender.list_capabilities()
-                response_msg = "Blender commands:\n" + "\n".join(f"  {k}: {v}" for k, v in caps.items())
-                response_msg += "\n\nOr: run <script text> to execute a custom script"
-                response_msg += f"\nBlender path: {self.blender.get_blender_path()}"
-                response_msg += f"\nDirect mode: {self.blender.is_available()}"
-            elif parts[0] == "run":
-                script = detail[len("run "):].strip() if detail.startswith("run ") else ""
-                if script:
-                    r = self.blender.execute_script(script)
-                    response_msg = r.get("message", "Blender script executed")
-                else:
-                    response_msg = "Provide a Blender Python script to execute"
-            elif parts[0] == "list" or parts[0] == "capabilities":
-                caps = self.blender.list_capabilities()
-                response_msg = "Blender capabilities:\n" + "\n".join(f"  {k}: {v}" for k, v in caps.items())
-            elif not self.blender.is_available():
-                response_msg = ("Blender is not installed (or not found). Install it from blender.org "
-                                "and add blender.exe to PATH, then retry.")
-            else:
-                # generate_and_execute() saves a real .blend (+ preview render) and
-                # verifies it on disk; calling generate_script()+execute_script()
-                # directly skipped that, so the scene was discarded on exit.
-                r = self.blender.generate_and_execute(detail)
-                if r.get("status") == "success":
-                    response_msg = f"Blender: {r.get('message', 'Done')}"
-                    for extra_path in (r.get("paths") or [])[1:]:
-                        response_msg += f"\nPreview: {extra_path}"
-                else:
-                    response_msg = f"Blender failed: {r.get('message', 'unknown error')}"
-        except Exception as exc:
-            response_msg = f"Blender Error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[Blender] {response_msg}"))
-
-    def _handle_media(self, detail: str):
-        """Video (ffmpeg) / photo (Pillow) editing via the shared EngineRouter,
-        so the GUI uses the same detection + on-disk verification as chat/CLI."""
-        if not self.media:
-            self._enqueue(lambda: self._append_chat("meta", "[Media Engine not available]"))
-            return
-        detail = detail.strip()
-        try:
-            from tools.engine_router import EngineRouter
-            router = EngineRouter(self.agent if hasattr(self, "agent") else None)
-            future = asyncio.run_coroutine_threadsafe(
-                router.execute(detail, key="media"), self._loop)
-            r = future.result(timeout=360)
-            if r.get("status") == "success":
-                # message already carries the saved path ("Media: Saved to ...");
-                # append any extra artifacts (e.g. a preview) not already shown.
-                response_msg = r.get("message", "Done")
-                for p in (r.get("paths") or [])[1:]:
-                    if p not in response_msg:
-                        response_msg += f"\nAlso: {p}"
-            else:
-                response_msg = r.get("message", "Media editing failed")
-        except Exception as exc:
-            response_msg = f"Media Error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[Media] {response_msg}"))
-
-    def _handle_scaler(self, detail: str):
-        """Resource detection / parallel-execution status via EngineRouter."""
-        if not self.scaler:
-            self._enqueue(lambda: self._append_chat("meta", "[Auto Scaler not available]"))
-            return
-        detail = detail.strip()
-        try:
-            from tools.engine_router import EngineRouter
-            router = EngineRouter(self.agent if hasattr(self, "agent") else None)
-            future = asyncio.run_coroutine_threadsafe(
-                router.execute(detail, key="scaler"), self._loop)
-            r = future.result(timeout=120)
-            response_msg = r.get("message", "Done")
-        except Exception as exc:
-            response_msg = f"Auto Scaler Error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[Auto Scaler] {response_msg}"))
-
-    def _handle_auto_update(self, detail: str):
-        if not self.auto_update:
-            self._append_chat("meta", "[Auto-Update not available]")
-            return
-        detail = detail.strip().lower()
-        response_msg = ""
-        try:
-            parts = detail.split()
-            if not parts or parts[0] == "help":
-                response_msg = ("Auto-Update commands:\n"
-                               "  check — Check git for updates\n"
-                               "  pull — Pull latest from git\n"
-                               "  pip — Update all pip packages\n"
-                               "  full — Full update (git + pip + knowledge)\n"
-                               "  research <topic> — Scrape web for knowledge\n"
-                               "  trending — Fetch trending GitHub repos\n"
-                               "  history — Show update history")
-            elif parts[0] == "check":
-                r = self.auto_update.check_git_updates()
-                if r.get("status") == "updates_available":
-                    response_msg = f"Updates available: {r.get('count', 0)} changes"
-                elif r.get("status") == "up_to_date":
-                    response_msg = "Git repo is up to date"
-                else:
-                    response_msg = r.get("message", "Git check completed")
-            elif parts[0] == "pull":
-                r = self.auto_update.pull_updates()
-                response_msg = r.get("output", r.get("message", "Git pull done"))
-                if r.get("error"):
-                    response_msg += f"\nErrors: {r['error']}"
-            elif parts[0] == "pip":
-                r = self.auto_update.update_pip_packages()
-                response_msg = r.get("message", "Pip update done")
-            elif parts[0] == "full":
-                response_msg = "Running full update... (git + pip + knowledge)"
-                r = self.auto_update.full_update()
-                response_msg = ""
-                for k, v in r.items():
-                    response_msg += f"\n[{k}] {v.get('message', v.get('status', 'done'))}"
-            elif parts[0] == "research":
-                topic = " ".join(parts[1:]) if len(parts) > 1 else "Python programming"
-                r = self.auto_update.auto_research(topic)
-                response_msg = r.get("message", f"Researched '{topic}'")
-                if r.get("results"):
-                    for res in r["results"][:3]:
-                        response_msg += f"\n\nQuery: {res.get('query', '')}"
-                        for snip in res.get("snippets", [])[:2]:
-                            response_msg += f"\n  - {snip[:200]}"
-            elif parts[0] == "trending":
-                r = self.auto_update.fetch_trending_repos()
-                if r.get("status") == "success":
-                    response_msg = "Trending GitHub repos:\n"
-                    for repo in r.get("repos", []):
-                        response_msg += f"\n  ★ {repo['stars']} {repo['name']}"
-                        if repo.get("description"):
-                            response_msg += f"\n    {repo['description']}"
-                else:
-                    response_msg = r.get("message", "Failed to fetch trending")
-            elif parts[0] == "history":
-                history = self.auto_update.get_update_history()
-                if history:
-                    response_msg = f"Last {len(history)} updates:\n"
-                    for h in history[-5:]:
-                        ts = h.get("timestamp", "?")[:19]
-                        response_msg += f"\n  [{ts}] {str(h.get('result', {}).get('git', {}).get('status', 'done'))}"
-                else:
-                    response_msg = "No update history yet"
-            else:
-                response_msg = f"Unknown auto-update command: {parts[0]}. Type 'auto-update help' for commands."
-        except Exception as exc:
-            response_msg = f"Auto-Update Error: {exc}"
-        self._enqueue(lambda: self._append_chat("assistant", f"[Auto-Update] {response_msg}"))
-
     def _bind_keyboard_shortcuts(self):
         self.root.bind("<Control-Return>", lambda e: self.send_message())
-        self.root.bind("<Control-v>", lambda e: self._toggle_voice_mode())
+        # Same push-to-talk shortcut as the PySide6 app. (Ctrl+V used to toggle voice mode, which
+        # also fired on every paste into the chat box.)
+        self.root.bind("<Control-space>", lambda e: self._push_to_talk())
         self.root.bind("<Control-d>", lambda e: self._switch_view("dashboard"))
         self.root.bind("<Control-c>", lambda e: self._switch_view("chat"))
         self.root.bind("<Control-s>", lambda e: self._switch_view("system"))
@@ -5065,13 +4428,6 @@ class TomDesktopApp:
             self._enqueue(self._append_chat, "meta", f"Failed to initialize TOM: {exc_detail}")
 
     def _update_voice_and_dashboard_state(self):
-        if self.voice:
-            status = self.voice.status()
-            self.voice_mode_enabled = bool(status.get("voice_input_enabled") or status.get("voice_output_enabled"))
-            if self.voice_mode_enabled:
-                self.voice_btn.configure(text="  \u266a  Voice: ON", bg=C["blue"], fg="#ffffff")
-            else:
-                self.voice_btn.configure(text="  \u266a  Voice Mode", bg=C["surface2"], fg=C["text"])
         if hasattr(self, "run_btn"):
             self.run_btn.configure(text=f"  \u25b6  Run {self.agent_profiles[self.active_agent_key]['label']}")
         self._refresh_dashboard()
@@ -5552,6 +4908,10 @@ class TomDesktopApp:
 
 
 def main():
+    # Frozen builds re-launch this exe as a voice worker (tom_core.voice.workers); run it and exit.
+    from tom_core.voice.workers import maybe_run_worker
+    if maybe_run_worker():
+        return
     # A3: crash isolation — unhandled errors are logged, the app survives.
     try:
         from tools.crash_guard import install as _cg_install, install_tk as _cg_tk

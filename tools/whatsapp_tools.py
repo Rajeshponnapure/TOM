@@ -120,11 +120,36 @@ class WhatsAppError(Exception):
     """A step failed *before anything was sent*."""
 
 
+class WhatsAppAmbiguous(WhatsAppError):
+    """Several chats match the name; the user has to pick one. Nothing was sent."""
+
+    def __init__(self, query: str, options: List[str]):
+        self.query, self.options = query, list(options)
+        super().__init__(f"'{query}' matches several chats ({', '.join(self.options[:5])}).")
+
+
+def needs_choice(query: str, options: List[str], message: str) -> Dict[str, Any]:
+    """Result asking the user which chat they meant (owner report 2026-10-21)."""
+    listed = "\n".join(f"  {i}. {name}" for i, name in enumerate(options[:9], 1))
+    return {"status": "needs_input", "sent": False, "response_type": "whatsapp_choose_contact",
+            "options": list(options[:9]), "contact_query": query, "message_text": message,
+            "message": (f"I found {len(options)} people matching '{query}' in WhatsApp:\n{listed}\n"
+                        f"Which one should get \"{message[:80]}\"? Reply with the number or the name "
+                        f"(or 'cancel'). Nothing has been sent.")}
+
+
 class WhatsAppTools:
-    def __init__(self, browser_tools=None):
+    def __init__(self, browser_tools=None, uia_factory=None):
         self.browser_tools = browser_tools
         self.whatsapp_url = "https://web.whatsapp.com"
         self._app_family = "5319275A.WhatsAppDesktop_cv1g1gvanyjgm"
+        self._uia_factory = uia_factory          # tests inject a fake WhatsAppDesktopUIA
+
+    def _uia(self):
+        if self._uia_factory is not None:
+            return self._uia_factory()
+        from tools.whatsapp_uia import WhatsAppDesktopUIA
+        return WhatsAppDesktopUIA()
 
     # ══════════════════════════════════════════════════════════════════════════
     # Desktop (Windows)
@@ -188,9 +213,45 @@ class WhatsAppTools:
             raise WhatsAppError("This text has non-ASCII characters and 'pyperclip' is not installed "
                                 "(pip install pyperclip), so I can't type it safely.")
 
-    async def send_message_native(self, contact_name: str, message: str) -> Dict[str, Any]:
+    async def _pick_with_uia(self, contact_name: str, confirm: bool) -> Optional[str]:
+        """The exact chat name to open, chosen through UI Automation.
+
+        Returns the name, or None when UI Automation is unusable and the caller may fall back to
+        the old "first search match" path (only allowed when the user did not ask to confirm).
+        Raises WhatsAppAmbiguous when several people match, WhatsAppError when nobody does.
+        """
+        from tools.whatsapp_uia import UIAError, choose
+        try:
+            try:
+                uia = self._uia()
+                found = await asyncio.to_thread(uia.candidates, contact_name)
+            except UIAError:
+                raise
+            except Exception as exc:  # e.g. a COM error while reading the results: same as "unusable"
+                raise UIAError(f"Windows UI Automation failed: {exc}") from None
+        except UIAError as exc:
+            if confirm:
+                raise WhatsAppError(f"I couldn't read WhatsApp's search results ({exc}), so I can't check "
+                                    f"whether several people are called '{contact_name}'. Nothing was sent. "
+                                    f"Give me the full name or the phone number.") from None
+            logger.info("WhatsApp UI Automation unavailable (%s); using the first search match.", exc)
+            return None
+        if not found:
+            raise WhatsAppError(f"I couldn't find anyone called '{contact_name}' in WhatsApp. Nothing was sent.")
+        pick = choose(found, contact_name)
+        if pick is None:
+            raise WhatsAppAmbiguous(contact_name, [c.label for c in found])
+        await asyncio.to_thread(uia.open_chat, pick.label, contact_name)
+        return pick.label
+
+    async def send_message_native(self, contact_name: str, message: str,
+                                  confirm: bool = False) -> Dict[str, Any]:
         """Send through WhatsApp Desktop. The status is 'unconfirmed', never 'success': the
-        desktop app cannot be read back. `sent` says whether any keys were actually sent."""
+        desktop app cannot be read back. `sent` says whether any keys were actually sent.
+
+        A name is resolved through UI Automation first: one match → that chat is opened exactly;
+        several → needs_input with the names (nothing typed). `confirm` (the user asked to be asked)
+        forbids the old fallback of pressing Enter on the first search match."""
         if not _PYAUTOGUI_OK:
             return {"status": "error", "sent": False,
                     "message": "pyautogui is not available (pip install pyautogui; it needs a desktop session)."}
@@ -200,6 +261,7 @@ class WhatsAppTools:
 
         number = resolve_number(contact_name)
         sent = False
+        opened = None
         try:
             # A number opens the exact chat with the text pre-filled: no search, no wrong contact.
             uri = f"whatsapp://send?phone={number}&text={urllib.parse.quote(message)}" if number else "whatsapp:"
@@ -208,21 +270,31 @@ class WhatsAppTools:
                 raise WhatsAppError("WhatsApp did not come to the front, so I did not type anything.")
             await asyncio.sleep(0.8)
 
+            if not number:
+                opened = await self._pick_with_uia(contact_name, confirm)
+                if opened:
+                    # UI Automation does not move focus; bring WhatsApp back to the front to type.
+                    await asyncio.to_thread(self._launch_desktop, "whatsapp:")
+                    if not await self._wait_foreground():
+                        raise WhatsAppError("WhatsApp did not come to the front, so I did not type anything.")
+                    await asyncio.sleep(0.5)
+
             if number:
                 self._require_foreground("send the pre-filled message")
                 sent = True                      # from here on keys may reach the chat
                 pyautogui.press("enter")
             else:
-                self._require_foreground("open the new-chat search")
-                pyautogui.hotkey("ctrl", "n")
-                await asyncio.sleep(0.8)
-                self._require_foreground("type the contact name")
-                pyautogui.hotkey("ctrl", "a")
-                self._type_text(contact_name)
-                await asyncio.sleep(2.0)
-                self._require_foreground("select the contact")
-                pyautogui.press("enter")           # the first match: see the note in the result
-                await asyncio.sleep(1.5)
+                if not opened:
+                    self._require_foreground("open the new-chat search")
+                    pyautogui.hotkey("ctrl", "n")
+                    await asyncio.sleep(0.8)
+                    self._require_foreground("type the contact name")
+                    pyautogui.hotkey("ctrl", "a")
+                    self._type_text(contact_name)
+                    await asyncio.sleep(2.0)
+                    self._require_foreground("select the contact")
+                    pyautogui.press("enter")           # the first match: see the note in the result
+                    await asyncio.sleep(1.5)
                 self._require_foreground("focus the message box")
                 rect = self._foreground_rect()
                 if rect:                           # inside the WhatsApp window, near its bottom edge
@@ -230,12 +302,14 @@ class WhatsAppTools:
                     pyautogui.click(x=(left + right) // 2, y=max(top + 1, bottom - 60))
                     await asyncio.sleep(0.4)
                 self._require_foreground("type the message")
-                sent = True
+                sent = True                        # set BEFORE typing: no Web retry once keys may land
                 self._type_text(message)
                 await asyncio.sleep(0.5)
                 self._require_foreground("press send")
                 pyautogui.press("enter")
             await asyncio.sleep(1)
+        except WhatsAppAmbiguous as exc:
+            return needs_choice(exc.query, exc.options, message)
         except WhatsAppError as exc:
             return {"status": "error", "sent": sent, "message": str(exc)}
         except Exception as exc:
@@ -244,6 +318,7 @@ class WhatsAppTools:
                     "message": f"WhatsApp automation failed: {exc}. WhatsApp may be open; check it before retrying."}
 
         how = ("to the exact number on file" if number
+               else f"to the chat '{opened}', the only match for that name" if opened
                else "to the first search match for that name (add the person to WHATSAPP_CONTACTS to target an exact number)")
         return {"status": "unconfirmed", "sent": True, "via": "desktop",
                 "message": (f"I sent \"{message[:80]}{'...' if len(message) > 80 else ''}\" to {contact_name} in "
@@ -260,19 +335,11 @@ class WhatsAppTools:
             self.browser_tools = BrowserTools()
 
         if not self.browser_tools.browser:
-            chrome_path = os.environ.get(
-                "CHROME_EXECUTABLE",
-                "C:/Program Files/Google/Chrome/Application/chrome.exe",
-            )
-            profile_path = os.environ.get(
-                "CHROME_PROFILE_PATH",
-                os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data"),
-            )
-            await self.browser_tools.init_browser(
-                executable_path=chrome_path,
-                user_data_dir=profile_path,
-                headless=False,
-            )
+            # BrowserTools resolves CHROME_EXECUTABLE / CHROME_PROFILE_PATH itself.
+            init = await self.browser_tools.init_browser(headless=False)
+            if not self.browser_tools.context:
+                raise WhatsAppError("I couldn't start Chrome for WhatsApp Web"
+                                    f" ({(init or {}).get('message', 'unknown error')}). Nothing was sent.")
 
         page = await self.browser_tools._get_active_page()
         if not page:
@@ -313,8 +380,7 @@ class WhatsAppTools:
             return partial[0]
         if not partial:
             raise WhatsAppError(f"I couldn't find '{contact}' in WhatsApp.")
-        raise WhatsAppError(f"'{contact}' matches several chats ({', '.join(partial[:5])}). "
-                            f"Tell me the full name, or give me the phone number.")
+        raise WhatsAppAmbiguous(contact, partial)
 
     async def _open_chat_by_name(self, page, contact: str) -> str:
         search = await self._first_present(page, SEARCH_BOX, 15000)
@@ -381,6 +447,8 @@ class WhatsAppTools:
                 await composer.type(message, delay=20)
                 await asyncio.sleep(0.3)
             await composer.press("Enter")
+        except WhatsAppAmbiguous as exc:
+            return needs_choice(exc.query, exc.options, message)
         except WhatsAppError as exc:
             return {"status": "error", "sent": False, "message": str(exc)}
         except Exception as exc:
@@ -399,18 +467,28 @@ class WhatsAppTools:
     # Unified entry points
     # ══════════════════════════════════════════════════════════════════════════
 
-    async def send_message(self, contact_name: str, message: str) -> Dict[str, Any]:
+    async def send_message(self, contact_name: str, message: str, confirm: bool = False) -> Dict[str, Any]:
         """Send a WhatsApp message.
 
         WHATSAPP_MODE=auto (default): Desktop first on Windows, then Web.
                        web: Web only (verified). desktop: Desktop only.
-        Web is only tried if the desktop attempt failed before sending anything.
+        Web is only tried if the desktop attempt failed before sending anything — never when the
+        user still has to choose between several matching chats (needs_input).
+        `confirm`: the user asked to be asked when the name is ambiguous.
         """
+        # R3: the policy engine sees every send, whoever calls this (TOM-MIG-010). The agent's
+        # approval of this exact recipient + text is used here, not asked for a second time.
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import aenforce
+        gate = await aenforce("whatsapp.send", ActionClass.DESTRUCTIVE_OR_EXTERNAL,
+                              payload={"to": contact_name, "message": message}, approval_action="whatsapp_message")
+        if not gate.allowed:
+            return gate.refusal()
         mode = os.environ.get("WHATSAPP_MODE", "auto").strip().lower()
         native_result: Optional[Dict[str, Any]] = None
         if self._is_windows() and mode in ("auto", "desktop"):
-            native_result = await self.send_message_native(contact_name, message)
-            if native_result.get("sent") or mode == "desktop":
+            native_result = await self.send_message_native(contact_name, message, confirm=confirm)
+            if native_result.get("sent") or mode == "desktop" or native_result.get("status") == "needs_input":
                 return native_result
             logger.info("WhatsApp Desktop did not send (%s); trying WhatsApp Web.", native_result.get("message"))
         try:

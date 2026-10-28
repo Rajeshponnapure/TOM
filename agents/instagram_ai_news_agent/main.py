@@ -27,7 +27,6 @@ from tools.command_router import CommandRouter
 from tools.instruction_loader import compose_system_prompt
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama import ChatOllama
 
 try:
     import speech_recognition as sr
@@ -85,7 +84,7 @@ class InstagramAINNewsAgent:
         """
         load_dotenv()
         self.chrome_profile = chrome_profile or os.getenv('INSTAGRAM_CHROME_PROFILE', 'Default')
-        self.browser_tools = None
+        self.browser_tools: Optional[BrowserTools] = None     # created by init_browser()
         self.email_tools = EmailTools()
         self.pdf_generator = PDFReportGenerator()
         self.command_router = CommandRouter()
@@ -182,6 +181,14 @@ class InstagramAINNewsAgent:
         except Exception:
             pass
         
+    @property
+    def browser(self) -> BrowserTools:
+        """The launched browser. Raises a clear error (instead of a None AttributeError) when a step runs
+        before init_browser()."""
+        if self.browser_tools is None:
+            raise RuntimeError("The browser is not started yet - call init_browser() first.")
+        return self.browser_tools
+
     async def init_browser(self):
         """Initialize and launch browser with Instagram profile."""
         logger.info(f"Initializing browser with Chrome profile: {self.chrome_profile}")
@@ -206,12 +213,12 @@ class InstagramAINNewsAgent:
         """
         try:
             logger.info(f"Opening Instagram: {self.instagram_url}")
-            open_result = await self.browser_tools.open_url(self.instagram_url)
+            open_result = await self.browser.open_url(self.instagram_url)
             if open_result.get("status") != "success":
                 logger.error(f"Open URL failed: {open_result.get('message', 'unknown')}" )
                 return False
             await asyncio.sleep(3)  # Wait for page load
-            current_url = await self.browser_tools.get_current_url()
+            current_url = await self.browser.get_current_url()
             if "instagram.com" not in (current_url or ""):
                 logger.error(f"Instagram did not load correctly (current_url={current_url})")
                 return False
@@ -245,7 +252,7 @@ class InstagramAINNewsAgent:
 })()
 """
         try:
-            data = await self.browser_tools.execute_script(script)
+            data = await self.browser.execute_script(script)
             if isinstance(data, list):
                 return [item for item in data if isinstance(item, dict)]
             return []
@@ -262,7 +269,7 @@ class InstagramAINNewsAgent:
     async def _open_post(self, post_url: str) -> bool:
         if not post_url:
             return False
-        result = await self.browser_tools.open_url(post_url)
+        result = await self.browser.open_url(post_url)
         if result.get("status") != "success":
             return False
         await asyncio.sleep(2)
@@ -277,7 +284,7 @@ class InstagramAINNewsAgent:
 })()
 """
         try:
-            value = await self.browser_tools.execute_script(script)
+            value = await self.browser.execute_script(script)
             return value if isinstance(value, str) else ""
         except Exception:
             return ""
@@ -292,7 +299,7 @@ class InstagramAINNewsAgent:
 })()
 """
         try:
-            return bool(await self.browser_tools.execute_script(script))
+            return bool(await self.browser.execute_script(script))
         except Exception:
             return False
 
@@ -309,7 +316,7 @@ class InstagramAINNewsAgent:
 """
         media_src = ""
         try:
-            payload = await self.browser_tools.execute_script(script)
+            payload = await self.browser.execute_script(script)
             if isinstance(payload, dict):
                 dom_audio_text = str(payload.get("text", ""))
                 media_src = str(payload.get("media_src", ""))
@@ -351,7 +358,9 @@ class InstagramAINNewsAgent:
             with sr.AudioFile(str(wav_file)) as source:
                 audio_data = recognizer.record(source)
             try:
-                return recognizer.recognize_google(audio_data)
+                # recognize_google exists at runtime; the speech_recognition type stubs omit it
+                recognize_google = getattr(recognizer, "recognize_google")
+                return recognize_google(audio_data)
             except Exception:
                 return ""
         except Exception:
@@ -374,7 +383,7 @@ class InstagramAINNewsAgent:
 
         while page_index < self.max_carousel_pages:
             page_index += 1
-            visible_text = await self.browser_tools.get_page_content()
+            visible_text = await self.browser.get_page_content()
             caption_text = await self._extract_post_caption_text()
             audio_context = ""
             if has_video:
@@ -497,7 +506,7 @@ class InstagramAINNewsAgent:
             return {}
         finally:
             try:
-                await self.browser_tools.execute_script("window.history.back();")
+                await self.browser.execute_script("window.history.back();")
                 await asyncio.sleep(1.5)
             except Exception:
                 pass
@@ -547,7 +556,7 @@ class InstagramAINNewsAgent:
 
                 scroll_attempts += 1
                 try:
-                    await self.browser_tools.execute_script(
+                    await self.browser.execute_script(
                         "window.scrollBy(0, Math.max(window.innerHeight * 0.85, 620));"
                     )
                     await asyncio.sleep(scroll_pause_time)
@@ -718,7 +727,8 @@ class InstagramAINNewsAgent:
             logger.info("Instagram report draft prepared")
 
             if self.auto_send_report_email:
-                result = await self.email_tools.send_email_direct(recipient, subject, body, attachments=[pdf_path])
+                result = await self.email_tools.send_email_direct(
+                    recipient, subject, body, attachments=[pdf_path], standing="INSTAGRAM_AUTO_SEND_REPORT_EMAIL")
             else:
                 result = await self.email_tools.send_email(recipient, subject, body, attachments=[pdf_path])
 

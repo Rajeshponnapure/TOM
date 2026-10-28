@@ -454,7 +454,7 @@ rationale: [PRODUCT.md](docs/PRODUCT.md)). Opens at **1420×880**.
 │  ◈ Capabil.  │   └─────────────────────────────────────────┘  │
 │  ⚕ Health    │   profiles: Core TOM · Email · Instagram        │
 │  ◉ Memory    │   what TOM has learned · recall · reflect       │
-│  ♪ Voice     │   ▶ Run Agent      ♫ Voice Mode                 │
+│  ♪ Voice     │   ▶ Run Agent      ♪ Push to talk               │
 └──────────────┴───────────────────────────────────────────────┘
 ```
 
@@ -467,8 +467,10 @@ rationale: [PRODUCT.md](docs/PRODUCT.md)). Opens at **1420×880**.
 | **Health** | Runtime capability-health report (`tools/capability_health.py`) |
 | **Memory** | Long-term memory status, *What have you learned?* (reflect), recall search, recently stored rules and outcomes. Answers shaped by memory show a green **Remembering** card in Chat |
 
-**Agent profiles:** Core TOM · Email Agent · Instagram Agent. **Voice Mode** opens a
-push-to-talk window. Shortcuts: `Ctrl+D` Dashboard · `Ctrl+C` Chat.
+**Agent profiles:** Core TOM · Email Agent · Instagram Agent. **Push to talk** (sidebar, the
+🎤 Talk button in Chat, or `Ctrl+Space`) listens for one request, runs it like a typed message
+and reads the answer aloud. **♫ Voice** opens the orb window: push to talk, or **Hands-free** for
+a continuous conversation. Shortcuts: `Ctrl+Space` talk · `Ctrl+D` Dashboard · `Ctrl+C` Chat.
 
 ---
 
@@ -500,11 +502,12 @@ push-to-talk window. Shortcuts: `Ctrl+D` Dashboard · `Ctrl+C` Chat.
 
 > Ollama offline → UI still starts, but reasoning, planning, and RAG memory are limited.
 
-**Hosted by default:** set `GROQ_API_KEY` in `.env` and every chat slot runs on Groq
-(`GROQ_MODEL`, default `openai/gpt-oss-120b`) through the same interface
-([`tools/llm_factory.py`](tools/llm_factory.py)) — no `TOM_LLM_PROVIDER` needed. To force the
-local model instead, set `TOM_LLM_PROVIDER=ollama`; TOM never falls back to local on its
-own. The embedding slot stays local either way (Groq has no embeddings endpoint).
+**Local by default:** prompts go to Ollama on your machine unless you opt in to a hosted
+provider. To use Groq, set `GROQ_API_KEY` **and** `TOM_LLM_PROVIDER=groq` (or pick *Groq* in the
+desktop header); every chat slot then runs on Groq (`GROQ_MODEL`, default `openai/gpt-oss-120b`)
+through the same interface ([`tools/llm_factory.py`](tools/llm_factory.py)). A key on its own
+never sends anything to the cloud. The embedding slot stays local either way (Groq has no
+embeddings endpoint). "system status" lists exactly which data, if any, leaves the machine.
 
 **You need only one provider to run — but you can set up both and switch live.** The
 minimum to get TOM working is a single choice: either a `GROQ_API_KEY` (hosted) *or* local
@@ -520,7 +523,7 @@ writes `TOM_LLM_PROVIDER` to `.env` so the choice survives a restart. Each provi
 remembers its own model via its `GROQ_*` / `OLLAMA_*` slots. A failed switch (no
 `GROQ_API_KEY`, Ollama unreachable) leaves the current provider running and explains the fix
 in chat. The embedding slot stays local either way (Groq has no embeddings endpoint), and
-TOM never silently falls back to local on its own.
+TOM never switches provider on its own.
 
 ### 🗂️ Workspace — TOM builds *outside* its own folder
 
@@ -592,7 +595,7 @@ techniques.
 flowchart LR
     A["① Install<br/>Python 3.11"] --> B["② setup_python311_env.bat<br/>(.venv311 + deps)"]
     B --> C["③ ollama serve<br/>+ pull 3 models"]
-    C --> D["④ copy .env.example .env<br/>+ HINDSIGHT_API_KEY"]
+    C --> D["④ copy .env.example .env<br/>(cloud keys optional)"]
     D --> E["⑤ launch_tom_ui.bat"]
     E --> F["🎉 TOM running"]
     classDef done fill:#22C55E,stroke:#fff,color:#fff
@@ -603,25 +606,27 @@ flowchart LR
 # 1️⃣  Create the 3.11 environment + install deps (one-time)
 setup_python311_env.bat
 
-# 2️⃣  Start Ollama and pull the models
-#     (or set GROQ_API_KEY in .env and skip this — Groq is used automatically;
+# 2️⃣  Start Ollama and pull the models (TOM itself never pulls models)
+#     (hosted Groq is opt-in instead: GROQ_API_KEY + TOM_LLM_PROVIDER=groq in .env;
 #      only the embedding model below is still needed locally)
 ollama serve
 ollama pull gemma4:latest
 ollama pull qwen2.5-coder:7b-instruct
 ollama pull nomic-embed-text:latest
 
-# 3️⃣  Copy config and add your Hindsight key so TOM remembers across sessions
+# 3️⃣  Copy config. Long-term memory works out of the box, stored on this machine.
 copy .env.example .env
-#     HINDSIGHT_API_KEY=...   (Hindsight Cloud)  — or HINDSIGHT_BASE_URL for a self-hosted server
+#     Optional: HINDSIGHT_BASE_URL (+ HINDSIGHT_API_KEY) to use Hindsight Cloud or a self-hosted server
 
-# 4️⃣  Launch
+# 4️⃣  Launch (classic Tkinter app, or the PySide6 app)
 launch_tom_ui.bat
+launch_tom_qt.bat
 ```
 
 | Launcher | When to use |
 |---|---|
 | `launch_tom_ui.bat` | Normal launch (auto-finds Python 3.11, checks deps) |
+| `launch_tom_qt.bat` | PySide6 app: tasks from every interface, approvals, resources, privacy routes, push-to-talk, emergency stop |
 | `launch_tom_safe.bat` | Voice disabled, console visible — **use first if it crashes** |
 | `launch_tom_debug.bat` | Console visible for full tracebacks |
 | `create_desktop_shortcut.bat` | Puts a double-clickable **TOM** icon on your Desktop |
@@ -638,10 +643,11 @@ Settings live in `.env` (copy from [.env.example](.env.example)). Nothing is req
 <details>
 <summary><b>Show all config groups</b></summary>
 
-- **Long-term memory:** `HINDSIGHT_API_KEY` (Hindsight Cloud) or `HINDSIGHT_BASE_URL`
-  (self-hosted), `HINDSIGHT_BANK_ID`, `HINDSIGHT_TIMEOUT_SECONDS`, `HINDSIGHT_ENABLED`.
-- **LLM provider:** `GROQ_API_KEY` (hosted Groq is the default the moment this is set),
-  `TOM_LLM_PROVIDER` (`ollama` forces local; also accepts `local`), `GROQ_MODEL`,
+- **Long-term memory:** local SQLite store by default (`tom_brain/hindsight/memory.sqlite3`);
+  `HINDSIGHT_BASE_URL` opts in to Hindsight Cloud (with `HINDSIGHT_API_KEY`) or a self-hosted server.
+  Also `HINDSIGHT_BANK_ID`, `HINDSIGHT_TIMEOUT_SECONDS`, `HINDSIGHT_ENABLED`.
+- **LLM provider:** local Ollama by default; `TOM_LLM_PROVIDER=groq` (plus `GROQ_API_KEY`) opts in
+  to hosted Groq. Also `GROQ_MODEL`,
   `GROQ_FAST_MODEL`, `GROQ_CODE_MODEL`, `GROQ_VISION_MODEL`, `NLP_PARSE_TIMEOUT_SECONDS`.
   A variable already exported in your shell wins over `.env`; TOM reports the conflict in chat.
 - **Core (LLM):** `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_FAST_MODEL`,
@@ -659,8 +665,17 @@ Settings live in `.env` (copy from [.env.example](.env.example)). Nothing is req
   `INSTAGRAM_CHECK_INTERVAL_SECONDS`, `INSTAGRAM_AUTO_SEND_REPORT_EMAIL`, …
 - **Browser:** `CHROME_EXECUTABLE`, `CHROME_PROFILE_PATH`.
 - **OCR:** `TESSERACT_CMD` (only if Tesseract isn't on PATH).
-- **Voice:** `VOICE_INPUT_ENABLED`, `VOICE_OUTPUT_ENABLED`, `TOM_VOICE`, `TOM_VOICE_RATE`,
-  `VOICE_RECOGNITION_ENGINE`, tuning thresholds.
+- **Voice (local by default):** `VOICE_INPUT_ENABLED`, `VOICE_OUTPUT_ENABLED`, tuning thresholds.
+  Speech-to-text: `VOICE_RECOGNITION_ENGINE` (`local` faster-whisper; `google` = cloud opt-in),
+  `TOM_ASR_MODEL` (default `large-v3-turbo`), `TOM_ASR_MODEL_DIR` (an existing faster-whisper
+  cache — TOM never downloads models), `TOM_ASR_LANGUAGE` (`en`, or `auto`), `TOM_ASR_DEVICE`
+  (`auto` uses the GPU only when measured free VRAM allows). Text-to-speech: `TOM_TTS_ENGINE`
+  (`local` Windows voices, female US English — Zira — by default; `edge` = cloud opt-in using
+  `TOM_VOICE`, default `en-US-JennyNeural`), `TOM_TTS_GENDER` (`female` default, `male`, `any`),
+  `TOM_TTS_VOICE`, `TOM_TTS_RATE` (default `1.15`, a little faster than normal). Both desktop apps
+  use the same push-to-talk: the 🎤 button or `Ctrl+Space` listens until you stop talking
+  (`TOM_VOICE_END_SILENCE`, default 2.5 s of quiet) or press it again (**Done**), up to
+  `TOM_VOICE_MAX_SECONDS` (60).
 - **Workspace & folders:** `TOM_WORKSPACE_DIR` (where deliverables are built — default
   `<Desktop>/TOM Workspace`), `TOM_DOWNLOADS_DIR`, `TOM_BROWSER_HEADLESS`.
 

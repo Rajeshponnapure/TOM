@@ -258,7 +258,8 @@ def test_web_refuses_an_ambiguous_name_and_sends_nothing(monkeypatch):
     monkeypatch.delenv("WHATSAPP_CONTACTS", raising=False)
     driver = WebDriver(OLD, ["Madhu Sri", "Madhusudhan", "Ravi"])
     result, _ = driver.run("Madhu", "hi")
-    assert result["status"] == "error" and result["sent"] is False
+    # Several matches: TOM asks which one (owner report 2026-10-21) and sends nothing.
+    assert result["status"] == "needs_input" and result["sent"] is False
     assert "Madhu Sri" in result["message"] and "Madhusudhan" in result["message"]
     assert driver.outgoing == []
 

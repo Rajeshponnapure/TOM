@@ -19,7 +19,6 @@ import subprocess
 import uuid
 from typing import Any, Dict, List, Optional
 
-from tools.project_paths import project_path_str
 
 try:
     from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
@@ -72,7 +71,9 @@ class MediaEngine:
     @staticmethod
     def _out_dir(slug: str) -> str:
         safe_slug = "".join(c if c.isalnum() else "_" for c in slug.lower()).strip("_")[:40] or "media"
-        return project_path_str("tom_brain", "media_output", f"{safe_slug}_{uuid.uuid4().hex[:8]}")
+        # Deliverables go to the user's workspace (TOM Workspace/media), not TOM's internal folders.
+        from tools.project_paths import workspace_path
+        return str(workspace_path("media", f"{safe_slug}_{uuid.uuid4().hex[:8]}"))
 
     # ── ffmpeg execution (shared by every video operation) ─────────────────
     def _run_ffmpeg(self, args: List[str], output_path: str, timeout: int = 300) -> Dict[str, Any]:
@@ -262,10 +263,19 @@ class MediaEngine:
         base = img.convert("RGBA")
         overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
-        try:
-            font = ImageFont.truetype("arial.ttf", max(18, base.size[0] // 30))
-        except Exception:
-            font = ImageFont.load_default()
+        size = max(18, base.size[0] // 30)
+        font = None
+        for name in ("arial.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf"):
+            try:
+                font = ImageFont.truetype(name, size)
+                break
+            except Exception:
+                continue
+        if font is None:
+            try:
+                font = ImageFont.load_default(size=size)  # scalable built-in font (Pillow >= 10.1)
+            except TypeError:
+                font = ImageFont.load_default()
         bbox = draw.textbbox((0, 0), text, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
         margin = 12

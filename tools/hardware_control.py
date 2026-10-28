@@ -8,7 +8,7 @@ import sys
 import time
 from datetime import datetime
 from typing import List, Optional, Tuple
-from tools.project_paths import project_path_str
+from tools.project_paths import workspace_path
 
 try:
     import pyautogui
@@ -39,6 +39,38 @@ try:
     _HAS_PSUTIL = True
 except ImportError:
     _HAS_PSUTIL = False
+
+
+def _set_clipboard_unicode(text: str) -> None:
+    """Put `text` on the Windows clipboard as CF_UNICODETEXT (UTF-16). Raises OSError on failure."""
+    import ctypes
+    from ctypes import wintypes
+    k32, u32 = ctypes.windll.kernel32, ctypes.windll.user32
+    k32.GlobalAlloc.argtypes, k32.GlobalAlloc.restype = [wintypes.UINT, ctypes.c_size_t], wintypes.HGLOBAL
+    k32.GlobalLock.argtypes, k32.GlobalLock.restype = [wintypes.HGLOBAL], wintypes.LPVOID
+    k32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    k32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+    u32.SetClipboardData.argtypes, u32.SetClipboardData.restype = [wintypes.UINT, wintypes.HANDLE], wintypes.HANDLE
+    data = (text + "\0").encode("utf-16-le")
+    for _ in range(10):                                   # another app may hold the clipboard for a moment
+        if u32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        raise OSError("the clipboard is busy")
+    try:
+        u32.EmptyClipboard()
+        handle = k32.GlobalAlloc(0x0002, len(data))       # GMEM_MOVEABLE
+        if not handle:
+            raise OSError("GlobalAlloc failed")
+        ptr = k32.GlobalLock(handle)
+        ctypes.memmove(ptr, data, len(data))
+        k32.GlobalUnlock(handle)
+        if not u32.SetClipboardData(13, handle):          # CF_UNICODETEXT; the clipboard now owns it
+            k32.GlobalFree(handle)
+            raise OSError("SetClipboardData failed")
+    finally:
+        u32.CloseClipboard()
 
 
 class HardwareControl:
@@ -197,7 +229,7 @@ class HardwareControl:
                 img = pyautogui.screenshot(region=region)
             else:
                 img = pyautogui.screenshot()
-            path = project_path_str("output", f"screenshot_{int(time.time())}.png")
+            path = str(workspace_path("screenshots", f"screenshot_{int(time.time())}.png"))
             os.makedirs(os.path.dirname(path), exist_ok=True)
             img.save(path)
             return {"status": "success", "path": path, "size": img.size}
@@ -271,17 +303,43 @@ class HardwareControl:
     # ── Clipboard ───────────────────────────────────────────────────────
 
     def copy_to_clipboard(self, text: str) -> dict:
-        """Copy text to clipboard."""
+        """Copy text to clipboard (full Unicode: ₹, Telugu, Hindi, emoji).
+
+        Was clip.exe fed in the ANSI code page, which failed on "₹" and every Indian script
+        (live check 2026-10-27). Now the Win32 clipboard API with CF_UNICODETEXT."""
         try:
-            import subprocess
-            # SECURITY: no shell pipeline with user text — feed clip.exe via stdin.
-            subprocess.run(["clip"], input=text, text=True,
-                           capture_output=True, timeout=5)
+            if os.name == "nt":
+                _set_clipboard_unicode(text)
+            else:
+                import subprocess
+                subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"),
+                               capture_output=True, timeout=5, check=True)
             return {"status": "success", "text": text[:50]}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
     def get_clipboard_text(self) -> str:
+        if os.name == "nt":                                # CF_UNICODETEXT: PowerShell output lost ₹ / Indic text
+            try:
+                import ctypes
+                from ctypes import wintypes
+                k32, u32 = ctypes.windll.kernel32, ctypes.windll.user32
+                u32.GetClipboardData.restype = wintypes.HANDLE
+                k32.GlobalLock.argtypes, k32.GlobalLock.restype = [wintypes.HGLOBAL], ctypes.c_wchar_p
+                k32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+                if not u32.OpenClipboard(None):
+                    return ""
+                try:
+                    handle = u32.GetClipboardData(13)
+                    if not handle:
+                        return ""
+                    text = k32.GlobalLock(handle) or ""
+                    k32.GlobalUnlock(handle)
+                    return text
+                finally:
+                    u32.CloseClipboard()
+            except Exception:
+                return ""
         try:
             import subprocess
             result = subprocess.run(["powershell", "-command", "Get-Clipboard"],
@@ -462,3 +520,17 @@ class HardwareControl:
             return {"status": "success", "message": "Opened volume mixer"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+
+# R3: input and audio actions are reversible (no approval) but still pass the policy engine, so the
+# emergency stop really stops them and each one is in the audit log (tool-permissions.md §2 — they
+# used to be called straight from GUI buttons).
+from tom_core.policy.engine import ActionClass as _ActionClass  # noqa: E402
+from tom_core.tools.guard import guard_methods as _guard_methods  # noqa: E402
+
+_guard_methods(HardwareControl, ("move_mouse", "click", "double_click", "right_click", "drag", "scroll",
+                                 "type_text", "press_key", "hotkey", "key_down", "key_up", "focus_window",
+                                 "copy_to_clipboard", "set_volume", "mute_audio", "unmute_audio",
+                                 "volume_up", "volume_down", "screenshot"),
+               "hardware", _ActionClass.REVERSIBLE, approval_action="hardware")
+

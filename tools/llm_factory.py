@@ -2,15 +2,16 @@
 LLM factory — one place that builds every chat model TOM uses.
 
 Providers (TOM_LLM_PROVIDER):
-  * "groq"   — hosted, OpenAI-compatible models via langchain-groq. Active by
-               default whenever GROQ_API_KEY is set in .env.
   * "ollama" — fully local via langchain-ollama, plus the aliases "local" /
-               "local-llm". Selected ONLY when the user asks for it explicitly.
+               "local-llm". The DEFAULT: prompts never leave the machine.
+  * "groq"   — hosted, OpenAI-compatible models via langchain-groq. Used ONLY
+               when TOM_LLM_PROVIDER=groq is set explicitly (the GUI provider
+               toggle sets it). A GROQ_API_KEY on its own does not opt in.
 
-TOM never silently swaps to a local model: while a Groq key is configured the
-hosted provider stays in charge until TOM_LLM_PROVIDER=ollama says otherwise.
-The one thing that is always local is the RAG embedding encoder — Groq has no
-embeddings endpoint (see resolve_model("embed")), which is not a chat fallback.
+Cloud inference is opt-in (PRD RRM-007, ADR-005, owner decision 2026-10-21);
+this reverses the earlier "Groq whenever a key exists" default.
+The RAG embedding encoder is always local — Groq has no embeddings endpoint
+(see resolve_model("embed")).
 
 Every caller gets a LangChain chat model with the same `.ainvoke()` surface,
 so the rest of TOM never needs to know which provider is active.
@@ -20,8 +21,9 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
 from typing import Any
+
+from tools.project_paths import env_file
 
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 # Reasoning models spend part of the token budget on hidden reasoning; a tiny
@@ -33,14 +35,12 @@ _LOCAL_PROVIDER_ALIASES = ("ollama", "local", "local-llm", "local_llm")
 
 
 def provider() -> str:
-    """Active provider: "groq" (hosted) or "ollama" (local, opt-in only)."""
+    """Active provider: "ollama" (local, default) or "groq" (hosted, explicit opt-in only)."""
     value = (os.environ.get("TOM_LLM_PROVIDER") or "").strip().lower()
-    if value in _LOCAL_PROVIDER_ALIASES:
-        return "ollama"
     if value == "groq":
         return "groq"
-    # Unset or unrecognised: hosted when it can actually run, local otherwise.
-    return "groq" if (os.environ.get("GROQ_API_KEY") or "").strip() else "ollama"
+    # Local aliases, unset or unrecognised: stay on the machine.
+    return "ollama"
 
 
 def groq_vision_model() -> str:
@@ -50,7 +50,7 @@ def groq_vision_model() -> str:
 
 def _env_file_value(key: str) -> str:
     """Value for `key` as written in the project's .env ("" when absent)."""
-    path = Path(__file__).resolve().parents[1] / ".env"
+    path = env_file()
     try:
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
@@ -114,7 +114,7 @@ def persist_provider(name: str, env_path=None) -> None:
     """
     try:
         if env_path is None:
-            env_path = Path(__file__).resolve().parents[1] / ".env"
+            env_path = env_file()            # TOM_ENV_FILE in tests
         lines: list = env_path.read_text(encoding="utf-8").splitlines() \
             if env_path.is_file() else []
         pattern = re.compile(r"^\s*(?:export\s+)?TOM_LLM_PROVIDER\s*=")
@@ -358,7 +358,8 @@ def resolve_model(slot: str = "primary") -> str:
     return resolved
 
 
-def make_chat_model(model: str, max_tokens: int = 4096, temperature: float = 0.1) -> Any:
+def make_chat_model(model: str, max_tokens: int = 4096, temperature: float = 0.1,
+                    profile: str = "chat") -> Any:
     """Build a chat model for the active provider.
 
     `model` is the Ollama model name; it is ignored on Groq (the Groq model is
@@ -400,9 +401,43 @@ def make_chat_model(model: str, max_tokens: int = 4096, temperature: float = 0.1
     # Qwen 3.x models emit their reasoning separately. With TOM's compact
     # chat budget, the reasoning can consume every generated token and leave
     # the visible response empty. Disable it for normal assistant responses.
+    # R6 (RRM-002/003): fit the model into the VRAM measured free now, or pick a fallback.
+    if os.environ.get("TOM_LLM_ADMISSION", "1") != "0":
+        try:
+            from tom_core.resources.llm_admission import cached_admit
+            adm = cached_admit(model, profile)
+            if adm.model != model:
+                print(f"[LLM_FACTORY] {adm.reason}")
+                kwargs["model"] = model = adm.model
+            elif adm.decision not in ("gpu", "unmeasured"):
+                print(f"[LLM_FACTORY] {model}: {adm.reason}")
+            kwargs["num_ctx"] = adm.num_ctx
+            if adm.num_gpu is not None:
+                kwargs["num_gpu"] = adm.num_gpu
+        except Exception:
+            pass  # admission is advisory; never block model construction
+    # RRM-006: idle models are unloaded by Ollama after keep_alive (Ollama's default is 5 minutes).
+    if os.environ.get("TOM_OLLAMA_KEEP_ALIVE", "").strip():
+        kwargs["keep_alive"] = os.environ["TOM_OLLAMA_KEEP_ALIVE"].strip()
     if "qwen3" in model.lower():
         kwargs["reasoning"] = False
     return ChatOllama(**kwargs)
+
+
+def oom_fallback_model(model_obj: Any) -> "tuple[Any, str]":
+    """AT-009: the single retry after an out-of-memory failure. Returns (new model, reason), or
+    (None, reason) when there is nothing smaller to try (e.g. a cloud model)."""
+    name = getattr(model_obj, "model", "")
+    if not name or provider() == "groq":
+        return None, "out of memory, and no local fallback applies"
+    from tom_core.resources.llm_admission import fallback_after_oom
+    adm = fallback_after_oom(name, getattr(model_obj, "num_ctx", None))
+    try:
+        new = model_obj.model_copy(update={"model": adm.model, "num_ctx": adm.num_ctx,
+                                           **({"num_gpu": adm.num_gpu} if adm.num_gpu is not None else {})})
+    except Exception:
+        return None, f"out of memory; could not build the fallback ({adm.reason})"
+    return new, adm.reason
 
 
 def make_groq_model(model: str, max_tokens: int = 4096, temperature: float = 0.1) -> Any:

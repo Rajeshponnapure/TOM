@@ -83,6 +83,13 @@ class ChatApps:
         if len(message) > MAX_LENGTH[app]:
             return {"status": "error", "sent": False,
                     "message": f"That message is {len(message)} characters; {app.title()} allows {MAX_LENGTH[app]}."}
+        # R3 policy gate (TOM-MIG-010): the agent's approval of this exact app/target/text is used here.
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import aenforce
+        gate = await aenforce("chat.send", ActionClass.DESTRUCTIVE_OR_EXTERNAL,
+                              payload={"app": app, "to": target, "message": message}, approval_action="chat_send")
+        if not gate.allowed:
+            return gate.refusal()
         return await asyncio.to_thread(getattr(self, f"_send_{app}"), target.strip(), message)
 
     # ── Slack ────────────────────────────────────────────────────────────────
