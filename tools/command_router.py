@@ -151,8 +151,19 @@ class CommandRouter:
         # Games installed on this PC ("play Green Hell") and everyday Windows control ("lock my pc")
         game = self.game_in_request(lower)
         if game is not None:
+            # "play X for me" / "autopilot X" → experimental autopilot; plain "play/launch X" → just start it.
+            if re.search(r"\b(for me|on my behalf|yourself|auto ?pilot|automatically|by yourself|"
+                         r"play (?:it|the game) for)\b", lower) or lower.startswith(("autopilot", "auto-pilot")):
+                return RouteDecision("system", "game_autopilot", "execute_game_autopilot", confidence=0.9,
+                                     metadata={"game": game.name})
             return RouteDecision("system", "launch_game", "execute_game_launch", confidence=0.93,
                                  metadata={"game": game.name})
+        # "autopilot <game not in library>" / "play <x> for me" even if we couldn't match the index
+        if re.search(r"\bauto ?pilot\b", lower) or re.search(r"\bplay\b.*\bfor me\b", lower):
+            gm = re.search(r"(?:play|autopilot|auto-pilot)\s+(.+?)(?:\s+for me\b|\s+yourself\b|$)", lower)
+            if gm:
+                return RouteDecision("system", "game_autopilot", "execute_game_autopilot", confidence=0.8,
+                                     metadata={"game": gm.group(1).strip()})
         m = self._SCREEN_CLICK.match(lower)
         if m and not re.match(r"^(?:at\s+)?\d+\s*[, ]\s*\d+$", m.group(2)):        # coordinates: Hardware engine
             return RouteDecision("system", "screen_click", "execute_screen_action", confidence=0.9,

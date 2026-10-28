@@ -1428,6 +1428,8 @@ class TomAgent:
                 # An installed game ("play Green Hell") / Windows control ("lock my pc", "brightness 60")
                 elif handler == "execute_game_launch":
                     result = await self.execute_game_launch(command)
+                elif handler == "execute_game_autopilot":    # "play Minecraft for me" — experimental
+                    result = await self.execute_game_autopilot({**route.metadata, "raw": command})
                 elif handler == "execute_system_control":
                     result = await self.execute_system_control(route.metadata["action"], route.metadata["arg"])
                 elif handler == "execute_read_user_file":        # "read the file budget.xlsx" — the owner's folders
@@ -2538,6 +2540,34 @@ class TomAgent:
                     "that needs you at the controls.")
             result["message"] += " It may take a moment to appear." + note
         return result
+
+    async def execute_game_autopilot(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Experimental: play an installed game by sight + keypresses. Warns, then runs on approval."""
+        from tools.game_autopilot import GameAutopilot
+        game = metadata.get("game", "")
+        if not game:
+            return {"status": "needs_input", "response_type": "game_autopilot",
+                    "message": "Which game should I try to play? e.g. \"play Green Hell for me\"."}
+        ap = GameAutopilot(model=self._autopilot_model())
+        self._game_autopilot = ap                       # so "stop" can halt it
+        seconds = 30.0
+        m = re.search(r"(\d+)\s*(second|sec|minute|min)", str(metadata.get("raw", "")), re.I)
+        if m:
+            seconds = float(m.group(1)) * (60 if m.group(2).lower().startswith("min") else 1)
+        seconds = max(5.0, min(seconds, 300.0))
+        return await asyncio.to_thread(ap.start, game, seconds)
+
+    def _autopilot_model(self) -> str:
+        """A vision-capable local model for the autopilot (qwen3.5 has vision; fall back to 4b)."""
+        try:
+            import subprocess
+            out = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=8).stdout
+            for name in ("qwen3.5:9b", "qwen3.5:4b"):
+                if name in out:
+                    return name
+        except Exception:
+            pass
+        return "qwen3.5:4b"
 
     async def execute_screen_action(self, action: str, target: str) -> Dict[str, Any]:
         """Act on whatever app is in front, the way a person would: read the screen (Tesseract), click the
