@@ -104,6 +104,8 @@ class WhatsAppDesktopUIA:
     def _window(self):
         import ctypes
         from ctypes import wintypes
+        if not hasattr(ctypes, "windll"):
+            raise UIAError("Windows UI Automation is unavailable on this operating system.")
         user32 = ctypes.windll.user32
         found = []
 

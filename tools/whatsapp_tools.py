@@ -222,8 +222,13 @@ class WhatsAppTools:
         """
         from tools.whatsapp_uia import UIAError, choose
         try:
-            uia = self._uia()
-            found = await asyncio.to_thread(uia.candidates, contact_name)
+            try:
+                uia = self._uia()
+                found = await asyncio.to_thread(uia.candidates, contact_name)
+            except UIAError:
+                raise
+            except Exception as exc:  # e.g. a COM error while reading the results: same as "unusable"
+                raise UIAError(f"Windows UI Automation failed: {exc}") from None
         except UIAError as exc:
             if confirm:
                 raise WhatsAppError(f"I couldn't read WhatsApp's search results ({exc}), so I can't check "
@@ -330,19 +335,11 @@ class WhatsAppTools:
             self.browser_tools = BrowserTools()
 
         if not self.browser_tools.browser:
-            chrome_path = os.environ.get(
-                "CHROME_EXECUTABLE",
-                "C:/Program Files/Google/Chrome/Application/chrome.exe",
-            )
-            profile_path = os.environ.get(
-                "CHROME_PROFILE_PATH",
-                os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data"),
-            )
-            await self.browser_tools.init_browser(
-                executable_path=chrome_path,
-                user_data_dir=profile_path,
-                headless=False,
-            )
+            # BrowserTools resolves CHROME_EXECUTABLE / CHROME_PROFILE_PATH itself.
+            init = await self.browser_tools.init_browser(headless=False)
+            if not self.browser_tools.context:
+                raise WhatsAppError("I couldn't start Chrome for WhatsApp Web"
+                                    f" ({(init or {}).get('message', 'unknown error')}). Nothing was sent.")
 
         page = await self.browser_tools._get_active_page()
         if not page:

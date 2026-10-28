@@ -116,7 +116,7 @@ class ScreenControl:
         try:
             import pytesseract  # noqa: F401
         except ImportError:
-            return False, "pytesseract is not installed (pip install pytesseract)"
+            return False, "Screen reading needs Tesseract OCR: the pytesseract package is not installed (pip install pytesseract)"
         if not self.cmd:
             return False, ("Tesseract OCR is not installed — install it (winget install UB-Mannheim.TesseractOCR) "
                            "or set TESSERACT_CMD to tesseract.exe")

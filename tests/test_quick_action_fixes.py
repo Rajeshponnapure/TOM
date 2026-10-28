@@ -74,8 +74,10 @@ def test_engine_detection(text, key):
     assert EngineRouter().detect(text.lower()) == key
 
 
-def test_engines_that_need_more_input_say_so_instead_of_reporting_success():
+def test_engines_that_need_more_input_say_so_instead_of_reporting_success(monkeypatch):
     r = EngineRouter()
+    # A stand-in engine, so the check does not depend on pyautogui (and a display) being installed.
+    monkeypatch.setattr(r, "_get", lambda key: types.SimpleNamespace(is_available=lambda: True))
     assert r._run_hardware("do something with the computer")["status"] == "needs_input"
 
 

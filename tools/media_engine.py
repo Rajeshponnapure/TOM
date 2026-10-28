@@ -263,10 +263,19 @@ class MediaEngine:
         base = img.convert("RGBA")
         overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
-        try:
-            font = ImageFont.truetype("arial.ttf", max(18, base.size[0] // 30))
-        except Exception:
-            font = ImageFont.load_default()
+        size = max(18, base.size[0] // 30)
+        font = None
+        for name in ("arial.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf"):
+            try:
+                font = ImageFont.truetype(name, size)
+                break
+            except Exception:
+                continue
+        if font is None:
+            try:
+                font = ImageFont.load_default(size=size)  # scalable built-in font (Pillow >= 10.1)
+            except TypeError:
+                font = ImageFont.load_default()
         bbox = draw.textbbox((0, 0), text, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
         margin = 12
