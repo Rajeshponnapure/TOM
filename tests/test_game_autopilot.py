@@ -107,3 +107,64 @@ def test_routing_distinguishes_autopilot_from_launch():
     assert r.route("autopilot Minecraft").handler == "execute_game_autopilot"
     # a plain launch of a game that isn't installed falls through (not autopilot)
     assert r.route("play some random uninstalled game").handler != "execute_game_autopilot"
+
+
+# ── upgraded engine: perception, benchmark, hybrid reflex loop, mouse aim ──
+import numpy as np
+from tools.game_autopilot import Perception, FastCapture, foreground_region
+
+
+def test_perception_motion_center_finds_the_moving_region():
+    a = np.zeros((200, 300, 3), np.uint8)
+    b = a.copy()
+    b[80:120, 130:170] = 255                       # a bright block appears mid-frame
+    c = Perception.motion_center(a, b)
+    assert c is not None and 120 < c[0] < 180 and 80 < c[1] < 120
+
+def test_perception_motion_center_none_when_still():
+    a = np.full((100, 100, 3), 50, np.uint8)
+    assert Perception.motion_center(a, a.copy()) is None
+
+def test_perception_color_mask_center():
+    frame = np.zeros((120, 120, 3), np.uint8)
+    frame[40:80, 50:90] = (0, 0, 255)              # a red blob (BGR)
+    c = Perception.color_mask_center(frame, (0, 120, 120), (10, 255, 255))
+    assert c is not None and 50 < c[0] < 90
+
+def test_benchmark_with_injected_capture_reports_fps(monkeypatch):
+    # a fake FastCapture that returns instant frames, so fps is measurable without a display
+    class FakeCap:
+        def grab_bgr(self): return np.zeros((64, 64, 3), np.uint8)
+    ap = GameAutopilot(capture=FakeCap())
+    b = ap.benchmark(0.4, with_reflex=False)
+    assert b["frames"] > 0 and b["fps"] > 0 and b["error"] == ""
+
+def test_hybrid_loop_runs_reflex_every_frame_and_strategy_occasionally():
+    frames = iter([np.zeros((32, 32, 3), np.uint8) for _ in range(10_000)])
+    sent = []
+    reflex_calls = {"n": 0}
+    def reflex(bgr, prev):
+        reflex_calls["n"] += 1
+        return "W"                                  # always strafe forward
+    decide_calls = {"n": 0}
+    def decide(png, game):
+        decide_calls["n"] += 1
+        return "SPACE"
+    class Cap:
+        def grab_bgr(self): return next(frames)
+    ap = GameAutopilot(decide=decide, reflex=reflex, capture=Cap(),
+                       send=lambda a: (sent.append(a), True)[1])
+    run = ap.play("G", seconds=0.5, strategy_every=0.2)
+    assert reflex_calls["n"] > run.strategy_calls          # reflex runs far more often than strategy
+    assert "W" in sent and run.frames > 0
+    assert run.fps > 0 and run.strategy_calls >= 1
+
+def test_foreground_region_shape():
+    r = foreground_region()
+    assert r is None or (len(r) == 4 and r[2] > 0 and r[3] > 0)
+
+def test_press_action_and_hold_reject_unknown():
+    from tools.game_autopilot import press_action, hold_key
+    assert press_action("NONE") is True            # explicit no-op is valid
+    assert press_action("BANANA") is False
+    assert hold_key("ZZZ", True) is False

@@ -84,3 +84,6 @@ pytest==9.0.3
 pyserial==3.5
 paho-mqtt==2.1.0
 qrcode[pil]==8.2
+
+# Fast screen capture for the game autopilot (30-60+ fps, vs pyautogui's disk saves)
+mss==9.0.2
