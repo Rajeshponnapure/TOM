@@ -4,8 +4,9 @@ Steam: every library in steamapps/libraryfolders.vdf, one appmanifest_<id>.acf p
 steam://rungameid/<id>. Epic: Manifests/*.item with the "games" category → the launch link Epic writes
 into its own desktop shortcuts. Store games (Solitaire …) are found by tools.os_tools instead.
 
-TOM can start a game and bring it to the front. It cannot play a real-time game for the owner — that
-needs a person at the controls — and it says so rather than pretending.
+TOM can start a game and bring it to the front. It can also attempt to play one by looking at the screen
+(tom_core/games/play_loop), but it never claims expert play of a real-time game — it reports what it
+actually saw and did.
 """
 from __future__ import annotations
 
@@ -28,8 +29,9 @@ TTL = 300.0
 @dataclass(frozen=True)
 class Game:
     name: str
-    launcher: str          # "Steam" | "Epic Games"
-    launch: str            # URI handed to the shell
+    launcher: str          # "Steam" | "Epic Games" | "BlueStacks" | "Shortcut"
+    launch: str            # URI or shortcut handed to the shell
+    window: str = ""       # title of the window it plays in, when that isn't the game's name (emulators)
 
 
 def _steam_root() -> str:
@@ -98,9 +100,47 @@ def epic_games(manifests: Optional[str] = None) -> List[Game]:
     return games
 
 
+def _shortcut_target(lnk: str) -> tuple:
+    """(target, arguments) of a Windows .lnk, read with the shell's own COM object."""
+    if os.name != "nt":
+        return "", ""
+    try:
+        import pythoncom  # noqa: F401  (pywin32)
+        from win32com.client import Dispatch
+        sc = Dispatch("WScript.Shell").CreateShortcut(lnk)
+        return str(sc.TargetPath or ""), str(sc.Arguments or "")
+    except Exception:
+        return "", ""
+
+
+def shortcut_games(folders: Optional[List[str]] = None, read=None) -> List[Game]:
+    """Games started from a desktop / Start-menu shortcut that Steam and Epic don't list — e.g. an
+    Android game in BlueStacks ("Minecraft.lnk" → HD-Player.exe --cmd launchApp --package …) or a
+    steam:// / Epic link. Only shortcuts that point at a game launcher count, not every app."""
+    if folders is None:
+        home = os.path.expanduser("~")
+        folders = [os.path.join(home, "Desktop"), os.path.join(home, "OneDrive", "Desktop"),
+                   os.path.join(os.environ.get("PUBLIC", r"C:\Users\Public"), "Desktop"),
+                   os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")]
+    read = read or _shortcut_target
+    games: List[Game] = []
+    for folder in folders:
+        for lnk in glob.glob(os.path.join(folder, "**", "*.lnk"), recursive=True):
+            name = os.path.splitext(os.path.basename(lnk))[0]
+            target, args = read(lnk)
+            low = f"{target} {args}".lower()
+            if "hd-player.exe" in low and "launchapp" in low:
+                games.append(Game(name, "BlueStacks", lnk, window="BlueStacks App Player"))
+            elif re.search(r"steam://rungameid|com\.epicgames\.launcher://apps", low):
+                games.append(Game(name, "Shortcut", lnk))
+    return list({g.name.lower(): g for g in games}.values())
+
+
 def installed_games(refresh: bool = False) -> List[Game]:
     if refresh or time.monotonic() - _CACHE["at"] > TTL:
-        _CACHE["games"] = steam_games() + epic_games()
+        found = steam_games() + epic_games()
+        known = {_norm(g.name) for g in found}
+        _CACHE["games"] = found + [g for g in shortcut_games() if _norm(g.name) not in known]
         _CACHE["at"] = time.monotonic()
     return list(_CACHE["games"])
 

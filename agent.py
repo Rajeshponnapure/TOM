@@ -1428,8 +1428,15 @@ class TomAgent:
                 # An installed game ("play Green Hell") / Windows control ("lock my pc", "brightness 60")
                 elif handler == "execute_game_launch":
                     result = await self.execute_game_launch(command)
-                elif handler == "execute_game_autopilot":    # "play Minecraft for me" — experimental
+                elif handler == "execute_game_autopilot":    # "play Minecraft for me", "play my snake game for me"
                     result = await self.execute_game_autopilot({**route.metadata, "raw": command})
+                elif handler == "execute_stop_game":
+                    stopped = self.stop_game()
+                    result = {"status": "success" if stopped else "error", "response_type": "game_autopilot",
+                              "message": "Stopping, and letting go of every key." if stopped
+                              else "I'm not playing anything right now."}
+                elif handler == "execute_game_task":         # "build a house in minecraft"
+                    result = await self.execute_game_task({**route.metadata, "raw": command})
                 elif handler == "execute_system_control":
                     result = await self.execute_system_control(route.metadata["action"], route.metadata["arg"])
                 elif handler == "execute_read_user_file":        # "read the file budget.xlsx" — the owner's folders
@@ -2526,8 +2533,18 @@ class TomAgent:
     # ── GAMES AND WINDOWS CONTROL ───────────────────────────────────────
 
     async def execute_game_launch(self, command: str) -> Dict[str, Any]:
-        """Start an installed Steam/Epic game by name. TOM starts games; it doesn't play them for the owner."""
+        """Start a game: one TOM made, or an installed Steam/Epic/BlueStacks game."""
         from tools import game_library
+        made = self.command_router.made_game_in_request(command.lower())
+        if made is not None:
+            from tom_core.games import godot, studio, unity
+            engine = made.get("engine")
+            res = (godot.launch(made["path"]) if engine == "godot" else unity.launch(made["path"]) if engine == "unity"
+                   else studio.GameStudio.launch(made["path"]))
+            res["response_type"] = "game_launch"
+            if res.get("status") == "success":
+                res["message"] += " Say \"play it for me\" if you want me to play."
+            return res
         game = self.command_router.game_in_request(command.lower())
         if game is None:
             return {"status": "error", "response_type": "game_launch",
@@ -2535,27 +2552,125 @@ class TomAgent:
         result = await game_library.launch(game)
         result["response_type"] = "game_launch"
         if result.get("status") == "success":
-            note = ("" if not re.search(r"\b(?:can you|for me|you play)\b", command, re.IGNORECASE) else
-                    " I can start games and switch to them, but I can't play a real-time game for you — "
-                    "that needs you at the controls.")
-            result["message"] += " It may take a moment to appear." + note
+            result["message"] += (" It may take a moment to appear. Say \"play it for me\" or give me a task in it "
+                                  "(e.g. \"build a house in minecraft\").")
         return result
 
+    @staticmethod
+    def _play_seconds(raw: str, default: float = 30.0) -> float:
+        m = re.search(r"(\d+)\s*(second|sec|minute|min)", raw or "", re.I)
+        seconds = float(m.group(1)) * (60 if m.group(2).lower().startswith("min") else 1) if m else default
+        return max(5.0, min(seconds, 600.0))
+
+    def _game_gate(self, game: str, summary: str, payload: Dict[str, Any]):
+        """One approval for driving a game's keyboard/mouse, with the warning shown first."""
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import enforce
+        return enforce("game.autopilot", ActionClass.DESTRUCTIVE_OR_EXTERNAL, payload={"game": game, **payload},
+                       approval_action="game_autopilot", summary=summary, risk_level="high")
+
     async def execute_game_autopilot(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        """Experimental: play an installed game by sight + keypresses. Warns, then runs on approval."""
-        from tools.game_autopilot import GameAutopilot
+        """TOM plays a game: one it made (by sight, with that game's strategy, score read back from the
+        game) or any installed/open game (state-aware loop with per-game memory). Warns, asks once, then plays."""
+        import threading
+        from tools import game_autopilot as ga
         game = metadata.get("game", "")
         if not game:
             return {"status": "needs_input", "response_type": "game_autopilot",
-                    "message": "Which game should I try to play? e.g. \"play Green Hell for me\"."}
-        ap = GameAutopilot(model=self._autopilot_model())
-        self._game_autopilot = ap                       # so "stop" can halt it
-        seconds = 30.0
-        m = re.search(r"(\d+)\s*(second|sec|minute|min)", str(metadata.get("raw", "")), re.I)
-        if m:
-            seconds = float(m.group(1)) * (60 if m.group(2).lower().startswith("min") else 1)
-        seconds = max(5.0, min(seconds, 300.0))
-        return await asyncio.to_thread(ap.start, game, seconds)
+                    "message": "Which game should I play? e.g. \"play my snake game for me\" or \"play Minecraft for me\"."}
+        if not ga.GameAutopilot().available():
+            return {"status": "error", "response_type": "game_autopilot",
+                    "message": "Playing games needs Windows with UI automation enabled."}
+        seconds = self._play_seconds(str(metadata.get("raw", "")))
+        stop = threading.Event()
+        self._game_stop = stop                          # "stop playing" sets it
+        from tom_core.games import studio
+        made = studio.read_manifest(metadata["made"]) if metadata.get("made") else None
+        if made is not None:
+            made["path"] = metadata["made"]
+            gate = self._game_gate(made["title"], (
+                f"Play {made['title']} (a game I made) for {seconds:g}s by looking at the screen and pressing "
+                "its keys. I only type into its window and pause if anything else comes to the front. "
+                "Say \"stop playing\" any time."), {"seconds": str(seconds)})
+            if not gate.allowed:
+                return gate.refusal({"response_type": "game_autopilot"})
+            return await asyncio.to_thread(ga.play_made_game, made, seconds, stop)
+        # the spoken request carries the goal ("survive 5 minutes", "find water"); pass it only when it
+        # actually names one, so the approval prompt doesn't echo "play green hell for me" back
+        goal = str(metadata.get("task") or "")
+        goal_desc = goal
+        if not goal:
+            from tom_core.games.play_loop import describe_goal, parse_goal
+            spoken = str(metadata.get("raw", ""))
+            parsed = parse_goal(spoken, seconds)
+            if parsed.kind != "explore":
+                goal, goal_desc = spoken, describe_goal(parsed)
+        gate = self._game_gate(game, (
+            f"Play {game} for {seconds:g}s" + (f", aiming to {goal_desc}" if goal_desc else "") + ". Before you say yes:\n"
+            "  - I'll start the game if it isn't open and drive its keyboard/mouse; I only type into its window.\n"
+            "  - I read the screen: menus, loading, deaths. I learn which keys the game answers to and \n"
+            "    remember it next time, and I retry after dying.\n"
+            "  - I won't play a big 3D game like an expert, and I won't pretend to.\n"
+            "  - Online games with anti-cheat can treat this as cheating and BAN the account.\n"
+            "Say \"stop playing\" any time."), {"seconds": str(seconds), "goal": goal})
+        if not gate.allowed:
+            return gate.refusal({"response_type": "game_autopilot"})
+        return await asyncio.to_thread(ga.play_installed_game, game, seconds, stop, self._autopilot_model(),
+                                       None, 150.0, goal)
+
+    async def execute_game_task(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """A task inside a game: Minecraft by its own chat commands (exact, checked against the game's
+        reply); any other game by the vision explorer with the task as its goal."""
+        from tools import game_autopilot as ga, game_library, game_tasks
+        game, task = metadata["game"], metadata["task"]
+        if not game_tasks.is_minecraft(game):
+            return await self.execute_game_autopilot({"game": game, "task": task, "raw": task})
+        plan = game_tasks.minecraft_plan(task)
+        if plan is None:
+            return {"status": "needs_input", "response_type": "game_task", "message": (
+                f"I'm not sure how to \"{task}\" in Minecraft exactly. I can build (house, tower, wall, bridge, pool, "
+                "pyramid, platform in wood, stone, brick, glass ...), find structures or biomes (village, temple, "
+                "stronghold, desert ...) and take you there, give items, set day/night/weather or the game mode. "
+                "Or say \"play Minecraft for me\" and I'll explore.")}
+        info = game_library.find_game("minecraft")
+        window = (info.window or info.name) if info else "Minecraft"
+        gate = self._game_gate("Minecraft", (
+            f"In Minecraft: {plan.summary}. I'll open chat in the Minecraft window and type:\n  "
+            + "\n  ".join(plan.commands) + "\nCommands need cheats on in that world. I only type into the game window."),
+            {"commands": " | ".join(plan.commands)})
+        if not gate.allowed:
+            return gate.refusal({"response_type": "game_task"})
+        hit = ga.find_window(window)
+        if hit is None:
+            if info is None:
+                return {"status": "error", "response_type": "game_task", "message": "Minecraft isn't installed on this PC."}
+            await game_library.launch(info)
+            return {"status": "needs_input", "response_type": "game_task", "message": (
+                "I've started Minecraft. Load the world you want me to work in (with cheats on), then ask me again; "
+                "I'll type the commands as soon as it's open.")}
+        if not await asyncio.to_thread(ga.focus_window, hit[0]):
+            return {"status": "error", "response_type": "game_task", "message": (
+                "Windows wouldn't bring Minecraft to the front, so I didn't type anything. Click on the game and ask again.")}
+        driver = game_tasks.MinecraftDriver(hit[0])
+        result = await asyncio.to_thread(game_tasks.run_minecraft, plan, driver)
+        result["response_type"] = "game_task"
+        result["commands"] = plan.commands
+        if result.get("fallback") == "play":
+            # commands are blocked in this world: try the other way in — play toward the goal by sight
+            played = await self.execute_game_autopilot({"game": "Minecraft", "task": task, "raw": task})
+            result["fallback_result"] = played
+            result["message"] += (" So I tried the other way — playing toward it by sight: " + played.get("message", "")
+                                  if played.get("status") == "success" else
+                                  " I also offered to try by playing toward it by sight, but that didn't run: "
+                                  + played.get("message", ""))
+        return result
+
+    def stop_game(self) -> bool:
+        stop = getattr(self, "_game_stop", None)
+        if stop is None or stop.is_set():
+            return False
+        stop.set()
+        return True
 
     def _autopilot_model(self) -> str:
         """A vision-capable local model for the autopilot (qwen3.5 has vision; fall back to 4b)."""

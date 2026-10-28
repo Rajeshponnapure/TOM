@@ -64,6 +64,45 @@ class CommandRouter:
         except Exception:
             return None
 
+    @staticmethod
+    def game_task_in_request(text: str):
+        """{'game', 'task'} for "build a house in minecraft" — only when the game is really on this PC
+        (or is one TOM made), so "build a website in react" never becomes a game task."""
+        from tools import game_tasks
+        parsed = game_tasks.parse(text)
+        if parsed is None:
+            return None
+        game, task = parsed
+        try:
+            from tools.game_library import find_game
+            found = find_game(game)
+        except Exception:
+            found = None
+        if found is not None:
+            return {"game": found.name, "task": task}
+        if game_tasks.is_minecraft(game):
+            return {"game": "Minecraft", "task": task}
+        return None
+
+    @staticmethod
+    def made_game_in_request(lower: str):
+        """A game TOM made, named in a play/open request ("play my snake game", "open Viper")."""
+        m = re.match(r"^(?:please\s+)?(?:play|open|launch|start|run|autopilot)\s+(.+?)(?:\s+(?:for me|yourself|now|please|"
+                     r"by yourself|on my behalf))*\s*[?.!]*$", lower.strip())
+        if not m:
+            return None
+        marked = re.search(r"\b(my|you made|you built|tom'?s|the one you|that you)\b|\bgame\b", m.group(1))
+        try:
+            from tom_core.games.studio import find_made_game
+            found = find_made_game(m.group(1))
+        except Exception:
+            return None
+        if found is not None and not marked:          # a bare name only counts if it is the game's title
+            title = set(re.split(r"[^a-z0-9]+", found["title"].lower()))
+            if not {w for w in re.split(r"[^a-z0-9]+", m.group(1)) if w} <= title:
+                return None
+        return found
+
     @classmethod
     def is_website_build_request(cls, lower: str) -> bool:
         """"build a website for my bakery", "create a landing page for our app" — not "open website X",
@@ -148,6 +187,18 @@ class CommandRouter:
             return RouteDecision("communication", "open_social", "execute_social_message",
                                  metadata={"app": app, "open_only": True}, confidence=0.88)
 
+        if re.match(r"^(?:please\s+)?stop\s+(?:playing|the game|the autopilot|autopilot|gaming)\b", lower):
+            return RouteDecision("system", "stop_game", "execute_stop_game", confidence=0.95)
+        # A task inside a game ("build a house in minecraft", "in Green Hell find water")
+        task = self.game_task_in_request(text)
+        if task is not None:
+            return RouteDecision("system", "game_task", "execute_game_task", confidence=0.92, metadata=task)
+        # A game TOM made ("play my snake game for me", "open the game you made")
+        made = self.made_game_in_request(lower)
+        if made is not None:
+            auto = bool(re.search(r"\b(for me|yourself|auto ?pilot|by yourself|on my behalf)\b", lower))
+            return RouteDecision("system", "made_game", "execute_game_autopilot" if auto else "execute_game_launch",
+                                 confidence=0.9, metadata={"game": made["title"], "made": made["path"]})
         # Games installed on this PC ("play Green Hell") and everyday Windows control ("lock my pc")
         game = self.game_in_request(lower)
         if game is not None:

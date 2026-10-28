@@ -149,7 +149,9 @@ task report, self-evaluation. Full suite after the fixes: 923 passed, 15 skipped
 
 Known limits: Gmail's Ctrl+Enter send is not documented by Google for accounts with keyboard shortcuts
 off — the Sent-folder check is what decides success. Sleep via `SetSuspendState` may be refused on
-Modern Standby laptops (reported as such). TOM cannot play real-time games.
+Modern Standby laptops (reported as such). TOM plays real-time games only by the two routes described
+below (its own games by sight; any installed game by the state-aware loop, which reads the screen and
+retries after deaths but is not an expert player of a 3D action game).
 
 ### Owner "do everything" capability pass (2026-10-28)
 
@@ -170,3 +172,86 @@ allow only for the owner's own systems). Built this session (branch
 
 Design kept throughout: observation is free; anything that writes to a device, sends a message, or
 drives a game passes the policy engine once on the exact payload, with the warning shown first.
+
+### Game development and playing (2026-10-28, second pass)
+
+| Area | What shipped | Evidence |
+|---|---|---|
+| Making games (C17) | `tom_core/games/`: one shared Pygame runtime (`tomgame.py`) and eight genres (snake, breakout, flappy, shooter, runner, pong, racer, platformer). `studio.py` reads genre/theme/difficulty/title from the request, writes the game, then **runs it headless** and reports the real traceback back to the model to repair; a manifest, README and `run.bat` are written next to it. An unknown genre asks which one instead of inventing a game | `test_game_studio_and_play.py` — all 8 genres built and self-tested |
+| Godot / Unity | `godot.py` writes a Godot 4 project and verifies it by running it headless in the real engine; `unity.py` writes a complete C# project + build script. A missing licence or editor is reported as the actual reason, not as success | tests (Godot skipped when the engine is absent); live: 4.7.2 builds and runs |
+| Playing its own games | `strategies.py` reads the screen state and returns key holds/mouse moves per genre, scoring measurably above random play (e.g. platformer 15-22 coins/min vs 0) | `test_game_studio_and_play.py`; live window runs |
+| Autopilot input | Fixed the `SendInput` struct size that made every key silently do nothing; window-aware loop that only types into the game's window and pauses when anything else comes to the front; `stop playing` releases every key | regression test in `test_game_studio_and_play.py` |
+| Tasks inside games | `tools/game_tasks.py`: Minecraft Bedrock by its own chat commands (`/fill`, `/setblock`, `/locate`, `/tp`, `/give`, time/weather/gamemode). TOM opens chat, types, reads the game's reply by OCR, stops at the first refusal and explains that cheats are off, then offers to play toward the goal instead; any other game becomes the vision explorer's goal | `test_game_studio_and_play.py` |
+| Game discovery | `tools/game_library.py` reads desktop/Start-menu `.lnk` files, so a game started through BlueStacks (or a Steam/Epic link) is found like a Steam title; emulator window titles are used when they differ from the game's name | `test_game_studio_and_play.py` |
+| Routing | "make a game" → game dev (not chat), "play my snake game" → launch, "play it for me" → autopilot, "build a house in minecraft" → in-game task, "stop playing" → stop | `test_routing_for_making_playing_and_tasks` |
+
+### Playing any installed game, with understanding (2026-10-28, third pass)
+
+Owner asked that TOM be able to play *any* game installed on the laptop — not just Minecraft — learning
+the game's controls, adapting to what is on screen, and retrying until the goal is met. Before this pass
+"playing" an installed game meant: launch it, then hold whichever single key a small vision model picked,
+once a second, with no idea what the screen showed. It pressed W at main menus, at loading screens and at
+death screens alike, kept no memory between sessions, and had no notion of success or failure.
+
+| Area | What shipped | Evidence |
+|---|---|---|
+| Reading the game's state | `tom_core/games/perceive.py` — every frame is classified `loading / menu / paused / gameplay / dead / static` from the game's own words (OCR) first and pixel motion second, with a rolling average so one still frame is not mistaken for a freeze | `test_game_play_loop.py` (perception cases) |
+| Learning the controls | `tom_core/games/discover.py` — on the first session with an unfamiliar game, TOM presses each candidate key once, measures how much of the screen changed, and records only what answered. ESC/TAB/ENTER are never probed (they open menus and consoles). A game that answered nothing is not marked as learned, so the next session tries again | live: Viper — `W A S D SPACE` all measured 0.012-0.019; only keys within a quarter of the best became roles |
+| Remembering each game | `tom_core/games/profile.py` — a per-game JSON profile in `TOM Workspace/game_profiles/`: discovered controls, screen states seen, sessions, deaths, goals met, best session, notes. Built-in metadata per installed game says only its window title and *kind* (action / survival / driving / turnbased / command) — the bindings are measured, never assumed | `test_game_play_loop.py`; live file written for Viper |
+| Playing with a goal and retries | `tom_core/games/play_loop.py` — `parse_goal` turns "survive 5 minutes" / "get to level 3" / "win a round" into a checkable goal; the loop dispatches by state (click the menu button or press Enter; tap the board; press Enter/Escape to respawn), counts one death per death screen, retries up to `max_attempts`, checks win/target words on screen, and reports what it saw | live: Viper — died at 3.0 s and 5.7 s, came back into play both times via Enter, game's own `rounds` went 2 → 4 |
+| Per-game behaviour | turn-based games (Ludo King) are tapped by their button words with the middle of the board as a fallback and never press keys; driving games keep the throttle down; a still screen in a 3D game is treated as normal play (not a menu) so Enter is never pressed at a standing camera | `test_game_play_loop.py` |
+| Wiring | `tools/game_play.py` — `WindowBackend` captures the game's client area, reads its words, and sends keys/mouse **only while that window is in front**; `play_installed_game` now delegates to it and the agent's approval prompt states the new behaviour | `test_game_play_loop.py` (48 tests); live end-to-end via `play_live("Viper")` |
+
+Defects found by running it on a real window rather than in tests, and fixed:
+
+* a single death screen was counted as one death **per look** — three looks of "Game over" became "died 3
+  times, gave up"; deaths are now counted on entering the dead state;
+* clicking "play again" on a PC game's death overlay succeeds (the text is found) and does nothing — 17
+  clicks, still dead; keyed games now answer the death screen with Enter, falling back to Escape;
+* `roles_from` used a fixed 0.02 cutoff and found **no** controls in a real (small) window where every
+  working key measured 0.012; it now compares against the best key, with a small absolute floor;
+* clicks are now real actions that are counted, instead of being issued outside the input path.
+
+Honest limits of this pass: a 3D action game (Spider-Man 2, Green Hell) is driven by a small local vision
+model plus motion heuristics, so TOM can follow what is on screen and stop dying to menus, but it will not
+fight or platform like a person; Ludo King is the one installed game whose board it can genuinely read and
+tap; Minecraft still uses its own chat commands for tasks (exact and checked), with the loop as the
+fallback when cheats are off. Anti-cheat is never evaded — the warning and the account-ban risk are shown
+before anything runs, and only the owner's own single-player games are expected to be used this way.
+
+### The strategy path vs the general path, and latency (2026-10-28, fourth pass)
+
+Owner reported that earlier work played a game "with exceptional skill", while later runs died on the
+first attempt. Both were true, of two different code paths, and the numbers explain it:
+
+| Player on the same snake game (Viper) | Best | Mean | Rounds survived |
+|---|---|---|---|
+| `strategies.SnakeStrategy` — reads the board's own colours, plans a path | **33** | 33.0 | **1 (never died)** |
+| Random keys (`evaluate(player="random")`) | 2 | 0.40 | 5 |
+
+and live in a real window: **score 26 / best 26 / one round** over 40 s at 35.5 fps, later 34.2 fps.
+
+The mistake this pass fixes: `play_live` (the installed-game path) did not recognise a game TOM had made,
+so asking it to play Viper ran the **general** explorer instead of the strategy — three deaths in six
+seconds on the same game the strategy survived for a full round. `play_live` now checks
+`studio.find_made_game()` first and hands a made game to `play_made_game`, so that can never happen again.
+
+Latency, measured rather than claimed (1200×900 window):
+
+| Cost | Before | Now |
+|---|---|---|
+| Strategy decision | 0.73 ms median, 0.94 ms p95 | already this — it was never the problem |
+| One screen read (OCR) | 366 ms | **244 ms** (mss grabs the region; pyautogui grabbed the whole screen and cropped; and a large window is no longer upscaled 2× before OCR) |
+| General loop rate | 8.9 looks/s (OCR inline, fixed sleep on top of the work) | **29.2 looks/s** at a 30 fps target (OCR on a background thread; the loop sleeps only the remainder of its tick) |
+| Made-game play rate | 35.5 fps | unchanged |
+
+Also fixed: in a grid or arcade game the discovered "forward" key is really a *direction*, so holding it
+forever drove into a wall — the run that died in three seconds. Those games now move in 0.6 s bursts and
+change direction; 3D kinds (action, survival, driving, command) still hold forward, which is how those
+games are played.
+
+What this does **not** mean: an arbitrary 3D game is still not played at a professional level. The
+professional-level path is the strategy players for games TOM builds (colour perception + planning +
+DirectInput at 30-60 fps). For an installed 3D game the general loop reads the screen, works menus,
+recovers from deaths and retries — it does not fight or platform like a person, and saying otherwise
+would be the exact overclaim this project has avoided elsewhere.

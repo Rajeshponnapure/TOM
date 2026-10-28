@@ -123,10 +123,22 @@ class ScreenControl:
         return True, ""
 
     def screenshot(self, region: Optional[Box] = None):
+        """The screen (or a region of it) as an image. mss first: pyautogui grabs the whole screen and
+        crops, which measured 366 ms per read for a 1200×900 game window and capped a game loop at ~12
+        looks a second; mss grabs just the region."""
         if self._grab is not None:
             return self._grab(region)
-        import pyautogui
-        return pyautogui.screenshot(region=region) if region else pyautogui.screenshot()
+        try:
+            import mss
+            from PIL import Image
+            with mss.mss() as sct:
+                mon = ({"left": region[0], "top": region[1], "width": region[2], "height": region[3]}
+                       if region else sct.monitors[1])
+                raw = sct.grab(mon)
+                return Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+        except Exception:
+            import pyautogui
+            return pyautogui.screenshot(region=region) if region else pyautogui.screenshot()
 
     def read(self, region: Optional[Box] = None) -> List[Line]:
         """Text lines on screen (or in `region`) with screen-pixel boxes."""
@@ -147,10 +159,13 @@ class ScreenControl:
         from PIL import ImageOps
         pytesseract.pytesseract.tesseract_cmd = self.cmd
         g = ImageOps.grayscale(img)
-        if self.scale != 1:
-            g = g.resize((int(g.width * self.scale), int(g.height * self.scale)))
+        # upscaling helps small UI text; on a big window the text is already large, and doubling the pixels
+        # only costs time (a game window is read several times a second)
+        s = self.scale if g.width < 900 else 1.0
+        if s != 1:
+            g = g.resize((int(g.width * s), int(g.height * s)))
         d = pytesseract.image_to_data(g, config="--oem 1 --psm 11", output_type=pytesseract.Output.DICT)
-        s, out = self.scale, []
+        out = []
         for i, text in enumerate(d["text"]):
             try:
                 conf = float(d["conf"][i])

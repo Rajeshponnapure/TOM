@@ -87,3 +87,6 @@ qrcode[pil]==8.2
 
 # Fast screen capture for the game autopilot (30-60+ fps, vs pyautogui's disk saves)
 mss==9.0.2
+
+# Windows .lnk shortcuts → the game they launch (BlueStacks / Steam / Epic links; tools/game_library)
+pywin32==312; sys_platform == "win32"

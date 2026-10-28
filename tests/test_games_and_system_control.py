@@ -109,7 +109,8 @@ def test_the_agent_starts_the_game_and_is_honest_about_playing(games, monkeypatc
     a.command_router = CommandRouter()
     res = asyncio.run(a.execute_game_launch("can you play green hell for me"))
     assert res["status"] == "success" and started == ["steam://rungameid/815370"]
-    assert "can't play a real-time game for you" in res["message"]
+    # Started, then says what it can do next — it never claims to have played it.
+    assert 'say "play it for me"' in res["message"].lower() and "i played" not in res["message"].lower()
     assert "can't play" not in asyncio.run(a.execute_game_launch("play green hell"))["message"]
 
 

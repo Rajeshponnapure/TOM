@@ -347,7 +347,9 @@ class EngineRouter:
         if "blender" in c:
             return "blender"
         if re.search(r"\b(scaffold|make|create|build)\b.*\b(pygame|unity|godot)\b", c) or \
-           re.search(r"\b(pygame|unity|godot)\b.*\b(game|script)\b", c):
+           re.search(r"\b(pygame|unity|godot)\b.*\b(game|script)\b", c) or \
+           (re.search(r"\b(make|create|build|develop|design|code|write|program)\b(?:\s+[\w'-]+){0,8}?\s+games?\b", c)
+            and not re.search(r"\b(play|in (?:the )?game|inside)\b", c)):
             return "gamedev"
         if re.search(r"\b(daily briefing|news briefing|tech(nology)? roundup|world events|"
                      r"trending topics|latest news)\b", c):
@@ -956,19 +958,24 @@ class EngineRouter:
         if not eng:
             return self._unavailable("Game Dev", "")
         c = command.lower()
-        if "unity" in c or "godot" in c:
-            engine_name = "unity" if "unity" in c else "godot"
-            res = eng.generate_script(engine_name, command)
+        # A real, verified game (tom_core.games): written, then run headless in its engine before
+        # TOM calls it ready. "script" requests (a C#/GDScript snippet) keep the old generator.
+        if re.search(r"\b(script|snippet)\b", c) and not re.search(r"\bgames?\b", c) and ("unity" in c or "godot" in c):
+            res = eng.generate_script("unity" if "unity" in c else "godot", command)
+            return self._ok("engine_gamedev", humanize(res, limit=4000), raw=res)
+        from tom_core.games import godot, studio, unity
+        if "godot" in c:
+            res = godot.create(command)
+        elif "unity" in c:
+            res = unity.create(command)
         else:
-            name_m = re.search(r"(?:called|named)\s+([a-zA-Z0-9_]+)", c)
-            genre_m = re.search(r"\b(platformer|shooter|puzzle|runner|rpg)\b", c)
-            res = eng.scaffold_pygame(name_m.group(1) if name_m else "my_game",
-                                      genre_m.group(1) if genre_m else "platformer")
-        if isinstance(res, dict) and str(res.get("status", "")).lower() == "error":
-            return {"status": "error", "response_type": "engine_gamedev", "raw": res,
-                    "message": f"Game dev: {res.get('message', 'failed')}"}
-        extra = {"path": res["path"]} if isinstance(res, dict) and res.get("path") else {}
-        return self._ok("engine_gamedev", humanize(res, limit=4000), raw=res, **extra)
+            res = studio.GameStudio(write_code=getattr(self, "write_game_code", None)).create(command)
+        status = res.get("status", "error")
+        out = {"status": "success" if status == "success" else status, "response_type": "engine_gamedev",
+               "message": res.get("message", ""), "raw": res, "verified": bool(res.get("verified"))}
+        if res.get("path"):
+            out["path"] = res["path"]
+        return out
 
     # ── Blender ──────────────────────────────────────────────────────────
     def _run_blender(self, command: str) -> Dict[str, Any]:
