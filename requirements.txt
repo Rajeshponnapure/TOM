@@ -79,3 +79,8 @@ pytest==9.0.3
 
 
 # PyAudio is now pinned above (official Windows wheels for Python 3.11).
+
+# Live IoT devices (C15) and phone pairing (C16)
+pyserial==3.5
+paho-mqtt==2.1.0
+qrcode[pil]==8.2

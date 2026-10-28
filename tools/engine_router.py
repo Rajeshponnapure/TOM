@@ -312,6 +312,17 @@ class EngineRouter:
         if re.search(r"\b(esp32|esp8266|micropython|arduino|raspberry pi pico)\b", c) and \
            re.search(r"\b(code|firmware|sketch|generate|sensor|mqtt|pinout)\b", c):
             return "iot"
+        # Live hardware over USB: "detect my iot devices", "scan i2c on COM5", "flash X to my esp32",
+        # "read serial from the board", "what's connected to my microcontroller".
+        if re.search(r"\b(detect|list|find|show|what(?:'s| is| are))\b.*\b(iot|microcontroller|serial|usb)\b.*\b(devices?|boards?|ports?|connected)\b", c) or \
+           re.search(r"\b(connected|plugged in)\b.*\b(boards?|microcontrollers?)\b|\b(list|show|detect)\b.*\bconnected\b.*\bboards?\b", c) or \
+           re.search(r"\bi2c\b.*\b(scan|wired|connected|devices?)\b|\bscan\b.*\bi2c\b", c) or \
+           re.search(r"\b(flash|upload|burn|program)\b.*\b(esp32|esp8266|arduino|pico|board|com\d|microcontroller)\b", c) or \
+           re.search(r"\bserial (monitor|port|console|output)\b", c) or \
+           (re.search(r"\b(read|monitor)\b.*\bserial\b", c) and
+            re.search(r"\b(board|device|port|baud|com\d|esp32|esp8266|arduino|pico|microcontroller)\b", c)) or \
+           re.search(r"\bwhat(?:'s| is)\b.*\b(connected|wired|plugged)\b.*\b(board|microcontroller|esp32|arduino|pico)\b", c):
+            return "iot"
         if (re.search(r"\b(trim|cut|clip|concat(enate)?|combine|merge|join|caption|subtitle|"
                       r"text overlay|extract audio|resize|scale|mute|convert|color correct)\b", c) and
                 (re.search(r"\bvideos?\b", c) or re.search(_VIDEO_EXT, c, re.I))) or \
@@ -594,10 +605,15 @@ class EngineRouter:
 
     # ── IoT ──────────────────────────────────────────────────────────────
     def _run_iot(self, command: str) -> Dict[str, Any]:
+        c = command.lower()
+        # Live hardware over USB-serial ("detect my iot devices", "scan i2c on COM5", "flash this to
+        # my esp32", "read serial") — distinct from generating firmware text below.
+        live = self._run_iot_live(command, c)
+        if live is not None:
+            return live
         eng = self._get("iot")
         if not eng:
             return self._unavailable("IoT", "")
-        c = command.lower()
         board_m = re.search(r"\b(esp32|esp8266|arduino(?: uno| nano)?|pico|raspberry pi pico)\b", c)
         board = (board_m.group(1).replace("raspberry pi ", "") if board_m else "esp32").replace(" ", "_")
         comps = re.findall(r"\b(dht11|dht22|bme280|bmp180|ds18b20|pir|hc-sr04|relay|servo|led|oled|lcd)\b", c)
@@ -616,6 +632,84 @@ class EngineRouter:
             return {"status": "error", "response_type": "engine_iot", "raw": res,
                     "message": f"IoT: {res.get('message', 'failed')}"}
         return self._ok("engine_iot", f"IoT code generated:\n{humanize(res, limit=4000)}", raw=res)
+
+    _COM_RE = re.compile(r"\b(COM\d{1,3}|/dev/tty\w+)\b", re.I)
+
+    def _run_iot_live(self, command: str, c: str) -> Optional[Dict[str, Any]]:
+        """Talk to a board that is physically plugged in. Returns None when the command is really about
+        generating firmware text (handled by the code generator above)."""
+        wants_detect = re.search(r"\b(detect|list|find|show|what(?:'s| is| are))\b.*\b(devices?|boards?|ports?|"
+                                 r"connected|plugged|wired|microcontroller|serial|usb)\b", c) or \
+            re.search(r"\b(connected|plugged in)\b.*\b(iot|devices?|boards?|microcontroller)\b", c)
+        wants_i2c = "i2c" in c and re.search(r"\b(scan|list|detect|what|find|wired|connected)\b", c)
+        wants_flash = re.search(r"\b(flash|upload|burn|write|deploy|program|push)\b", c) and \
+            re.search(r"\b(board|esp32|esp8266|arduino|pico|device|com\d|microcontroller|chip|firmware|it|this)\b", c)
+        wants_read = re.search(r"\bserial (monitor|port|console|output)\b", c) or \
+            (re.search(r"\b(read|monitor|show|check)\b.*\bserial\b", c) and
+             re.search(r"\b(board|device|port|baud|com\d|esp32|esp8266|arduino|pico|microcontroller)\b", c)) or \
+            re.search(r"\bis\b.*\b(board|esp32|arduino|pico)\b.*\b(working|running|alive)\b", c)
+        if not (wants_detect or wants_i2c or wants_flash or wants_read):
+            return None
+        try:
+            from tools.iot_live import LiveIoT
+        except Exception as exc:
+            return {"status": "error", "response_type": "engine_iot_live",
+                    "message": f"Live IoT needs pyserial: {exc}. Install it with "
+                               "'python -m pip install pyserial platformio'."}
+        live = LiveIoT()
+        port_m = self._COM_RE.search(command)
+        device = port_m.group(1) if port_m else ""
+        try:
+            if wants_detect and not (wants_flash or wants_i2c):
+                r = live.detect()
+            elif wants_i2c:
+                allow = bool(re.search(r"\bflash\b|\bscanner\b|\byes\b", c))
+                r = live.scan_i2c(device, allow_flash=allow)
+            elif wants_read:
+                secs = _extract_kv_num(command, "seconds", 6)
+                r = live.read(device, seconds=float(secs))
+            elif wants_flash:
+                r = self._iot_flash(command, c, live, device)
+            else:
+                r = live.detect()
+        except Exception as exc:
+            return {"status": "error", "response_type": "engine_iot_live",
+                    "message": f"Live IoT failed: {type(exc).__name__}: {exc}"}
+        r.setdefault("response_type", "engine_iot_live")
+        return r
+
+    def _iot_flash(self, command: str, c: str, live, device: str) -> Dict[str, Any]:
+        """Get the firmware to flash — a named source file, or generate it from the request — then flash
+        it (LiveIoT.flash gates the write with the policy engine)."""
+        import os as _os
+        source = ""
+        file_m = re.search(r"\b([\w./\\-]+\.(?:ino|cpp|c))\b", command)
+        if file_m:
+            from tom_core import user_files
+            hits = user_files.find(file_m.group(1))
+            if hits and _os.path.isfile(hits[0]):
+                source = open(hits[0], encoding="utf-8", errors="replace").read()
+            elif not hits:
+                return {"status": "error", "response_type": "engine_iot_live",
+                        "message": f"I couldn't find {file_m.group(1)} in your folders. Give me its full path."}
+        if not source:
+            # generate firmware from the request (DHT11 blink-style default if nothing specific)
+            eng = self._get("iot")
+            board_m = re.search(r"\b(esp32|esp8266|arduino|uno|nano|mega|pico)\b", c)
+            board = (board_m.group(1) if board_m else "esp32")
+            comps = re.findall(r"\b(dht11|dht22|bme280|bmp180|ds18b20|pir|hc-sr04|relay|servo|led|oled|lcd)\b", c)
+            gen = eng.generate_esp_code(board if board in ("esp32", "esp8266") else "esp32",
+                                        comps or ["led"], protocols=["mqtt"]) if eng else {}
+            source = gen.get("result", "") if isinstance(gen, dict) else ""
+            if not source:
+                return {"status": "needs_input", "response_type": "engine_iot_live",
+                        "message": "Tell me what to flash: a source file (e.g. \"flash blink.ino to COM5\") "
+                                   "or what the firmware should do (e.g. \"flash a DHT11 reader to my esp32\")."}
+        board_hint = ""
+        bm = re.search(r"\b(esp32-s3|esp32-c3|esp32|esp8266|nodemcu|uno|nano|mega|pico|arduino)\b", c)
+        if bm:
+            board_hint = bm.group(1)
+        return live.flash(source, device=device, board_hint=board_hint, what="your firmware")
 
     # ── VLSI ─────────────────────────────────────────────────────────────
     def _run_vlsi(self, command: str) -> Dict[str, Any]:

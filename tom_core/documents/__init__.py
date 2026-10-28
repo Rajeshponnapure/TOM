@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, Union
 
 from tom_core.documents.design import palette_for
 from tom_core.documents.spec import DocSpec, file_name_for, understand
 from tom_core.documents import writer
 
 Ask = Callable[[str, str], Awaitable[str]]
-Research = Callable[[str], Awaitable[str]]
+Research = Callable[[str], Awaitable[Union[str, Tuple[str, str]]]]   # notes, or (notes, sources)
 
 __all__ = ["create", "understand", "DocSpec", "verify"]
 

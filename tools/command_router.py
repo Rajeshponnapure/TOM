@@ -79,6 +79,14 @@ class CommandRouter:
         if not lower:
             return RouteDecision("chat", "empty", "generate_chat_response", confidence=1.0)
 
+        # A named file ("what does notes.docx say about deadlines") is read, not explained from memory
+        from tom_core import user_files
+        m = user_files.READ_RX.match(text.strip())
+        if m and not re.match(r"^https?:", m.group("name"), re.I):
+            return RouteDecision("files", "read_user_file", "execute_read_user_file", confidence=0.92,
+                                 metadata={"name": m.group("name").strip(), "verb": m.group(1).lower(),
+                                           "question": (m.group("rest") or "").strip()})
+
         # Explanation / understanding questions — must come BEFORE action handlers
         if self._is_explanation_request(lower):
             return RouteDecision("explanation", "explain_how_works", "explain_how_it_works", confidence=0.9)

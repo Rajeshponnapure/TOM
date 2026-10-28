@@ -3,7 +3,7 @@ import json
 import os
 import re
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -55,7 +55,7 @@ _UNREACHABLE_MARKERS = ("all connection attempts failed", "connection refused",
                         "failed to connect to ollama", "max retries exceeded")
 
 
-def _llm_unreachable_hint(exc: BaseException) -> str:
+def _llm_unreachable_hint(exc: Optional[BaseException]) -> str:
     """Fix-it hint when a task failed because the model server is unreachable.
 
     httpx/ollama surface this as "All connection attempts failed", which does
@@ -281,8 +281,12 @@ class TomAgent:
         # R9 C11: opt-in watchers (TOM_WATCHERS=1) report actionable changes only.
         self.notifications: List[Any] = []
         from tom_core import watchers as _watchers
+        def _on_notice(n) -> None:
+            self.notifications.append(n)
+            safe_print(f"[WATCH] {n.message}")
+
         self._watchers_stop = _watchers.start(
-            lambda n: (self.notifications.append(n), safe_print(f"[WATCH] {n.message}")),
+            _on_notice,
             store=getattr(getattr(self, "tasks", None), "store", None))
 
         # ── Unified Engine Router ────────────────────────────────────────
@@ -791,6 +795,8 @@ class TomAgent:
                 return reply(f"Workflow '{wf['name']}' approved. Run it with \"run workflow {wf['name']}\""
                              + (f" (optionally: with {next(iter(wf['inputs']))}=...)" if wf["inputs"] else "") + ".")
             m = self._WF_RUN.match(text)
+            if m is None:
+                return reply("Say \"run workflow <name>\" (optionally \"with key=value\").", "needs_input")
             values = dict(kv.split("=", 1) for kv in re.split(r"\s*,\s*|\s+and\s+", m.group(2) or "") if "=" in kv)
             values = {k.strip(): v.strip().strip("\"'") for k, v in values.items()}
             from tom_core.tools.registry import get_registry
@@ -815,6 +821,7 @@ class TomAgent:
             if not older:
                 return {"status": "error", "response_type": "task_report", "message": "There is no earlier task to export."}
             task_id = older[0].id
+        task_id = str(task_id)
         if store.get(task_id) is None:
             return {"status": "error", "response_type": "task_report", "message": f"No task with id {task_id}."}
         from tom_core import evaluation
@@ -880,7 +887,8 @@ class TomAgent:
         1. structured JSON domains via engine.search()
         2. legacy knowledge/*.md docs via keyword-overlap excerpts
         """
-        if not getattr(self, "knowledge", None):
+        knowledge = getattr(self, "knowledge", None)
+        if not knowledge:
             return ""
         try:
             _stop = {"like", "what", "when", "where", "which", "this", "that",
@@ -895,12 +903,12 @@ class TomAgent:
             # 1) Structured domain sections
             seen = set()
             for w in words:
-                for r in self.knowledge.search(w):
+                for r in knowledge.search(w):
                     key = (r.get("domain_key"), r.get("section"))
                     if key in seen:
                         continue
                     seen.add(key)
-                    dom = self.knowledge.cache.get(r.get("domain_key"), {})
+                    dom = knowledge.cache.get(r.get("domain_key"), {})
                     for section in dom.get("sections", []):
                         if section.get("name") == r.get("section"):
                             expl = (section.get("explanation_simple") or "").strip()
@@ -916,7 +924,7 @@ class TomAgent:
                     break
 
             # 2) Legacy .md docs — score by keyword overlap, excerpt best two
-            legacy = self.knowledge.cache.get("legacy", {}).get("topics", [])
+            legacy = knowledge.cache.get("legacy", {}).get("topics", [])
             scored = []
             for t in legacy:
                 content = t.get("content") or ""
@@ -1187,9 +1195,10 @@ class TomAgent:
                             "message": f"Capability health unavailable: {_cap_err}"}
             if _meta in ("skill usage", "skill telemetry", "skill usage report",
                          "skill report"):
-                if getattr(self, "skill_telemetry", None):
+                telemetry = getattr(self, "skill_telemetry", None)
+                if telemetry:
                     return {"status": "success", "response_type": "skill_usage",
-                            "message": self.skill_telemetry.format_summary()}
+                            "message": telemetry.format_summary()}
                 return {"status": "error", "message": "Skill telemetry is unavailable."}
             if _meta in ("show logs", "logs", "show recent logs", "view logs",
                          "recent activity log"):
@@ -1274,6 +1283,7 @@ class TomAgent:
             # e.g. "check my github repos", "list slack channels",
             #      "post to slack #general: hello", "get weather in London"
             chat_request = self.nlp_parser.extract_chat_request(command)
+            result: Dict[str, Any]
             if mode_result is not None:
                 result = mode_result
 
@@ -1293,7 +1303,7 @@ class TomAgent:
                 # "message Ravi on telegram", "post to slack #dev: ..." - real send, approved on the exact text.
                 result = await self._send_chat_app_message(chat_request)
 
-            elif engine_key == "fileops":
+            elif engine_key == "fileops" and self.engine_router is not None:
                 # A file command is never delegated to free-form chat. The
                 # engine builds a concrete plan and asks approval before moving
                 # anything, so a model cannot merely claim it completed work.
@@ -1412,6 +1422,8 @@ class TomAgent:
                     result = await self.execute_game_launch(command)
                 elif handler == "execute_system_control":
                     result = await self.execute_system_control(route.metadata["action"], route.metadata["arg"])
+                elif handler == "execute_read_user_file":        # "read the file budget.xlsx" — the owner's folders
+                    result = await self.execute_read_user_file(route.metadata)
                 elif handler == "execute_screen_action":         # "click Send" / "type …" by looking at the screen
                     result = await self.execute_screen_action(route.metadata["action"], route.metadata["target"])
                 elif handler == "execute_diagnostics":           # "why is my RAM high?" — measured (C09)
@@ -1566,10 +1578,11 @@ class TomAgent:
             # Log completion with the REAL outcome (was: unconditional SUCCESS,
             # which made the audit log claim success for errored tasks).
             _outcome_ok = result.get("status") not in ("error", "cancelled", "unsupported")
-            if telemetry_skill_route and getattr(self, "skill_telemetry", None):
+            telemetry = getattr(self, "skill_telemetry", None)
+            if telemetry_skill_route and telemetry:
                 try:
                     failure_reason = "" if _outcome_ok else str(result.get("message", result.get("status", "")))
-                    self.skill_telemetry.record_route(
+                    telemetry.record_route(
                         skill_name=telemetry_skill_route.skill_name,
                         execution_mode=telemetry_skill_route.execution_mode,
                         status="success" if _outcome_ok else "failure",
@@ -1640,9 +1653,10 @@ class TomAgent:
             if hint:
                 error_msg += f"\n{hint}"
             self.safety.log_action("ERROR", target=command, status="FAILURE", message=str(e))
-            if telemetry_skill_route and getattr(self, "skill_telemetry", None):
+            telemetry = getattr(self, "skill_telemetry", None)
+            if telemetry_skill_route and telemetry:
                 try:
-                    self.skill_telemetry.record_route(
+                    telemetry.record_route(
                         skill_name=telemetry_skill_route.skill_name,
                         execution_mode=telemetry_skill_route.execution_mode,
                         status="failure",
@@ -1806,6 +1820,12 @@ class TomAgent:
 
     _without_addresses = staticmethod(without_addresses)
 
+    def _mcp_manager(self):
+        """The MCP connector manager; raises (caught by the MCP handlers) when it failed to load."""
+        if self.mcp is None:
+            raise RuntimeError("MCP connectors are unavailable.")
+        return self.mcp
+
     def _is_mcp_request(self, command_lower: str, intent: str) -> bool:
         if intent in ("mcp_call", "mcp_status", "mcp_list"):
             return True
@@ -1865,7 +1885,7 @@ class TomAgent:
                 m = re.search(r"(?:in|for|at)\s+([A-Z][a-zA-Z\s]+?)(?:\?|$|,)", command)
                 if m:
                     city = m.group(1).strip()
-                res = await self.mcp.call("weather", "get_current_weather", {"city": city})
+                res = await self._mcp_manager().call("weather", "get_current_weather", {"city": city})
                 d = res.get("data", {}) or {}
                 return {"status": res["status"],
                         "message": f"**{d.get('city','')}: {d.get('temperature_c')}°C** — {d.get('condition','')}. "
@@ -1881,7 +1901,7 @@ class TomAgent:
             else:
                 # No natural-language actions are wired for this connector. It used to call a tool
                 # named "<connector>_info" that no connector has, always answering "Unknown tool".
-                info = next((c for c in self.mcp.list_connectors() if c["name"] == connector), None)
+                info = next((c for c in self._mcp_manager().list_connectors() if c["name"] == connector), None)
                 if info is None:
                     return {"status": "unsupported", "message": f"There is no '{connector}' connector."}
                 state = "connected" if info["connected"] else "not connected (add its credentials to .env)"
@@ -1897,12 +1917,12 @@ class TomAgent:
             owner, repo = (m.group(1), m.group(2)) if m else ("", "")
             title_m = re.search(r'(?:titled?|called?|named?)\s+"?(.+?)"?\s*(?:in|$)', command, re.I)
             title = title_m.group(1) if title_m else parsed.get("subject", "New issue")
-            res = await self.mcp.call("github", "create_issue", {"owner": owner, "repo": repo, "title": title})
+            res = await self._mcp_manager().call("github", "create_issue", {"owner": owner, "repo": repo, "title": title})
             return {"status": res["status"], "message": res.get("message", "")}
         elif "repo" in command_lower:
             m = re.search(r"(?:of|for|user)\s+([a-zA-Z0-9_.\-]+)", command_lower)
             username = m.group(1) if m else ""
-            res = await self.mcp.call("github", "list_repos", {"username": username})
+            res = await self._mcp_manager().call("github", "list_repos", {"username": username})
             repos = res.get("data", []) or []
             lines = [f"**GitHub Repos{' for ' + username if username else ''}:**\n"]
             for r in repos[:10]:
@@ -1911,7 +1931,7 @@ class TomAgent:
         elif "commit" in command_lower:
             m = re.search(r"([a-zA-Z0-9_.\-]+)/([a-zA-Z0-9_.\-]+)", command)
             if m:
-                res = await self.mcp.call("github", "get_commits", {"owner": m.group(1), "repo": m.group(2)})
+                res = await self._mcp_manager().call("github", "get_commits", {"owner": m.group(1), "repo": m.group(2)})
                 commits = res.get("data", []) or []
                 lines = [f"• `{c['sha']}` {c['message']} — {c['author']}" for c in commits[:8]]
                 return {"status": "success", "message": "**Recent commits:**\n" + "\n".join(lines)}
@@ -1925,7 +1945,7 @@ class TomAgent:
                                                    "'post to slack #dev: deploy finished' or "
                                                    "'message Ravi on slack: lunch?'. Nothing was posted.")}
         elif "channel" in command_lower or "list" in command_lower:
-            res = await self.mcp.call("slack", "list_channels", {})
+            res = await self._mcp_manager().call("slack", "list_channels", {})
             chs = res.get("data", []) or []
             lines = [f"• #{c['name']}" + (f" — {c['topic'][:50]}" if c.get("topic") else "") for c in chs[:15]]
             return {"status": "success", "message": "**Slack Channels:**\n" + "\n".join(lines)}
@@ -1937,7 +1957,7 @@ class TomAgent:
             return {"status": "info",
                     "message": f"To create a calendar event, I need: title, start time, and end time. "
                                f"Try: 'Create calendar event: [title] on [date] from [start] to [end]'"}
-        res = await self.mcp.call("calendar", "list_events", {"days": 7})
+        res = await self._mcp_manager().call("calendar", "list_events", {"days": 7})
         events = res.get("data", []) or []
         if not events:
             return {"status": "success", "message": "No upcoming events in the next 7 days."}
@@ -2122,7 +2142,7 @@ class TomAgent:
             resp = await self._invoke_llm(prompt, {"system": system, "user": user}, f"document_{kind}", self.llm)
             return getattr(resp, "content", "") or ""
 
-        async def research(topic: str) -> str:
+        async def research(topic: str) -> Tuple[str, str]:
             from tools import web_search as ws
             hits = await asyncio.to_thread(ws.search, topic, 6)
             return (ws.context_text(hits), ws.sources_text(hits)) if hits else ("", "")
@@ -2649,7 +2669,8 @@ class TomAgent:
 
     def _get_topic_knowledge(self, topic: str) -> str:
         """Get relevant knowledge from TOM's knowledge base about a topic."""
-        if not getattr(self, "knowledge", None):
+        knowledge = getattr(self, "knowledge", None)
+        if not knowledge:
             return "No curated knowledge base available."
         
         topic_lower = topic.lower()
@@ -2659,9 +2680,9 @@ class TomAgent:
         try:
             words = [w for w in topic_lower.split() if len(w) > 3]
             for w in words[:5]:
-                results = self.knowledge.search(w)
+                results = knowledge.search(w)
                 for r in results[:2]:
-                    dom = self.knowledge.cache.get(r.get("domain_key"), {})
+                    dom = knowledge.cache.get(r.get("domain_key"), {})
                     for section in dom.get("sections", []):
                         if section.get("name") == r.get("section"):
                             expl = (section.get("explanation_simple") or "").strip()
@@ -3114,7 +3135,7 @@ class TomAgent:
                         else self.whatsapp_tools.send_message(contact, message))
         self.safety.log_action("WHATSAPP_SEND", target=contact,
                                status={"success": "SUCCESS", "unconfirmed": "UNCONFIRMED",
-                                       "needs_input": "NEEDS_INPUT"}.get(result.get("status"), "FAILURE"),
+                                       "needs_input": "NEEDS_INPUT"}.get(str(result.get("status")), "FAILURE"),
                                message=result.get("message", ""))
         if result.get("status") == "needs_input" and result.get("options"):
             # Remember the question so the user's next message ("2", "Mounish Sai") answers it.
@@ -3160,6 +3181,8 @@ class TomAgent:
         index = self._match_choice(command, pending["options"])
         if index is None:
             return None                                   # not an answer: handle as a new request
+        if pending.get("kind") == "read_file":            # "which report.pdf?" → read that one
+            return await self.execute_read_user_file({**pending["meta"], "name": pending["options"][index]})
         if pending.get("kind") == "email":                # "which Ravi?" → continue that email
             parsed = dict(pending["parsed"])
             parsed["email_address"] = pending["addresses"][index]
@@ -3370,9 +3393,10 @@ class TomAgent:
         url_m = re.search(r"(https://[^\s'\"]+)", command)
         repo_m = re.search(TomAgent._REPO_RE, command, re.I)
         if repo_m or (url_m and "clone" in cl):
+            url = ""
             if url_m:
                 url = url_m.group(1)
-            else:
+            elif repo_m:
                 url = repo_m.group(0)
                 if not url.lower().startswith("http"):
                     url = "https://" + url
@@ -3697,6 +3721,45 @@ class TomAgent:
                     "filename": out_path, "content_written": len(content)}
         except Exception as e:
             return {"status": "error", "message": f"File creation failed: {str(e)}"}
+
+    async def execute_read_user_file(self, meta: Dict[str, Any]) -> Dict[str, Any]:
+        """Find the named file in the owner's folders and read it (Word, PDF, Excel, text, code). "summarize"
+        or a question about it gives an answer from the file; "read/show" gives its text."""
+        from tom_core import user_files
+        name = meta.get("name", "")
+        hits = await asyncio.to_thread(user_files.find, name)
+        if not hits:
+            where = ", ".join(os.path.basename(r) or r for r in user_files.search_roots())
+            return {"status": "error", "response_type": "read_file",
+                    "message": f"I couldn't find a file called {name} in {where}. Give me its full path "
+                               "(e.g. C:/Users/you/Documents/report.pdf)."}
+        if len(hits) > 1 and not os.path.isabs(name):
+            self._pending_choice = {"kind": "read_file", "options": hits, "meta": dict(meta), "at": time.time()}
+            return {"status": "needs_input", "response_type": "read_file", "options": hits,
+                    "message": f"I found {len(hits)} files called {os.path.basename(name)}. Which one?\n"
+                               + "\n".join(f"  {i}. {h}" for i, h in enumerate(hits, 1))}
+        path = hits[0]
+        verb, question = meta.get("verb", "read"), meta.get("question", "")
+        if question or not verb.startswith(("read", "show", "display", "view")):
+            question = question.strip().removeprefix("and ").strip()
+            if re.match(r"(?i)^says?\b", question):         # "what does notes.docx say about deadlines"
+                question = f"What does the file {question.rstrip('?')}?"
+            ask = (question
+                   or ("Summarize this file: the main points, key numbers and anything that needs action."
+                       if verb.startswith("summar") else "Explain what this file contains."))
+            result = await self.analyze_file(path, ask)
+            if isinstance(result, dict):
+                result.setdefault("path", path)
+                result["message"] = f"{os.path.basename(path)} ({os.path.dirname(path)}):\n\n{result.get('message', '')}"
+            return result
+        text = await asyncio.to_thread(self.file_analyzer.extract_text, path)
+        if not text or text.startswith("Error:"):
+            return {"status": "error", "response_type": "read_file", "path": path,
+                    "message": f"I found {path} but couldn't read it: {text or 'no text'}"}
+        more = f"\n\n… ({len(text):,} characters in total — say \"summarize {os.path.basename(path)}\" for a summary)" \
+            if len(text) > 4000 else ""
+        return {"status": "success", "response_type": "read_file", "path": path, "verified": True,
+                "message": f"{path}:\n\n{text[:4000]}{more}"}
 
     async def execute_read_file_command(self, command: str) -> Dict[str, Any]:
         try:
@@ -4064,6 +4127,8 @@ class TomAgent:
             me = current_task_id()
             # Exclude the task answering this very message (it used to be listed as "in progress",
             # and the model then claimed the request was "still running in the background").
+            if self.tasks is None:
+                raise RuntimeError("task service unavailable")
             others = [r for r in self.tasks.store.list(50, active_only=True)
                       if r.id != me and skill_modes.split(r.text)[0] != current]
             lines.append(f"- Other tasks in progress or waiting: {len(others)}"
@@ -4177,6 +4242,8 @@ class TomAgent:
         A4: on failure, fall back to chat plus ONE targeted clarifying question."""
         safe_print("[UNIVERSAL] No concrete handler matched — attempting autonomous execution...")
         try:
+            if self.engine_router is None:
+                raise RuntimeError("the engine router is unavailable")
             res = await asyncio.wait_for(
                 self.engine_router._run_autonomous(command),
                 timeout=max(60, self.task_timeout_seconds - 20),
@@ -4373,7 +4440,7 @@ class TomAgent:
 
     # ── INSTAGRAM ───────────────────────────────────────────────────────
 
-    async def execute_instagram_workflow(self, command: str = None) -> Dict[str, Any]:
+    async def execute_instagram_workflow(self, command: Optional[str] = None) -> Dict[str, Any]:
         try:
             from agents.instagram_ai_news_agent.main import InstagramAINNewsAgent
             safe_print("\n" + "=" * 60)
