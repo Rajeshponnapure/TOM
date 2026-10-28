@@ -198,10 +198,7 @@ class CommandRouter:
             if not any(act in lower for act in ("build", "create", "make", "develop", "implement")):
                 return RouteDecision("chat", "general_chat", "generate_chat_response", confidence=0.72)
 
-        if any(token in lower for token in ("build app", "build application", "create app", "create project",
-                                             "make app", "android app", "ios app", "desktop app",
-                                             "web app", "mobile app", "react app", "flutter app",
-                                             "full stack", "full-stack", "api routes", "authentication")):
+        if self._is_code_project_request(lower):
             return RouteDecision("content", "create_project", "execute_code_project", confidence=0.88)
 
         # Data / web search / files
@@ -295,6 +292,23 @@ class CommandRouter:
         if "email" in lower:
             return "send_email"
         return "sensitive_action"
+
+    _BUILD_VERB = re.compile(r"\b(build|create|make|scaffold|generate|write|develop|set\s*up|bootstrap|"
+                             r"start)\b")
+    _STACK = re.compile(
+        r"\b(android app|ios app|desktop app|web app|mobile app|react app|flutter app|react|vue|angular|"
+        r"svelte|next\.?js|vite|express|fastify|node api|rest api|graphql api|backend|frontend|full[- ]?stack|"
+        r"flask|fastapi|django|python (?:cli|script|app)|cli tool|api routes|authentication|microservice)\b")
+
+    def _is_code_project_request(self, lower: str) -> bool:
+        """A request to build a software project (needs a build verb, so "what is react" stays chat)."""
+        if any(p in lower for p in ("build app", "build application", "create app", "create project",
+                                    "make app", "build a project", "code project")):
+            return True
+        if self._BUILD_VERB.search(lower) and self._STACK.search(lower):
+            return True
+        # generic "build/create … a project/app" (office/website/presentation kinds are routed earlier)
+        return bool(self._BUILD_VERB.search(lower) and re.search(r"\b(a |an |the |my )?(project|app|application)\b", lower))
 
     def _is_browser_open(self, lower: str) -> bool:
         return any(term in lower for term in ("open ", "launch ", "go to ", "visit ", "browse "))

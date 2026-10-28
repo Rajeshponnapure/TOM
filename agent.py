@@ -2380,34 +2380,61 @@ class TomAgent:
     # ── CODE PROJECT ────────────────────────────────────────────────────
 
     async def _execute_code_project(self, command: str, parsed: Dict) -> Dict[str, Any]:
-        memory_context = self._build_memory_context(command)
-        prompt = self._safe_prompt([
-            ("system", compose_system_prompt(
-                "You are TOM in Full-Stack Developer mode. Generate a complete project scaffold. "
-                "Output each file with --- FILE: path/filename --- headers. "
-                "Include README.md with setup instructions. Use modern best practices.",
-                "TOM", include_ui=True)),
-            ("user", "Conversation memory:\n{memory}\n\nCommand: {command}"),
-        ])
-        resp = await self._invoke_llm(prompt, {"memory": memory_context, "command": command},
-                                       "code_project", self.code_llm)
-        content = resp.content.strip()
+        """Scaffold a real, buildable project, then actually build/verify it and report the true
+        result — not a model's say-so (PRD AT-007). Model-written feature files are layered on top of
+        the known-good skeleton when the model returns any."""
+        from tom_core.coding import scaffold
+        kind = scaffold.detect_kind(command)
         base_dir = self._deliverable_target(command, parsed, "code_project")
-        files_written = []
-        if "--- FILE:" in content:
+        name = os.path.basename(base_dir.rstrip("/\\")) or "app"
+        sc = scaffold.build_scaffold(kind, name)
+        written = await asyncio.to_thread(scaffold.write, sc, base_dir)
+
+        # Optional: let the model add feature files on top of the working skeleton. Its files never
+        # replace the build config (package.json, build.gradle, vite.config) so the build stays valid.
+        protected = {"package.json", "build.gradle", "app/build.gradle", "settings.gradle",
+                     "vite.config.js", "requirements.txt"}
+        try:
+            memory_context = self._build_memory_context(command)
+            prompt = self._safe_prompt([
+                ("system", compose_system_prompt(
+                    f"You are TOM adding feature code to an existing {kind} project. Output ONLY the "
+                    "extra/edited source files, each with a --- FILE: path --- header. Do NOT output "
+                    "build config (package.json, build.gradle, vite.config). Keep it building.",
+                    "TOM", include_ui=True)),
+                ("user", "Conversation memory:\n{memory}\n\nRequest: {command}"),
+            ])
+            resp = await self._invoke_llm(prompt, {"memory": memory_context, "command": command},
+                                          "code_project", self.code_llm)
+            content = getattr(resp, "content", "").strip()
             for match in re.finditer(r"--- FILE:\s*(.+?)\s*---\n(.*?)(?=--- FILE:|$)", content, re.DOTALL):
-                fpath = self._place_in(base_dir, match.group(1))
-                fcontent = match.group(2).strip()
+                rel = match.group(1).strip().strip("/\\")
+                if rel in protected or ".." in rel or os.path.isabs(rel):
+                    continue
+                fpath = self._place_in(base_dir, rel)
                 try:
-                    await self.file_tools.write_file(fpath, fcontent)
-                    files_written.append(fpath)
-                except Exception as e:
-                    files_written.append(f"{fpath} (failed: {e})")
-        msg = content[:2000]
-        if files_written:
-            msg += f"\n\nProject built in: {base_dir}\nFiles written: {', '.join(files_written)}"
-        return {"status": "success", "message": msg, "response_type": "code_project",
-                "path": base_dir}
+                    await self.file_tools.write_file(fpath, match.group(2).strip())
+                    sc.files[rel.replace("\\", "/")] = match.group(2).strip()   # include in verify
+                    if fpath not in written:
+                        written.append(fpath)
+                except Exception:
+                    pass
+        except Exception as _llm_err:
+            safe_print(f"[CODE] feature-code step skipped: {_llm_err}")
+
+        verify = await asyncio.to_thread(scaffold.verify, sc, base_dir)
+        status = str(verify.get("status", "skipped"))
+        head = {"success": "Built and verified", "error": "Scaffolded, but the build check FAILED",
+                "skipped": "Scaffolded"}.get(status, "Scaffolded")
+        msg = (f"{head} a {kind} project \"{name}\" in {base_dir}\n"
+               f"{len(written)} files.\n\n{verify.get('message', '')}")
+        if verify.get("build_cmd"):
+            msg += f"\n\nTo run the full build yourself: cd \"{base_dir}\" && {verify['build_cmd']}"
+        # success only when the measured check passed (or there was nothing to compile but files exist)
+        out_status = "success" if status in ("success", "skipped") else "error"
+        return {"status": out_status, "message": msg, "response_type": "code_project",
+                "path": base_dir, "paths": written, "kind": kind,
+                "verified": verify.get("verified", False), "build_cmd": verify.get("build_cmd", "")}
 
     # ── WEBSITE CREATION ────────────────────────────────────────────────
 
