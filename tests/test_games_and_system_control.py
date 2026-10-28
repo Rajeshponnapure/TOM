@@ -81,11 +81,18 @@ def test_launch_is_gated_by_the_emergency_stop(monkeypatch):
 
 @pytest.mark.parametrize("text,game", [
     ("play green hell", "Green Hell"), ("play spider-man 2", "Marvel's Spider-Man 2"),
-    ("can you play green hell for me", "Green Hell"), ("start the game over the hill", "over the hill"),
+    ("start the game over the hill", "over the hill"),
     ("launch green hell on steam", "Green Hell")])
 def test_play_requests_route_to_the_game(text, game, games):
     d = CommandRouter().route(text)
     assert d.handler == "execute_game_launch" and d.metadata["game"] == game
+
+
+def test_play_for_me_routes_to_the_experimental_autopilot(games):
+    # Owner (2026-10-28) redefined "play X for me" as the experimental autopilot; plain "play/launch
+    # X" still just starts the game.
+    d = CommandRouter().route("can you play green hell for me")
+    assert d.handler == "execute_game_autopilot" and d.metadata["game"] == "Green Hell"
 
 
 @pytest.mark.parametrize("text", ["play some music", "play lofi on youtube", "open notepad"])
