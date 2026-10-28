@@ -55,7 +55,7 @@ left out, with the reason.
 | C02 Voice | Partial | push-to-talk, interruptible TTS, opt-in wake word, female US-English voice. ASR is not streaming (recognised after you stop); only English has been measured |
 | C03 Software engineering | Done | git tools, read-only shell, test-fixing workflow with checkpoint, diff and rollback — AT-013 |
 | C04 File intelligence | Done | file analysis, organize with undo, duplicate finder (content hash) |
-| C05 Browser agent | Partial | Playwright web automation and research; external side effects need approval. Authenticated sessions are not managed |
+| C05 Browser agent | Partial | Playwright web automation and research; external side effects need approval. Authenticated sessions aren't managed, but TOM now acts in the owner's **own signed-in Chrome profile** by sight for Gmail (`gmail_web`) and Instagram/LinkedIn DMs (`social_web`), gated send with on-screen confirmation |
 | C06 Memory | Done | provenance, confidence, retention, correct/forget (chat + both apps) — AT-015 |
 | C07 Resource manager | Done (see RRM-005/010) | |
 | C08 Planner/executor | Done | typed plans, deps, retries, timeouts, cancel, pause, checkpoints, verification, honest report |
@@ -65,7 +65,7 @@ left out, with the reason.
 | C12 Workflow learning | Done | draft/approve/run |
 | C13 Business productivity | Done | professional Word/PDF/PowerPoint/Excel (`tom_core/documents`), email drafts, sends need approval |
 | C14 Cloud & infrastructure | Partial | git, Docker/WSL detection; no deployment tooling |
-| C15 IoT | Partial | firmware/code generation (ESP32, Arduino, MQTT); no live device control |
+| C15 IoT | Done | firmware/code generation **plus live device control** (`tools/iot_live.py`): detect boards on COM ports (USB VID:PID), I2C-scan what's wired (MicroPython REPL or a flashed scanner), compile+flash with PlatformIO, read back over serial. Flashing is gated (DESTRUCTIVE_OR_EXTERNAL). `test_iot_live.py` (13) |
 | C16 Multi-device access | Not built | security: TOM opens no network port (`test_tom_opens_no_network_listener`); needs authenticated, encrypted transport and its own review first |
 | C17 Preflight/simulation | Done | plan preview with affected paths and rollback; code fixes roll back on failure |
 | C18 Self-evaluation | Done | "self evaluation": success rate, failure categories, proposals |
@@ -150,3 +150,23 @@ task report, self-evaluation. Full suite after the fixes: 923 passed, 15 skipped
 Known limits: Gmail's Ctrl+Enter send is not documented by Google for accounts with keyboard shortcuts
 off — the Sent-folder check is what decides success. Sleep via `SetSuspendState` may be refused on
 Modern Standby laptops (reported as such). TOM cannot play real-time games.
+
+### Owner "do everything" capability pass (2026-10-28)
+
+Owner asked to fill every remaining gap, warning on risky actions but proceeding on confirmation
+(the malware / attack-a-third-party blocks in `safety/guards.py` were kept — they already warn-and-
+allow only for the owner's own systems). Built this session (branch
+`refactor/r0-r1-audit-and-characterization`):
+
+| Area | What shipped | Evidence |
+|---|---|---|
+| agent.py type safety | Fixed all 31 Pylance `severity 8` errors the owner reported; `pyright` 0 errors for agent.py | pyright |
+| Live IoT (C15) | `tools/iot_live.py` — port/board detection, I2C scan, PlatformIO flash (gated), serial read-back; wired into the engine router | `test_iot_live.py` (13) |
+| API keys | `tom_core/secrets.py` — TOM asks for a key when a feature needs one, saves to `.env`, reuses it; redactor masks the value everywhere | `test_secrets.py` (11) |
+| Instagram/LinkedIn (C05) | `tools/social_web.py` — DM in the owner's own Chrome profile by sight, gated send, on-screen confirmation | `test_social_web.py` (14) |
+| Dev builds | `tom_core/coding/scaffold.py` — real buildable scaffolds (static/node/react/python/android/flutter) + `verify()` that runs the toolchain (`node --check`, `py_compile`); `_execute_code_project` now builds and reports evidence | `test_scaffold.py` (14) |
+| 3D + assets | `tools/asset_fetch.py` (CC0 Poly Haven: models/HDRIs/textures) + `blender_control.assemble_scene`; verified live (barrel + sunset HDRI imported into Blender 5.2, .blend + preview rendered) | `test_asset_fetch.py` (8, incl. live), `test_asset_task.py` (9) |
+| Game autopilot | `tools/game_autopilot.py` — vision model → DirectInput scan codes, bounded loop, kill switch; **experimental**, warns about anti-cheat/ban and reflex limits, gated on the exact game | `test_game_autopilot.py` (9) |
+
+Design kept throughout: observation is free; anything that writes to a device, sends a message, or
+drives a game passes the policy engine once on the exact payload, with the warning shown first.
