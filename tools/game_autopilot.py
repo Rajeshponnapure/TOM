@@ -41,8 +41,9 @@ SCAN = {
     "E": 0x12, "Q": 0x10, "R": 0x13, "F": 0x21, "TAB": 0x0F, "ESC": 0x01, "ENTER": 0x1C,
     "1": 0x02, "2": 0x03, "3": 0x04, "4": 0x05,
     "UP": 0x48, "DOWN": 0x50, "LEFT": 0x4B, "RIGHT": 0x4D,
+    "BACKSPACE": 0x0E, "END": 0x4F, "HOME": 0x47, "DELETE": 0x53, "T": 0x14, "SLASH": 0x35,
 }
-EXTENDED = {"UP", "DOWN", "LEFT", "RIGHT"}
+EXTENDED = {"UP", "DOWN", "LEFT", "RIGHT", "END", "HOME", "DELETE"}
 MOUSE = {"MOUSE_LEFT", "MOUSE_RIGHT"}
 ACTIONS = list(SCAN) + list(MOUSE) + ["NONE"]
 # The actions TOM's own games use (tom_core.games) -> keys.
@@ -103,6 +104,14 @@ def _send_scancode(code: int, down: bool, extended: bool = False) -> bool:
 def _send_mouse(flags: int, dx: int = 0, dy: int = 0) -> bool:
     t = _input_types()
     return _send(t["INPUT"](type=0, mi=t["MOUSEINPUT"](int(dx), int(dy), 0, flags, 0, 0)))
+
+
+def scroll_wheel(notches: int) -> bool:
+    """Mouse-wheel scroll at the cursor: negative = down. One notch = 120 (WHEEL_DELTA)."""
+    t = _input_types()
+    import ctypes
+    data = ctypes.c_ulong(int(notches) * 120 & 0xFFFFFFFF).value
+    return _send(t["INPUT"](type=0, mi=t["MOUSEINPUT"](0, 0, data, 0x0800, 0, 0)))
 
 
 def _send_mouse_button(button: str, down: bool) -> bool:

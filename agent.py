@@ -990,7 +990,14 @@ class TomAgent:
             "Never say 'I cannot analyze images' or 'I don't have access to' — you DO have access. "
             "If asked about image analysis, tell them to attach an image using the attachment button.\n\n"
             "Personality: warm, direct, professional. Talk like a capable friend. "
-            "For casual chat keep it short. For tasks, deliver professional-grade results."
+            "For casual chat keep it short. For tasks, deliver professional-grade results. "
+            "Work independently from the user's requested outcome: use your reasoning, available tools, "
+            "and relevant context to choose sensible low-risk defaults and complete the task without "
+            "asking the user to decide routine details. Never invent facts, access, or results. If an "
+            "essential detail is missing, reasonable interpretations would cause materially different "
+            "outcomes, or a genuine blocker remains after reasonable attempts, explain what you know "
+            "and ask one focused question; pause work that depends on the answer. Respect all existing "
+            "policy and approval gates for consequential actions."
         )
 
     @staticmethod
@@ -1435,6 +1442,8 @@ class TomAgent:
                     result = {"status": "success" if stopped else "error", "response_type": "game_autopilot",
                               "message": "Stopping, and letting go of every key." if stopped
                               else "I'm not playing anything right now."}
+                elif handler == "execute_minecraft_session":  # "open minecraft, create a world …, build …"
+                    result = await self.execute_minecraft_session({**route.metadata, "raw": command})
                 elif handler == "execute_game_task":         # "build a house in minecraft"
                     result = await self.execute_game_task({**route.metadata, "raw": command})
                 elif handler == "execute_system_control":
@@ -2663,6 +2672,86 @@ class TomAgent:
                                   if played.get("status") == "success" else
                                   " I also offered to try by playing toward it by sight, but that didn't run: "
                                   + played.get("message", ""))
+        return result
+
+    async def execute_minecraft_session(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """"Open minecraft, create a creative server called X and build a modern 3-floor house": TOM starts
+        the game, reads each screen to get into that world (creating it, or opening it if it exists),
+        then builds the blueprint with chat commands and checks every reply."""
+        from tools import game_autopilot as ga, game_library, minecraft_agent as mca, minecraft_build as mcb
+        from tools.project_paths import workspace_path
+        world, mode, build_req = metadata["world"], metadata["mode"], metadata.get("build", "")
+        parts = mcb.blueprint(build_req) if build_req else []
+        if build_req and not parts:
+            return {"status": "needs_input", "response_type": "minecraft", "message": (
+                f"I can get into '{world}', but I don't have a plan for \"{build_req}\" yet — I can build houses "
+                "(modern, 1-4 floors, with rooms and furniture). What should it be?")}
+        info = game_library.find_game("minecraft")
+        if info is None:
+            return {"status": "error", "response_type": "minecraft", "message": "Minecraft isn't installed on this PC."}
+        floors = mcb.floors_in(build_req) if parts else 0
+        gate = self._game_gate("Minecraft", (
+            f"In Minecraft: open or create the {mode} world '{world}'" +
+            (f", then build a modern {floors}-floor house ({len(parts)} commands: shell, glass walls, stairs, "
+             "living room, kitchen, bedrooms, bathroom, study, theatre, roof terrace, pool, garden)" if parts else "") +
+            ". I'll read the screen and click/type only in the Minecraft window."),
+            {"world": world, "mode": mode, "parts": str(len(parts))})
+        if not gate.allowed:
+            return gate.refusal({"response_type": "minecraft"})
+
+        def session() -> Dict[str, Any]:
+            ga.set_dpi_aware()
+            window = info.window or info.name
+            hit = ga.find_window(window)
+            if hit is None:
+                import asyncio as _a
+                _a.run(game_library.launch(info))
+                hit = ga.wait_for_window(window, 150, 2.0)
+                if hit is None:
+                    return {"status": "error", "message": "Minecraft didn't open (no BlueStacks window appeared)."}
+            if not ga.focus_window(hit[0]):
+                return {"status": "error", "message": "Windows wouldn't bring Minecraft to the front, so I didn't touch it."}
+            trace_dir = str(workspace_path("minecraft", "last_run"))
+            agent = mca.MinecraftAgent(hit[0], trace_dir=trace_dir)
+            mca.wait_for_menu(agent)
+            entered = agent.enter_world(mca.Goal(world=world, mode=mode, cheats=True,
+                                                 must_exist=bool(metadata.get("existing"))), max_steps=40)
+            steps = [f"{st.screen}: {st.action} {st.detail}".strip() for st in agent.trace]
+            if entered["status"] != "success":
+                return {"status": "error", "steps": steps, "trace_dir": trace_dir, "message": entered["message"]}
+            out: Dict[str, Any] = {"status": "success", "steps": steps, "trace_dir": trace_dir,
+                                   "message": entered["message"]}
+            if parts:
+                driver = mca.ChatDriver(agent)
+                driver.run("/time set day")
+                built = mca.build_fast(parts, driver)
+                out["build"] = built
+                driver.run(mcb.view_command(floors), check_input=False)
+                agent.press("ESC")
+                agent.sleep(1.5)
+                frame, _items = agent.look()
+                shot = os.path.join(trace_dir, "finished_build.png")
+                try:
+                    import cv2
+                    cv2.imwrite(shot, frame)
+                    out["screenshot"] = shot
+                except Exception:
+                    pass
+                errs = built.get("errors", [])
+                if built.get("stopped"):
+                    out["status"] = "error"
+                    out["message"] += (f" Building stopped ({built['stopped']}) after {built['done']} of "
+                                       f"{len(parts)} parts.")
+                else:
+                    out["status"] = "success" if not errs else "partial"
+                    out["message"] += (f" Built the modern {floors}-floor house: {built['done']} of {len(parts)} "
+                                       f"commands entered in {built['seconds']}s"
+                                       + (f"; Minecraft reported {len(errs)} problem(s): " + "; ".join(errs[:4])
+                                          if errs else ", no errors reported") + ". I moved you back so you can see it.")
+            return out
+
+        result = await asyncio.to_thread(session)
+        result["response_type"] = "minecraft"
         return result
 
     def stop_game(self) -> bool:
@@ -4647,6 +4736,11 @@ class TomAgent:
             if res.get("status") == "success" and (res.get("message") or "").strip():
                 res["response_type"] = "universal_task"
                 res["message"] = "[Attempted as autonomous task]\n" + res["message"]
+                return res
+            if res.get("status") == "needs_input":
+                # The planner's note contains the concrete blocker/question. Preserve it so the
+                # user can answer it directly instead of replacing it with a generic chat reply.
+                res["response_type"] = "universal_task_needs_input"
                 return res
         except asyncio.TimeoutError:
             self.safety.log_action("WARN", target="universal", status="FAILURE",

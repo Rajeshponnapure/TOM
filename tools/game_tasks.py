@@ -194,7 +194,8 @@ def minecraft_plan(task: str) -> Optional[Plan]:
 _LOCATED = re.compile(r"(?:nearest|closest)\s+([\w ]+?)\s+is\s+at\s+\[?\s*(-?\d+)\s*,\s*\(?(-?\d+|y\?|~)\)?\s*,\s*(-?\d+)",
                       re.IGNORECASE)
 _DENIED = re.compile(r"cheats?\s+(?:are\s+)?(?:not|disabled)|do(?:es)?\s+not\s+have\s+permission|"
-                     r"you do not have permission|unknown command|syntax error|not allowed", re.IGNORECASE)
+                     r"you do not have permission|unknown command|syntax error|not allowed|unknown block|"
+                     r"cannot place|too many blocks|not loaded|outside (?:of )?the world|invalid", re.IGNORECASE)
 
 
 def read_reply(text: str) -> Dict[str, Any]:
@@ -229,17 +230,19 @@ def type_text(text: str, send_vk: Optional[Callable[[int, bool], None]] = None, 
         else:
             _send_scancode(vk_scan, down)
 
+    caps = bool(user32.GetKeyState(0x14) & 1)          # Caps Lock on: letters come out flipped otherwise
     for ch in text:
         res = user32.VkKeyScanW(ord(ch))
         if res == -1:
             continue
         vk, mods = res & 0xFF, (res >> 8) & 0xFF
         scan = user32.MapVirtualKeyW(vk, 0)
-        if mods & 1:
+        need_shift = bool(mods & 1) != (caps and ch.isalpha())
+        if need_shift:
             key(shift, True)
         key(scan, True)
         key(scan, False)
-        if mods & 1:
+        if need_shift:
             key(shift, False)
         time.sleep(gap)
 

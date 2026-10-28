@@ -189,6 +189,15 @@ class CommandRouter:
 
         if re.match(r"^(?:please\s+)?stop\s+(?:playing|the game|the autopilot|autopilot|gaming)\b", lower):
             return RouteDecision("system", "stop_game", "execute_stop_game", confidence=0.95)
+        # A whole Minecraft session ("open minecraft, create a creative server called X and build a house")
+        try:
+            from tools.minecraft_agent import parse_session
+            session = parse_session(text)
+        except Exception:
+            session = None
+        if session is not None and (session["world"] != "TOM world" or re.search(r"\b(open|launch|start)\b", lower)):
+            return RouteDecision("system", "minecraft_session", "execute_minecraft_session", confidence=0.93,
+                                 metadata=session)
         # A task inside a game ("build a house in minecraft", "in Green Hell find water")
         task = self.game_task_in_request(text)
         if task is not None:
