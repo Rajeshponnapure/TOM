@@ -600,6 +600,9 @@ print("TOM house model created")
         slug = _re.sub(r"[^a-z0-9]+", "_", task.lower()).strip("_")[:40] or "scene"
         out_dir = project_path_str("tom_brain", "blender_output", f"{slug}_{_uuid.uuid4().hex[:8]}")
         script = self.generate_script(task)
+        return self._run_scene(script, out_dir)
+
+    def _run_scene(self, script: str, out_dir: str) -> Dict[str, Any]:
         finalized, blend_path, png_path = self._finalize_script(script, out_dir)
         result = self.execute_script(finalized)
         if result["status"] != "success" and os.path.isfile(blend_path) and "code" in result.get("message", ""):
@@ -619,6 +622,72 @@ print("TOM house model created")
                     "Blender ran without error but no .blend file was found afterward "
                     f"(expected {blend_path}). {result.get('stdout_tail', '')}"[:800])
         return result
+
+    def assemble_scene(self, asset_mains, hdri_path: str = "", task: str = "asset scene") -> Dict[str, Any]:
+        """Import downloaded glTF models (asset_mains: list of .gltf/.glb paths), optionally light the
+        world with an HDRI, frame a camera, then save + preview-render and verify the file landed."""
+        import re as _re
+        import uuid as _uuid
+        slug = _re.sub(r"[^a-z0-9]+", "_", (task or "scene").lower()).strip("_")[:40] or "scene"
+        out_dir = project_path_str("tom_brain", "blender_output", f"{slug}_{_uuid.uuid4().hex[:8]}")
+        mains = [p.replace("\\", "/") for p in (asset_mains or []) if p]
+        if not mains and not hdri_path:
+            return {"status": "error", "message": "No assets to assemble."}
+        lines = [
+            "import bpy, math",
+            "bpy.ops.wm.read_factory_settings(use_empty=True)",
+            "imported = []",
+        ]
+        for p in mains:
+            ext = os.path.splitext(p)[1].lower()
+            op = "import_scene.gltf" if ext in (".gltf", ".glb") else (
+                "import_scene.fbx" if ext == ".fbx" else "import_scene.obj" if ext == ".obj" else "")
+            if not op:
+                continue
+            lines += [
+                "try:",
+                f"    before = set(bpy.data.objects)",
+                f"    bpy.ops.{op}(filepath={p!r})",
+                f"    imported += [o for o in bpy.data.objects if o not in before]",
+                "except Exception as _e:",
+                f"    print('TOM import failed for {os.path.basename(p)}:', _e)",
+            ]
+        # spread multiple models out along X so they don't overlap at the origin
+        lines += [
+            "roots = [o for o in imported if o.parent is None]",
+            "for i, o in enumerate(roots):",
+            "    o.location.x += (i - (len(roots)-1)/2.0) * 2.5",
+        ]
+        if hdri_path:
+            h = hdri_path.replace("\\", "/")
+            lines += [
+                "world = bpy.data.worlds.get('World') or bpy.data.worlds.new('World')",
+                "bpy.context.scene.world = world",
+                "world.use_nodes = True",
+                "nt = world.node_tree; nt.nodes.clear()",
+                "bg = nt.nodes.new('ShaderNodeBackground')",
+                "env = nt.nodes.new('ShaderNodeTexEnvironment')",
+                f"env.image = bpy.data.images.load({h!r})",
+                "out = nt.nodes.new('ShaderNodeOutputWorld')",
+                "nt.links.new(env.outputs['Color'], bg.inputs['Color'])",
+                "nt.links.new(bg.outputs['Background'], out.inputs['Surface'])",
+            ]
+        else:
+            lines += [
+                "light_data = bpy.data.lights.new('key', 'SUN'); light_data.energy = 3.0",
+                "light = bpy.data.objects.new('key', light_data); bpy.context.collection.objects.link(light)",
+                "light.rotation_euler = (math.radians(55), 0, math.radians(45))",
+            ]
+        # frame a camera on everything imported
+        lines += [
+            "cam_data = bpy.data.cameras.new('cam'); cam = bpy.data.objects.new('cam', cam_data)",
+            "bpy.context.collection.objects.link(cam); bpy.context.scene.camera = cam",
+            "cam.location = (6, -6, 4); cam.rotation_euler = (math.radians(63), 0, math.radians(46))",
+            "bpy.context.scene.render.engine = 'CYCLES' if 'CYCLES' in "
+            "[e.identifier for e in bpy.types.RenderEngine.__subclasses__() if hasattr(e,'identifier')] else "
+            "bpy.context.scene.render.engine",
+        ]
+        return self._run_scene("\n".join(lines), out_dir)
 
     def _finalize_script(self, script: str, out_dir: str):
         """Append a save (+ preview render, unless the template already

@@ -1453,6 +1453,10 @@ class TomAgent:
                 elif handler == "execute_social_message":
                     result = await self.execute_social_message(command, route.metadata)
 
+                # 3D assets (CC0) + Blender scene assembly
+                elif handler == "execute_asset_task":
+                    result = await self.execute_asset_task(command, route.metadata)
+
                 # Data analysis
                 elif handler == "execute_data_analysis":
                     result = await self._execute_data_analysis(command, parsed)
@@ -3265,6 +3269,90 @@ class TomAgent:
            re.search(r"\b(what|which|list|show|do i have|are set|status)\b", low):
             return secrets.status_report()
         return None
+
+    # ── 3D ASSETS + BLENDER SCENES ──────────────────────────────────────
+    _HDRI_WORDS = ("sky", "hdri", "sunset", "sunrise", "studio", "environment",
+                   "background", "overcast", "night sky", "daylight", "dawn", "dusk")
+
+    @staticmethod
+    def _parse_3d(command: str) -> Tuple[List[str], str, bool]:
+        """(model subjects, hdri subject, is_scene) from "build a blender scene with a barrel and a
+        wooden table under a sunset sky" / "download a 3d model of a barrel"."""
+        text = re.sub(r"(?i)\buser request:\s*", "", command).strip()
+        low = text.lower()
+        is_scene = bool(re.search(r"\b(scene|blender|render|setup)\b", low)) and \
+            not re.search(r"^\s*(?:download|find|get|fetch)\b", low)
+        # 1) pull the HDRI phrase out first ("under a sunset sky", "lit by a studio hdri") and remove it
+        hdri = ""
+        hm = re.search(r"(?i)\b(?:under|lit by|illuminated by|using|against)\s+(?:a |an |the )?"
+                       r"([\w ]{1,20}?(?:sky|hdri|hdr|studio|environment|overcast|daylight|dusk|dawn))\b", text)
+        if not hm:
+            hm = re.search(r"(?i)\b(?:under|lit by|illuminated by|using|against|with)\s+(?:a |an |the )?"
+                           r"((?:\w+\s+){0,2}(?:sunset|sunrise|night sky|blue hour))\b", text)
+        if hm:
+            hdri = " ".join(hm.group(1).split())
+            text = text[:hm.start()] + " " + text[hm.end():]        # remove it so models don't catch it
+        # 2) the model subjects are what's left after the lead-in verb
+        body = re.sub(r"(?i)^.*?\b(?:with|of|containing|including|:)\s+", "", text) \
+            if re.search(r"(?i)\b(?:with|of|containing|including|:)\s+", text) else text
+        body = re.sub(r"(?i)\b(build|create|make|assemble|a|an|the|blender|scene|3d|3-d|model|models|"
+                      r"asset|assets|download|find|get|fetch|professional|realistic|some)\b", " ", body)
+        parts = re.split(r"(?i)\s*(?:,|\band\b|\bplus\b)\s*", body)
+        models = []
+        for p in parts:
+            p = " ".join(p.split()).strip(" .")
+            if not p:
+                continue
+            if any(w in p.lower() for w in TomAgent._HDRI_WORDS):
+                hdri = hdri or p
+                continue
+            models.append(p)
+        return models, hdri, is_scene
+
+    async def execute_asset_task(self, command: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Fetch CC0 assets (Poly Haven) and, for a scene request, assemble them in Blender."""
+        from tools import asset_fetch
+        models, hdri, is_scene = self._parse_3d(command)
+        if not models and not hdri:
+            return {"status": "needs_input", "response_type": "asset_3d",
+                    "message": "What 3D asset should I fetch? e.g. \"download a 3D model of a barrel\" or "
+                               "\"build a Blender scene with a wooden table under a sunset sky\"."}
+        downloaded, notes = [], []
+        for subject in models:
+            r = await asyncio.to_thread(asset_fetch.fetch, subject, "models", "1k")
+            if r.get("status") == "success":
+                downloaded.append(str(r["main"]))
+                notes.append(f"✓ {r['asset_id']} ({subject})")
+            else:
+                notes.append(f"✗ {subject}: {r.get('message', 'not found')}")
+        hdri_path = ""
+        if hdri:
+            hr = await asyncio.to_thread(asset_fetch.fetch, hdri, "hdris", "1k")
+            if hr.get("status") == "success":
+                hdri_path = str(hr["main"])
+                notes.append(f"✓ {hr['asset_id']} (sky)")
+            else:
+                notes.append(f"✗ {hdri} sky: {hr.get('message', 'not found')}")
+        if not downloaded and not hdri_path:
+            return {"status": "error", "response_type": "asset_3d",
+                    "message": "I couldn't fetch any of those from Poly Haven (CC0):\n" + "\n".join(notes)}
+        if not is_scene:
+            folder = os.path.dirname(downloaded[0]) if downloaded else os.path.dirname(hdri_path)
+            return {"status": "success", "response_type": "asset_3d", "path": folder, "paths": downloaded,
+                    "message": "Downloaded CC0 assets (free for any use):\n" + "\n".join(notes) +
+                               f"\n\nFiles in {os.path.dirname(folder)}. Say \"build a Blender scene with "
+                               "them\" to assemble and render."}
+        from tools.blender_control import BlenderControl
+        bc = BlenderControl()
+        if not bc.is_available():
+            return {"status": "success", "response_type": "asset_3d", "paths": downloaded,
+                    "message": "Assets downloaded:\n" + "\n".join(notes) +
+                               "\n\nBlender isn't installed where I can find it, so I couldn't assemble the "
+                               "scene. Open the glTF files in your 3D tool."}
+        built = await asyncio.to_thread(bc.assemble_scene, downloaded, hdri_path, command[:40])
+        built.setdefault("response_type", "asset_3d")
+        built["message"] = ("Assets (CC0):\n" + "\n".join(notes) + "\n\n" + built.get("message", ""))
+        return built
 
     # ── INSTAGRAM / LINKEDIN MESSAGES (in the owner's own Chrome) ────────
     @staticmethod

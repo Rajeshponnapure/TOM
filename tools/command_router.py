@@ -178,6 +178,18 @@ class CommandRouter:
         if self.is_website_build_request(lower):
             return RouteDecision("content", "create_website", "execute_website_creation", confidence=0.9)
 
+        # 3D assets (CC0 from Poly Haven) and Blender scenes built from them. Needs a fetch/build verb,
+        # and never a "report/write about 3D …" request (those are documents, routed below).
+        if not re.search(r"\b(report|write|essay|article|blog|document|paper|presentation|powerpoint|"
+                         r"slides?|explain|about)\b", lower):
+            if re.search(r"\b(download|find|fetch|get|grab|import)\b.*\b(3d|3-d)\b.*\b(model|asset|object)\b", lower) \
+               or re.search(r"\b(blender|3d|3-d)\s+scene\b", lower) \
+               or (re.search(r"\b(build|create|make|assemble|generate|set\s*up)\b", lower) and
+                   re.search(r"\b(3d scene|3d model|3d asset|3d object|blender scene|hdri)\b", lower)) \
+               or (re.search(r"\b(build|create|make|assemble)\b.*\bscene\b", lower) and
+                   re.search(r"\b(blender|hdri|asset|3d)\b", lower)):
+                return RouteDecision("content", "asset_3d", "execute_asset_task", confidence=0.88)
+
         if any(token in lower for token in ("presentation", "pptx", "slide", "slides", "powerpoint presentation")):
             if any(act in lower for act in ("create", "make", "build", "generate", "design")):
                 return RouteDecision("content", "create_presentation", "execute_presentation_task", confidence=0.88)
