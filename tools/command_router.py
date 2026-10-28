@@ -132,6 +132,22 @@ class CommandRouter:
             if any(act in lower for act in ("open", "launch", "start")):
                 return RouteDecision("communication", "open_whatsapp", "execute_open_whatsapp", confidence=0.93)
 
+        # Instagram / LinkedIn direct messages in the owner's own Chrome profile ("message Sara on
+        # instagram: hi", "dm @john on insta saying hey", "text the recruiter on linkedin that ...").
+        # The send gate lives in the flow (one approval on the exact person+text), so not here.
+        if ("instagram" in lower or "linkedin" in lower or re.search(r"\binsta\b", lower)) and \
+           any(act in lower for act in ("message", "text", "dm", "tell", "say", "write to", "send")) and \
+           not any(w in lower for w in ("scroll", "report", "summarize", "extract", "digest", "news feed")):
+            app = "linkedin" if "linkedin" in lower else "instagram"
+            return RouteDecision("communication", "social_message", "execute_social_message",
+                                 metadata={"app": app}, confidence=0.9)
+        if ("instagram" in lower or "linkedin" in lower or re.search(r"\binsta\b", lower)) and \
+           any(act in lower for act in ("open", "launch", "start")) and \
+           not any(w in lower for w in ("scroll", "report", "summarize", "extract", "digest", "news")):
+            app = "linkedin" if "linkedin" in lower else "instagram"
+            return RouteDecision("communication", "open_social", "execute_social_message",
+                                 metadata={"app": app, "open_only": True}, confidence=0.88)
+
         # Games installed on this PC ("play Green Hell") and everyday Windows control ("lock my pc")
         game = self.game_in_request(lower)
         if game is not None:

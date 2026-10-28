@@ -1449,6 +1449,10 @@ class TomAgent:
                 elif handler == "execute_whatsapp_task":
                     result = await self._execute_whatsapp(command, parsed)
 
+                # Instagram / LinkedIn direct message in the owner's Chrome profile
+                elif handler == "execute_social_message":
+                    result = await self.execute_social_message(command, route.metadata)
+
                 # Data analysis
                 elif handler == "execute_data_analysis":
                     result = await self._execute_data_analysis(command, parsed)
@@ -3234,6 +3238,69 @@ class TomAgent:
            re.search(r"\b(what|which|list|show|do i have|are set|status)\b", low):
             return secrets.status_report()
         return None
+
+    # ── INSTAGRAM / LINKEDIN MESSAGES (in the owner's own Chrome) ────────
+    @staticmethod
+    def _parse_social(command: str, app: str) -> Tuple[str, str]:
+        """Pull (person, message) out of "message Sara on instagram: hi" / "dm @john on insta saying hey"
+        / "text the recruiter on linkedin that I'll be late"."""
+        text = re.sub(r"(?i)\buser request:\s*", "", command).strip()
+        # message after a separator
+        msg = ""
+        sep = re.search(r"(?i)(?:\b(?:saying|that)\b|:)\s+(.+)$", text)
+        if sep:
+            msg = sep.group(1).strip().strip("\"'")
+            text = text[:sep.start()].strip()
+        # person: between the verb and "on <app>"
+        person = ""
+        pm = re.search(r"(?i)\b(?:message|text|dm|tell|write to|send(?:\s+a\s+\w+)?(?:\s+message)?\s+to)\s+"
+                       r"(?P<p>.+?)\s+on\s+(?:instagram|insta|linkedin)\b", text)
+        if pm:
+            person = pm.group("p").strip()
+        else:
+            pm2 = re.search(r"(?i)\bon\s+(?:instagram|insta|linkedin)\s+(?:to\s+)?(?P<p>[A-Za-z0-9_@. ]{2,40})$", text)
+            if pm2:
+                person = pm2.group("p").strip()
+        person = person.strip().lstrip("@").strip()
+        person = re.sub(r"(?i)^(the|my)\s+", "", person)
+        return person, msg
+
+    async def execute_social_message(self, command: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        from tools.social_web import SocialWeb
+        app = metadata.get("app", "instagram")
+        sw = getattr(self, "_social_web", None) or SocialWeb()
+        self._social_web = sw
+        if not sw.available():
+            return {"status": "error", "response_type": "social_message",
+                    "message": "I can only do this on Windows with Chrome installed, and not while UI "
+                               "automation is turned off."}
+        opened = await sw.open_messaging(app)
+        if opened.get("status") != "success":
+            return {**opened, "response_type": "social_message"}
+        ready = await sw.wait_for_app(app, before=opened.get("windows_before"))
+        if ready.get("status") == "login":
+            return {"status": "needs_input", "response_type": "social_message", "message": ready["message"]}
+        if ready.get("status") != "ready":
+            return {"status": "error", "response_type": "social_message",
+                    "message": ready.get("message", f"{app.title()} didn't open.")}
+        if metadata.get("open_only"):
+            return {"status": "success", "response_type": "social_message",
+                    "message": f"Opened {app.title()} messages in your Chrome. Tell me who to message and "
+                               "what to say, e.g. \"message Sara on {0}: running late\".".format(app)}
+        person, message = self._parse_social(command, app)
+        if not person:
+            return {"status": "needs_input", "response_type": "social_message",
+                    "message": f"{app.title()} is open. Who should I message? Say e.g. "
+                               f"\"message Sara on {app}: running late\"."}
+        if not message:
+            return {"status": "needs_input", "response_type": "social_message",
+                    "message": f"What should I say to {person} on {app.title()}? "
+                               f"e.g. \"message {person} on {app}: running late\"."}
+        composed = await sw.compose(app, person, message, ready["hwnd"])
+        if composed.get("ok") is False:
+            return {"status": "needs_input", "response_type": "social_message", "message": composed["message"]}
+        # send() runs the one approval gate on the exact app/person/message, then sends and verifies.
+        return await sw.send(app, person, message, ready["hwnd"])
 
     async def _answer_pending_choice(self, command: str) -> Optional[Dict[str, Any]]:
         """Finish a task that stopped to ask "which one?" when this message answers it."""
