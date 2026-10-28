@@ -505,6 +505,7 @@ def test_an_installed_game_still_uses_the_state_loop(monkeypatch):
     from tom_core.games import profile as profiles_mod, studio
     from tools import game_library
     monkeypatch.setattr(studio, "find_made_game", lambda name: None)
+    monkeypatch.setenv("TOM_GAME_BRAIN", "0")                              # this test is about the state loop
     monkeypatch.setattr(game_library, "find_game", lambda name: None)      # no Steam/desktop scan in a test
     monkeypatch.setattr(game_autopilot, "find_window", lambda w: (7, "Green Hell"))
     monkeypatch.setattr(game_autopilot, "focus_window", lambda h: True)

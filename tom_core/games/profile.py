@@ -101,6 +101,7 @@ class GameProfile:
     goal_met: int = 0
     best: Dict[str, Any] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
+    lessons: List[str] = field(default_factory=list)                # what the game brain learned about its screens
     probed: bool = False
     probes: int = 0                                                 # how many times keys were tried
     updated: str = ""

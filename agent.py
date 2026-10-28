@@ -2607,10 +2607,13 @@ class TomAgent:
                 goal, goal_desc = spoken, describe_goal(parsed)
         gate = self._game_gate(game, (
             f"Play {game} for {seconds:g}s" + (f", aiming to {goal_desc}" if goal_desc else "") + ". Before you say yes:\n"
-            "  - I'll start the game if it isn't open and drive its keyboard/mouse; I only type into its window.\n"
-            "  - I read the screen: menus, loading, deaths. I learn which keys the game answers to and \n"
-            "    remember it next time, and I retry after dying.\n"
-            "  - I won't play a big 3D game like an expert, and I won't pretend to.\n"
+            "  - I'll start the game if it isn't open and drive its keyboard/mouse; I only type into its window\n"
+            "    (BlueStacks games go through Android Debug Bridge when it's on, which touches nothing else).\n"
+            "  - I read and understand each screen with a vision model: which buttons are there, what to open,\n"
+            "    create or type, and I check each move changed something before the next. I remember what\n"
+            "    I learn about its menus for next time. I never buy anything, sign in or type passwords.\n"
+            "  - Menus, building and turn-based play suit me; I won't fight in a fast 3D game like a skilled\n"
+            "    player, and I won't pretend to.\n"
             "  - Online games with anti-cheat can treat this as cheating and BAN the account.\n"
             "Say \"stop playing\" any time."), {"seconds": str(seconds), "goal": goal})
         if not gate.allowed:
@@ -2636,23 +2639,41 @@ class TomAgent:
         window = (info.window or info.name) if info else "Minecraft"
         gate = self._game_gate("Minecraft", (
             f"In Minecraft: {plan.summary}. I'll open chat in the Minecraft window and type:\n  "
-            + "\n  ".join(plan.commands) + "\nCommands need cheats on in that world. I only type into the game window."),
+            + "\n  ".join(plan.commands) + "\nCommands need cheats on in that world. If Minecraft isn't open or "
+            "isn't in a world yet, I'll start it and work through its menus by reading the screen to open a world "
+            "(or create a new one with cheats on). I never turn cheats on in an existing world, buy anything or "
+            "sign in. I only type into the game window."),
             {"commands": " | ".join(plan.commands)})
         if not gate.allowed:
             return gate.refusal({"response_type": "game_task"})
+        prepared = None
         hit = ga.find_window(window)
         if hit is None:
             if info is None:
                 return {"status": "error", "response_type": "game_task", "message": "Minecraft isn't installed on this PC."}
             await game_library.launch(info)
-            return {"status": "needs_input", "response_type": "game_task", "message": (
-                "I've started Minecraft. Load the world you want me to work in (with cheats on), then ask me again; "
-                "I'll type the commands as soon as it's open.")}
+            hit = await asyncio.to_thread(ga.wait_for_window, window, 150.0, 2.0)
+            if hit is None:
+                return {"status": "needs_input", "response_type": "game_task", "message": (
+                    "I've started Minecraft, but its window didn't appear in time. Ask me again once it's open.")}
+            prepared = await self._minecraft_enter_world(info.name)
+            if not prepared.get("goal_met"):
+                return {"status": "needs_input", "response_type": "game_task", "preparation": prepared,
+                        "message": ("I started Minecraft but couldn't get into a world by myself: "
+                                    + prepared.get("message", "") + " Open a world (with cheats on) and ask me again.")}
+            hit = ga.find_window(window) or hit
         if not await asyncio.to_thread(ga.focus_window, hit[0]):
             return {"status": "error", "response_type": "game_task", "message": (
                 "Windows wouldn't bring Minecraft to the front, so I didn't type anything. Click on the game and ask again.")}
         driver = game_tasks.MinecraftDriver(hit[0])
         result = await asyncio.to_thread(game_tasks.run_minecraft, plan, driver)
+        if prepared is None and any(r.get("kind") == "chat_failed" for r in result.get("replies", [])):
+            # chat wouldn't open: most likely a menu, not a world. Get into one by reading the screen, retry once.
+            prepared = await self._minecraft_enter_world(info.name if info else "Minecraft")
+            if prepared.get("goal_met") and await asyncio.to_thread(ga.focus_window, hit[0]):
+                result = await asyncio.to_thread(game_tasks.run_minecraft, plan, game_tasks.MinecraftDriver(hit[0]))
+        if prepared is not None:
+            result["preparation"] = prepared
         result["response_type"] = "game_task"
         result["commands"] = plan.commands
         if result.get("fallback") == "play":
@@ -2665,6 +2686,24 @@ class TomAgent:
                                   + played.get("message", ""))
         return result
 
+    MINECRAFT_WORLD_GOAL = (
+        "get into a Minecraft world so chat commands can be typed: from the main menu press Play, then open an "
+        "existing world; if there is none, create a new world and switch on 'Activate Cheats' (or 'Cheats') in "
+        "its settings before pressing Create. Do NOT turn cheats on in an existing world. Say done only when you "
+        "are standing inside the world (the game view, not a menu or loading screen)")
+
+    async def _minecraft_enter_world(self, game: str) -> Dict[str, Any]:
+        """Work through Minecraft's menus by reading the screen until a world is open (game brain)."""
+        import threading
+        from tools import game_play
+        stop = threading.Event()
+        self._game_stop = stop
+        try:
+            return await asyncio.to_thread(game_play.play_live, game, 180.0, stop, self._autopilot_model(), None,
+                                           150.0, self.MINECRAFT_WORLD_GOAL)
+        except Exception as exc:
+            return {"status": "error", "goal_met": False, "message": f"the menu walk-through failed ({exc})."}
+
     def stop_game(self) -> bool:
         stop = getattr(self, "_game_stop", None)
         if stop is None or stop.is_set():
@@ -2673,16 +2712,10 @@ class TomAgent:
         return True
 
     def _autopilot_model(self) -> str:
-        """A vision-capable local model for the autopilot (qwen3.5 has vision; fall back to 4b)."""
-        try:
-            import subprocess
-            out = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=8).stdout
-            for name in ("qwen3.5:9b", "qwen3.5:4b"):
-                if name in out:
-                    return name
-        except Exception:
-            pass
-        return "qwen3.5:4b"
+        """The best installed vision model (TOM_VISION_MODEL first), for seeing and understanding games."""
+        from tom_core.games import brain
+        names = brain.installed_models()
+        return (brain.pick_vision_model(names) if names else "") or "qwen3.5:4b"
 
     async def execute_screen_action(self, action: str, target: str) -> Dict[str, Any]:
         """Act on whatever app is in front, the way a person would: read the screen (Tesseract), click the

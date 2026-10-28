@@ -32,6 +32,7 @@ class Game:
     launcher: str          # "Steam" | "Epic Games" | "BlueStacks" | "Shortcut"
     launch: str            # URI or shortcut handed to the shell
     window: str = ""       # title of the window it plays in, when that isn't the game's name (emulators)
+    package: str = ""      # Android package for an emulator game (BlueStacks "--package …"), used over ADB
 
 
 def _steam_root() -> str:
@@ -130,7 +131,9 @@ def shortcut_games(folders: Optional[List[str]] = None, read=None) -> List[Game]
             target, args = read(lnk)
             low = f"{target} {args}".lower()
             if "hd-player.exe" in low and "launchapp" in low:
-                games.append(Game(name, "BlueStacks", lnk, window="BlueStacks App Player"))
+                pkg = re.search(r"--package\s+\"?([A-Za-z0-9_.]+)", args or "")
+                games.append(Game(name, "BlueStacks", lnk, window="BlueStacks App Player",
+                                  package=pkg.group(1) if pkg else ""))
             elif re.search(r"steam://rungameid|com\.epicgames\.launcher://apps", low):
                 games.append(Game(name, "Shortcut", lnk))
     return list({g.name.lower(): g for g in games}.values())

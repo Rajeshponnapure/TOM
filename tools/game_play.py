@@ -9,9 +9,11 @@ loop pauses until the game is in front again; nothing is ever typed into another
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from tom_core.games import brain as brain_mod
 from tom_core.games import discover, learn_colors, play_loop
 from tom_core.games import profile as profile_mod
 
@@ -290,7 +292,7 @@ class WindowBackend(play_loop.Backend):
 def play_live(name: str, seconds: float = 30.0, stop=None, model: str = "qwen3.5:4b",
               decide: Optional[Callable[[bytes, str, str], str]] = None,
               launch_wait: float = 150.0, goal: str = "", *, learn: Optional[bool] = None,
-              max_attempts: int = 3) -> Dict[str, Any]:
+              max_attempts: int = 3, think=None) -> Dict[str, Any]:
     """Start the game if needed, find out how it responds, then play toward `goal`, retrying deaths.
 
     A game TOM made is played by its own strategy player, which reads the game's colours and plays it
@@ -333,8 +335,37 @@ def play_live(name: str, seconds: float = 30.0, stop=None, model: str = "qwen3.5
     key = info.name if info is not None else hit[1]
     prof = profile_mod.load(key)
     keymap = {k: k for k in list(ga.SCAN) + list(ga.MOUSE)}
+    brain_note = ""
+    if use_brain(prof, goal):
+        # Understand the screen and work toward the goal (menus, worlds, dialogs, building, fighting).
+        if info is not None and info.launcher == "BlueStacks":
+            out = play_android(key, goal, seconds, stop, model, package=getattr(info, "package", ""), think=think)
+            if out.get("adb") or out.get("brain_unavailable"):
+                out["started"] = started
+                if not out.get("brain_unavailable"):
+                    return out
+            else:
+                brain_note = (" ADB wasn't available, so I used the BlueStacks window instead: "
+                              + out.get("message", ""))
+        window = WindowBackend(hwnd, ga.KeyState(keymap=keymap))
+        decide_fn = decide or (lambda img, gname, gl: ga._ollama_vision(img, gname, model, gl))
+
+        def autoplay(sec: float) -> str:
+            # hand the fast reflex player the controls for a few seconds, then the brain looks again
+            fast = play_loop.play(key, window, play_loop.Goal(seconds=sec), prof=profile_mod.load(key),
+                                  decide=decide_fn, max_attempts=1, stop=stop, seconds=sec,
+                                  tick=1.0 / 30.0, async_ocr=True)
+            return f"reflex play {sec:g}s: {fast.ticks} looks, {fast.actions_sent} inputs, {fast.deaths} death(s)"
+
+        out = play_with_brain(key, BrainWindowBackend(window, autoplay=autoplay), brain_goal(goal, key),
+                              seconds=seconds, stop=stop, model=model, think=think, prof=prof)
+        if not out.get("brain_unavailable"):
+            out["started"] = started
+            out["message"] += brain_note
+            return out
+        brain_note = " " + out["message"] + " So I used the simpler reflex player instead."
     backend = WindowBackend(hwnd, ga.KeyState(keymap=keymap))
-    learned = ""
+    learned = brain_note.strip()
     try:
         # a tapped game has no keys to learn, and probing a live game is disruptive — do it once per game
         want_learn = learn if learn is not None else not (prof.probed or prof.responsive)
@@ -398,3 +429,181 @@ def play_live(name: str, seconds: float = 30.0, stop=None, model: str = "qwen3.5
             "profile": prof.to_dict(), "profile_path": profile_mod.path_for(key),
             "clicks": getattr(backend, "clicks", 0), "refocuses": refocuses,
             "verified": bool(ok), "message": message}
+
+
+# ── the game brain on a PC window or an Android emulator ──────────────────────
+class BrainWindowBackend(brain_mod.BrainBackend):
+    """A game window as the game brain's backend (tom_core.games.brain).
+
+    Built on WindowBackend, so the same safety rule holds: input only while the game's window is in
+    front, keys released whenever it isn't. Coordinates the brain gives are fractions of the game's
+    client area, turned into screen pixels here.
+    """
+
+    platform = "pc"
+
+    def __init__(self, window: WindowBackend, read_lines=None, autoplay=None, typer=None):
+        self.w = window
+        self._brain = brain_mod
+        self.read_lines = read_lines if read_lines is not None else brain_mod.ocr_reader()
+        self._autoplay = autoplay
+        self._typer = typer
+        self._prev = None
+
+    @property
+    def can_autoplay(self) -> bool:
+        return self._autoplay is not None
+
+    def ready(self) -> bool:
+        return self.w.ready()
+
+    def observe(self):
+        frame = self.w.frame()
+        if frame is None:
+            return None
+        screen = self._brain.screen_from_frame(frame, self.read_lines, self._prev)
+        self._prev = frame
+        return screen
+
+    def wait(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def _point(self, x: float, y: float) -> Optional[Tuple[int, int]]:
+        region = self.w._ga.client_region(self.w.hwnd)
+        if region is None:
+            return None
+        left, top, width, height = region
+        return left + int(x * width), top + int(y * height)
+
+    def act(self, action: Dict[str, Any], screen) -> Tuple[bool, str]:
+        ga = self.w._ga
+        if not ga.is_foreground(self.w.hwnd):
+            return False, "the game wasn't in front, so I didn't touch anything"
+        t = action["type"]
+        if t in ("click", "double_click"):
+            pt = self._point(action["x"], action["y"])
+            if pt is None:
+                return False, "couldn't find the game window"
+            ok = click_at(*pt)
+            if ok and t == "double_click":
+                time.sleep(0.06)
+                ok = click_at(*pt)
+            self.w.clicks += int(ok)
+            return ok, ""
+        if t == "type":
+            text = action["text"]
+            if not text.isascii():
+                return False, "games only take plain keyboard text here (no emoji or non-Latin letters)"
+            (self._typer or _type_into_game)(text)
+            return True, ""
+        if t == "key":
+            return bool(ga.press_action(action["key"], 0.06)), ""
+        if t == "hold":
+            self.w.keys.apply(set(action["keys"]), set())
+            try:
+                time.sleep(action["seconds"])
+            finally:
+                self.w.keys.apply(set(), set())
+            return True, ""
+        if t == "look":
+            return bool(ga.move_mouse_rel(action["dx"], action["dy"])), ""
+        if t == "aim":
+            # Relative mouse moves turn the camera in 3D games: move by the target's offset from the
+            # crosshair (screen centre). Mouse sensitivity differs per game, so the brain looks again and
+            # corrects on the next step rather than trusting one move.
+            region = ga.client_region(self.w.hwnd)
+            if region is None:
+                return False, "couldn't find the game window"
+            _, _, width, height = region
+            ok = ga.move_mouse_rel(int((action["x"] - 0.5) * width), int((action["y"] - 0.5) * height))
+            if ok and action.get("fire", True):
+                time.sleep(0.03)
+                ok = ga.press_action("MOUSE_LEFT", 0.08)
+            return bool(ok), ""
+        return False, f"{t} isn't available in a PC window"
+
+    def autoplay(self, seconds: float) -> str:
+        if self._autoplay is None:
+            return "not available"
+        return self._autoplay(seconds)
+
+    def close(self) -> None:
+        self.w.close()
+
+
+def _type_into_game(text: str) -> None:
+    from tools.game_tasks import type_text
+    type_text(text)
+
+
+def use_brain(prof, goal: str, env: Optional[Dict[str, str]] = None) -> bool:
+    """Whether a session should be driven by the game brain rather than the reflex state loop.
+
+    The brain understands screens (menus, worlds, dialogs, text fields, what to build or where to go);
+    the reflex loop is faster but only knows menu/dead/gameplay. A game whose colours TOM already
+    learned, with no specific task, keeps its measured strategy player.
+    """
+    import os as _os
+    env = _os.environ if env is None else env
+    if env.get("TOM_GAME_BRAIN", "1") == "0":
+        return False
+    if getattr(prof, "colors", None) and getattr(prof, "genre", "") and not (goal or "").strip():
+        return False
+    return True
+
+
+def brain_goal(goal: str, game: str) -> str:
+    """The goal the brain works toward. "play X for me" with nothing more means: get into the game and
+    keep making progress."""
+    g = (goal or "").strip()
+    if not g or re.fullmatch(r"(?:please\s+)?(?:play|autopilot)\s+.+?(?:\s+for me|\s+yourself)?[.!?]*", g, re.I):
+        return (f"get past any menus into actual gameplay in {game}, then keep playing well: make progress "
+                "and avoid dying")
+    return g
+
+
+def play_with_brain(key: str, backend, goal: str, *, seconds: float, stop=None, model: str = "",
+                    think=None, prof=None, max_steps: int = 0) -> Dict[str, Any]:
+    """Run the game brain on a ready backend and turn the result into TOM's reply."""
+    prof = prof or profile_mod.load(key)
+    if think is None:
+        ok, chosen = brain_mod.vision_ready(model)
+        if not ok:
+            return {"status": "error", "response_type": "game_autopilot", "game": key, "played_by": "brain",
+                    "brain_unavailable": True, "message": chosen}
+        think = brain_mod.ollama_think(chosen)
+    import os as _os
+    evidence_dir = _os.path.join(_os.path.dirname(profile_mod.path_for(key)), "evidence")
+    b = brain_mod.GameBrain(backend, think, key, goal, lessons=getattr(prof, "lessons", []),
+                            controls=prof.controls, seconds=seconds, stop=stop,
+                            max_steps=max_steps or max(20, int(seconds / 2)), evidence_dir=evidence_dir)
+    res = b.run()
+    prof = profile_mod.load(key)
+    brain_mod.save_lessons(prof, res.lessons)
+    prof.sessions += 1
+    if res.goal_met:
+        prof.goal_met += 1
+    try:
+        profile_mod.save(prof)
+    except OSError:
+        pass
+    acted = sum(1 for s in res.steps if s.ok)
+    status = "success" if res.outcome == "done" and res.goal_met else ("partial" if acted else "error")
+    return {"status": status, "response_type": "game_autopilot", "game": key, "played_by": "brain",
+            "goal": goal, "goal_met": res.goal_met, "verified": res.verified, "outcome": res.outcome,
+            "session": res.as_dict(), "message": brain_mod.report(res)}
+
+
+def play_android(name: str, goal: str, seconds: float, stop=None, model: str = "", package: str = "",
+                 think=None, connect=None) -> Dict[str, Any]:
+    """Play an Android game (BlueStacks) through ADB with the brain. Returns an error result when ADB
+    isn't reachable, so the caller can fall back to the BlueStacks window."""
+    from tools import android_game
+    backend, msg = (connect or android_game.connect_backend)(name, package)
+    if backend is None:
+        return {"status": "error", "response_type": "game_autopilot", "game": name, "adb": False, "message": msg}
+    out = play_with_brain(name, backend, brain_goal(goal, name), seconds=seconds, stop=stop, model=model,
+                          think=think)
+    out["adb"] = True
+    out["message"] = f"{out['message']} (Played through Android Debug Bridge: {msg})"
+    return out
