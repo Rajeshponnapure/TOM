@@ -1,3 +1,4 @@
+import asyncio
 import os
 import subprocess
 from typing import Optional, Dict, Any, List
@@ -47,6 +48,9 @@ class FileTools:
             return {"status": "error", "message": str(e)}
 
     def open_file(self, filepath: str):
+        # TOM_NO_AUTO_OPEN=1 (tests, headless checks) keeps created files from popping up on screen.
+        if os.environ.get("TOM_NO_AUTO_OPEN") == "1":
+            return
         try:
             os.startfile(filepath)
         except Exception:
@@ -105,19 +109,27 @@ class FileTools:
         summary = self._describe_target(abs_path)
         if approval_manager is not None:
             from tools.approval import ApprovalRequest
-            approved = approval_manager.request_approval(ApprovalRequest(
-                action="delete_path",
-                summary=(f"PERMANENTLY DELETE this {summary}?\n\n{abs_path}\n\n"
-                         "This cannot be easily undone."
-                         + ("" if to_trash else " (bypasses the Recycle Bin)")),
-                details={"path": abs_path, "target": summary},
-                risk_level="high",
-            ))
+            question = (f"Move this {summary} to the Recycle Bin?\n\n{abs_path}\n\n"
+                        "You can restore it from the Recycle Bin." if to_trash else
+                        f"PERMANENTLY DELETE this {summary}?\n\n{abs_path}\n\n"
+                        "This bypasses the Recycle Bin and cannot be undone.")
+            approved = await asyncio.to_thread(approval_manager.request_approval, ApprovalRequest(
+                action="delete_path", summary=question,
+                details={"path": abs_path, "target": summary}, risk_level="high"))
             if not approved:
                 return {"status": "cancelled", "message": f"Delete cancelled — '{abs_path}' was left untouched."}
+        # R3 policy gate (TOM-MIG-010): uses the approval just given for this exact path.
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import aenforce
+        gate = await aenforce("fs.delete", ActionClass.DESTRUCTIVE_OR_EXTERNAL, payload={"path": abs_path},
+                              paths=[abs_path], approval_action="delete_path", manager=approval_manager)
+        if not gate.allowed:
+            return gate.refusal()
 
         try:
             import shutil
+            from tom_core import recovery
+            kept = recovery.backup(abs_path)           # FR-012: a copy first, so "undo" can put it back
             trashed = False
             if to_trash:
                 try:
@@ -125,13 +137,20 @@ class FileTools:
                     _s2t(abs_path)
                     trashed = True
                 except Exception:
-                    trashed = False
-            if not trashed:
+                    # send2trash is not installed here: use the Windows Recycle Bin directly. The old
+                    # code fell through to a PERMANENT delete whenever send2trash was missing.
+                    from tom_core.tools.builtin import _recycle
+                    trashed = _recycle(abs_path)
+                if not trashed:
+                    return {"status": "error", "message": f"Could not move '{abs_path}' to the Recycle Bin, "
+                                                         "so nothing was deleted."}
+            else:
                 if os.path.isdir(abs_path):
                     shutil.rmtree(abs_path)
                 else:
                     os.remove(abs_path)
             where = "moved to the Recycle Bin" if trashed else "permanently deleted"
+            recovery.record("delete", path=abs_path, backup=kept or None)
             safety.log_action("DELETE_PATH", target=abs_path, status="SUCCESS",
                               message=f"{summary} {where}")
             return {"status": "success",

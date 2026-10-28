@@ -124,6 +124,13 @@ class PluginManager:
         if not plugin.entrypoint:
             return {"status": "error", "message": f"Plugin has no main.py entrypoint: {plugin_name}"}
 
+        # R3: a plugin is code that runs on this PC — approval for this exact plugin every time.
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import enforce
+        gate = enforce("plugin.run", ActionClass.MATERIAL_CHANGE, payload={"plugin": plugin.name},
+                       approval_action="run_plugin")
+        if not gate.allowed:
+            return {**gate.refusal(), "plugin": plugin.name}
         cmd = [sys.executable, plugin.entrypoint]
         if args:
             cmd.extend(args)

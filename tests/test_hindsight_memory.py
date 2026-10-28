@@ -60,9 +60,9 @@ def test_offline_retains_queue_and_flush_later(tmp_path):
     assert mem.recall("installers")[0].text == "never move installers"
 
 
-def test_unconfigured_memory_is_safe(tmp_path, monkeypatch):
+def test_cloud_opt_in_without_a_key_is_safe(tmp_path, monkeypatch):
     monkeypatch.delenv("HINDSIGHT_API_KEY", raising=False)
-    monkeypatch.delenv("HINDSIGHT_BASE_URL", raising=False)
+    monkeypatch.setenv("HINDSIGHT_BASE_URL", "https://api.hindsight.vectorize.io")
     mem = HindsightMemory(bank_id="b", state_dir=tmp_path)
     assert not mem.available
     assert "HINDSIGHT_API_KEY" in mem.status_line()

@@ -43,30 +43,43 @@ class AutoUpdate:
             "https://www.reddit.com/r/programming/.rss",
         ]
 
+    def _git(self, *args: str, timeout: int = 15) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *args], capture_output=True, text=True, timeout=timeout, cwd=self.project_dir)
+
     def check_git_updates(self) -> Dict[str, Any]:
-        """Check if the git repo has remote updates."""
+        """Compare this copy of TOM with the remote: commits behind/ahead, what's new, local changes.
+        Only fetches (updates the remote-tracking refs); never pulls or changes files. The old check
+        counted lines of `git fetch --dry-run` output and replied "Count: 0" (live check 2026-10-27)."""
         try:
-            result = subprocess.run(
-                ["git", "remote", "-v"],
-                capture_output=True, text=True, timeout=5, cwd=self.project_dir,
-            )
-            if result.returncode != 0:
-                return {"status": "no_remote", "message": "No git remote configured"}
-            remote = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
-            result = subprocess.run(
-                ["git", "fetch", "--dry-run"],
-                capture_output=True, text=True, timeout=10, cwd=self.project_dir,
-            )
-            if result.stderr.strip():
-                updates = result.stderr.strip()
-                count = updates.count("\n")
-                return {
-                    "status": "updates_available" if count > 0 else "up_to_date",
-                    "count": count,
-                    "details": updates[:500],
-                    "remote": remote[:100],
-                }
-            return {"status": "up_to_date", "count": 0}
+            remotes = self._git("remote").stdout.split()
+            if not remotes:
+                return {"status": "no_remote", "message": "This copy of TOM has no git remote, so there is nothing "
+                                                          "to check updates against."}
+            branch = self._git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+            fetched = self._git("fetch", "--quiet", remotes[0], timeout=60)
+            upstream = self._git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+            target = upstream.stdout.strip() if upstream.returncode == 0 else f"{remotes[0]}/main"
+            if self._git("rev-parse", "--verify", "--quiet", target).returncode != 0:
+                return {"status": "error", "message": f"Couldn't find {target} to compare with."}
+            behind = int(self._git("rev-list", "--count", f"HEAD..{target}").stdout.strip() or 0)
+            ahead = int(self._git("rev-list", "--count", f"{target}..HEAD").stdout.strip() or 0)
+            incoming = self._git("log", "--format=%h %s (%ar)", "-10", f"HEAD..{target}").stdout.strip()
+            dirty = len([ln for ln in self._git("status", "--porcelain").stdout.splitlines() if ln.strip()])
+            lines = [f"Branch {branch}, compared with {target}"
+                     + ("" if fetched.returncode == 0 else " (couldn't reach the remote — using the last fetch)") + ":"]
+            if behind:
+                lines.append(f"{behind} new update(s) available:")
+                lines += [f"  - {ln}" for ln in incoming.splitlines()]
+                lines.append("Say \"pull updates\" to install them (you'll be asked first).")
+            else:
+                lines.append("TOM is up to date — no new commits on the remote.")
+            if ahead:
+                lines.append(f"This copy has {ahead} commit(s) not on {target} yet.")
+            if dirty:
+                lines.append(f"{dirty} file(s) have uncommitted changes here.")
+            return {"status": "updates_available" if behind else "up_to_date", "count": behind, "behind": behind,
+                    "ahead": ahead, "uncommitted": dirty, "branch": branch, "target": target,
+                    "message": "\n".join(lines)}
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -276,3 +289,12 @@ class AutoUpdate:
             "knowledge_dir": self._update_knowledge_dir,
             "background_active": len(history) > 0,
         }
+
+
+# R3: pulling code into TOM, upgrading its packages or a full update change TOM itself — privileged,
+# approval every time, and never available to autonomous runs (tom_core.policy.engine rule 4).
+from tom_core.policy.engine import ActionClass as _ActionClass  # noqa: E402
+from tom_core.tools.guard import guard_methods as _guard_methods  # noqa: E402
+
+_guard_methods(AutoUpdate, ("pull_updates", "update_pip_packages", "full_update"), "autoupdate",
+               _ActionClass.PRIVILEGED, approval_action="auto_update")

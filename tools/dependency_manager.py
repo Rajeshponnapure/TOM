@@ -908,17 +908,28 @@ class DependencyManager:
                 else:
                     report_lines.append(check_result["stdout"])
 
+            # The verdict comes from `pip check`'s exit code. It used to be a word search of the report, and
+            # the success line "No conflicts detected" contains "conflict" — so every clean environment was
+            # reported as "Has conflicts: yes" (live check 2026-10-27).
+            check = self._run_cmd(pip_cmd + ["check"])
+            broken = [ln.strip() for ln in (check.get("stdout") or "").splitlines()
+                      if ln.strip() and not ln.lower().startswith("no broken requirements")]
+            has_conflicts = not check["success"] and bool(broken)
+            if packages:
+                wanted = {p.lower() for p in packages}
+                broken = [ln for ln in broken if ln.split()[0].lower() in wanted] or broken
             report = "\n".join(report_lines)
-            has_conflicts = "conflict" in report.lower() or "incompatible" in report.lower() or "missing" in report.lower()
-
+            message = (f"{len(broken)} broken requirement(s):\n" + "\n".join(f"  - {b}" for b in broken[:30])
+                       if has_conflicts else "No broken requirements — pip check passed for every installed package.")
             return {
                 "status": "success",
                 "result": {
                     "has_conflicts": has_conflicts,
+                    "broken": broken,
                     "report": report,
                     "packages_checked": packages or "all",
                 },
-                "message": "Conflicts detected" if has_conflicts else "No conflicts detected",
+                "message": message,
             }
 
         except Exception as e:
@@ -2013,6 +2024,16 @@ def main():
     else:
         parser.print_help()
 
+
+
+# R3 (tool-permissions.md §2): installing, removing or upgrading packages and creating or migrating
+# environments are material changes — each one now needs the user's approval through the policy engine.
+from tom_core.policy.engine import ActionClass as _ActionClass  # noqa: E402
+from tom_core.tools.guard import guard_methods as _guard_methods  # noqa: E402
+
+_guard_methods(DependencyManager, ("create_venv", "install_package", "uninstall_package", "update_package",
+                                   "migrate_to_python311"), "deps", _ActionClass.MATERIAL_CHANGE,
+               approval_action="dependency_change")
 
 if __name__ == "__main__":
     main()

@@ -23,10 +23,11 @@ def test_universal_gating_conservative():
     assert not s("task", "organize my files now please", enabled=False)  # kill switch
 
 def test_crash_guard_writes_reports(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+    # Crash reports go to <state root>/tom_logs, not the current directory (R0 defect D5).
+    monkeypatch.setenv("TOM_STATE_ROOT", str(tmp_path))
     import importlib
     import tools.crash_guard as cg
-    importlib.reload(cg)  # rebind _LOG_DIR to tmp cwd
+    importlib.reload(cg)  # rebind _LOG_DIR to the temp state root
     p = cg.write_crash("unit", RuntimeError, RuntimeError("x"), None)
     assert p and os.path.isfile(p)
     cg.install("unit")

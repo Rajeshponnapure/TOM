@@ -7,6 +7,14 @@ ROUTE = {
     "ml regression linear X=[[1],[2]] y=[2,4]": "ml",
     "train a regression model on my dataset": "ml",
     "generate esp32 dht11 mqtt firmware code": "iot",
+    # live hardware over USB-serial
+    "detect my iot devices": "iot",
+    "list connected boards": "iot",
+    "show my serial ports": "iot",
+    "scan i2c on COM5": "iot",
+    "flash blink.ino to my esp32 on COM5": "iot",
+    "read serial from the board": "iot",
+    "what is connected to my microcontroller": "iot",
     "create a verilog counter with width=16": "vlsi",
     "move mouse to 500 300": "hardware",
     "scaffold a pygame platformer called myquest": "gamedev",
@@ -40,6 +48,8 @@ NO_ROUTE = [
     "search the web for laptops", "whatsapp mom saying hi",
     "write code for a web scraper", "analyze the data in sales.csv",
     "create a website for my bakery", "make a powerpoint about space",
+    "write a report about iot trends", "the serial number is on the box",
+    "read me a serial story", "i love the new serial on netflix",
 ]
 
 def test_routes_detected():

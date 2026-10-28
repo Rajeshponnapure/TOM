@@ -24,9 +24,11 @@ Design rules
     instantly, even offline.
 
 Configuration (.env)
-  HINDSIGHT_API_KEY    — Hindsight Cloud key (enables Cloud by default)
-  HINDSIGHT_BASE_URL   — default https://api.hindsight.vectorize.io
-                         (use http://localhost:8888 for a self-hosted server)
+  HINDSIGHT_API_KEY    — Hindsight Cloud key (used only once HINDSIGHT_BASE_URL opts in to Cloud)
+  HINDSIGHT_BASE_URL   — unset (default): on-machine SQLite store, tom_brain/hindsight/memory.sqlite3,
+                         seeded once from the journal (tom_core/memory/local_store.py).
+                         https://api.hindsight.vectorize.io opts in to Hindsight Cloud (ADR-005);
+                         http://localhost:8888 uses a self-hosted server.
   HINDSIGHT_BANK_ID    — optional; default "tom-<stable machine id>"
   HINDSIGHT_ENABLED    — set to 0 to switch the layer off
 """
@@ -48,12 +50,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tools.project_paths import PROJECT_ROOT
+from tools.project_paths import project_path
 
 logger = logging.getLogger(__name__)
 
 CLOUD_URL = "https://api.hindsight.vectorize.io"
-STATE_DIR = Path(PROJECT_ROOT) / "tom_brain" / "hindsight"
+LOCAL_URL = "local"            # sentinel base_url: on-machine SQLite store (tom_core.memory.local_store)
+STATE_DIR = project_path("tom_brain", "hindsight")     # follows TOM_STATE_ROOT
+LOCAL_DB_NAME = "memory.sqlite3"   # lives in STATE_DIR beside the journal it is seeded from
 JOURNAL_FILE = STATE_DIR / "journal.jsonl"
 PENDING_FILE = STATE_DIR / "pending.jsonl"
 BANK_FILE = STATE_DIR / "bank_id.txt"
@@ -96,6 +100,8 @@ class MemoryHit:
     tags: List[str] = field(default_factory=list)
     id: str = ""
     when: str = ""
+    confidence: Optional[float] = None
+    source: str = ""
 
     @property
     def is_preference(self) -> bool:
@@ -103,7 +109,7 @@ class MemoryHit:
 
     def to_dict(self) -> Dict[str, Any]:
         return {"text": self.text, "type": self.type, "tags": list(self.tags),
-                "id": self.id, "when": self.when}
+                "id": self.id, "when": self.when, "confidence": self.confidence, "source": self.source}
 
 
 def describe_error(exc: BaseException) -> str:
@@ -147,7 +153,8 @@ class HindsightMemory:
         self.state_dir = Path(state_dir or os.environ.get("TOM_MEMORY_STATE_DIR") or STATE_DIR)
         self.journal_file = self.state_dir / JOURNAL_FILE.name
         self.pending_file = self.state_dir / PENDING_FILE.name
-        self.base_url = (os.environ.get("HINDSIGHT_BASE_URL") or CLOUD_URL).rstrip("/")
+        # ADR-005: memory stays on this machine unless a Hindsight server is chosen explicitly.
+        self.base_url = (os.environ.get("HINDSIGHT_BASE_URL") or "").strip().rstrip("/") or LOCAL_URL
         self.api_key = os.environ.get("HINDSIGHT_API_KEY", "").strip() or None
         self.bank_id = bank_id or os.environ.get("HINDSIGHT_BANK_ID", "").strip() or _default_bank_id()
         self.timeout = float(timeout or os.environ.get("HINDSIGHT_TIMEOUT_SECONDS", "12"))
@@ -172,7 +179,18 @@ class HindsightMemory:
             threading.Thread(target=self.flush_pending, name="hindsight-flush", daemon=True).start()
 
     # ── setup ────────────────────────────────────────────────────────────
+    @property
+    def is_local(self) -> bool:
+        return self.base_url == LOCAL_URL
+
     def _build_client(self) -> Any:
+        if self.is_local:
+            try:
+                from tom_core.memory.local_store import LocalMemoryClient
+                return LocalMemoryClient(self.state_dir / LOCAL_DB_NAME, seed_journal=self.journal_file)
+            except Exception as exc:
+                self.last_error = f"Local memory store unavailable: {exc}"
+                return None
         is_cloud = self.base_url.startswith(CLOUD_URL)
         if is_cloud and not self.api_key:
             self.last_error = ("HINDSIGHT_API_KEY is not set. Add it to .env "
@@ -453,7 +471,8 @@ class HindsightMemory:
         when = get("mentioned_at") or get("occurred_start") or ""
         return MemoryHit(text=str(get("text") or "").strip(), type=str(get("type") or ""),
                          tags=list(get("tags") or []), id=str(get("id") or ""),
-                         when=str(when)[:10] if when else "")
+                         when=str(when)[:10] if when else "",
+                         confidence=get("confidence"), source=str(get("source") or ""))
 
     # ── reflect ──────────────────────────────────────────────────────────
     def reflect(self, query: str, *, context: str = "", budget: str = "low",
@@ -492,6 +511,23 @@ class HindsightMemory:
             self.last_error = f"list_memories: {describe_error(exc)}"
             return []
 
+    # ── user controls (R5, PRD §9.2: inspect, correct, delete) ───────────
+    def _local(self, op: str):
+        fn = getattr(self.client, op, None) if self.available else None
+        if fn is None:
+            raise RuntimeError("Inspecting, correcting and deleting memories works with the on-machine store "
+                               "(HINDSIGHT_BASE_URL unset); the cloud store has its own dashboard.")
+        return fn
+
+    def inspect_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        return self._local("inspect_memory")(memory_id)
+
+    def correct_memory(self, memory_id: str, new_text: str) -> Optional[str]:
+        return self._local("correct_memory")(memory_id, new_text)
+
+    def delete_memory(self, memory_id: str) -> bool:
+        return bool(self._local("delete_memory")(memory_id))
+
     def get_total_count(self) -> int:
         """Get total number of memories stored in Hindsight bank."""
         if not self.available:
@@ -527,7 +563,8 @@ class HindsightMemory:
             return "Long-term memory: OFF (HINDSIGHT_ENABLED=0)"
         if not self.available:
             return f"Long-term memory: OFFLINE — {self.last_error or 'not configured'}"
-        where = "Hindsight Cloud" if self.base_url.startswith(CLOUD_URL) else f"Hindsight @ {self.base_url}"
+        where = ("local store on this machine" if self.is_local else
+                 "Hindsight Cloud" if self.base_url.startswith(CLOUD_URL) else f"Hindsight @ {self.base_url}")
         pending = self.pending_count()
         if pending:
             # "ONLINE" alone hid the fact that nothing was being stored.

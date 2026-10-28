@@ -1,18 +1,51 @@
 """
 Voice I/O for TOM.
-Input:  speech_recognition (Google/Whisper) + pyaudio
-Output: edge-tts (Microsoft Neural) with pyttsx3 fallback
+Input:  pyaudio microphone capture (tom_core.voice.capture: records until the user stops talking
+        or presses Talk again) → ASR adapter (local faster-whisper by default; Google only when
+        chosen explicitly)
+Output: TTS adapter (local Windows voices by default, female US English preferred;
+        edge-tts online neural voices only when chosen explicitly) → pyttsx3 fallback
 Mode:   Continuous voice conversation with NLP context
+Engines live in tom_core.voice; see docs/migration/decisions.md ADR-005 for the cloud opt-in rule.
 """
 import asyncio
 import json
 import math
 import os
+import re
 import subprocess
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from typing import Any, Callable, Dict, Optional
+
+
+def _wav_16k(pcm: bytes, sample_rate: int, sample_width: int) -> bytes:
+    """Microphone PCM → the 16 kHz 16-bit mono WAV every ASR adapter takes."""
+    import speech_recognition as sr
+    return sr.AudioData(pcm, sample_rate, sample_width).get_wav_data(convert_rate=16000, convert_width=2)
+
+
+def wake_word() -> str:
+    """The configured wake word ("hey tom"), or "" when hands-free mode needs none (the default)."""
+    return re.sub(r"\s+", " ", os.environ.get("TOM_WAKE_WORD", "")).strip().lower()
+
+
+def strip_wake_word(heard: str, wake: str):
+    """The request after the wake word, "" for the wake word alone, None when it was not said.
+    Tolerates punctuation and ASR spellings like "Hey, Tom." / "hey thom"."""
+    words = re.findall(r"[a-z']+", (heard or "").lower())
+    want = wake.split()
+    fuzzy = {"tom": {"tom", "thom", "tum", "tomm", "tome"}}
+    if len(words) < len(want):
+        return None
+    for w, target in zip(words, want):
+        if w != target and w not in fuzzy.get(target, set()):
+            return None
+    # cut the original text after the wake word's last occurrence of its final word
+    m = re.search(r"\b" + r"\W+".join(r"\w+" for _ in want) + r"\b[\s,.!?:;-]*", heard, re.I)
+    return heard[m.end():].strip() if m else ""
 
 
 class VoiceTools:
@@ -20,17 +53,23 @@ class VoiceTools:
         self.input_enabled = os.environ.get("VOICE_INPUT_ENABLED", "false").lower() == "true"
         self.output_enabled = os.environ.get("VOICE_OUTPUT_ENABLED", "false").lower() == "true"
         self.energy_threshold = int(os.environ.get("VOICE_ENERGY_THRESHOLD", "800"))
-        self.pause_threshold = float(os.environ.get("VOICE_PAUSE_THRESHOLD", "0.8"))
         self.listen_timeout = int(os.environ.get("VOICE_LISTEN_TIMEOUT", "7"))
-        self.phrase_time_limit = int(os.environ.get("VOICE_PHRASE_TIME_LIMIT", "15"))
-        self.calibration_duration = float(os.environ.get("VOICE_CALIBRATION_DURATION", "0.5"))
 
-        self.voice_name = os.environ.get("TOM_VOICE", "en-US-GuyNeural")
-        self.voice_rate = os.environ.get("TOM_VOICE_RATE", "+0%")
-        self.recognition_engine = os.environ.get("VOICE_RECOGNITION_ENGINE", "google")
+        from tom_core.voice import load_config
+        self.config = load_config()
+        # How a request ends is set by tom_core.voice.capture (TOM_VOICE_END_SILENCE /
+        # TOM_VOICE_MAX_SECONDS); the old 0.8 s pause / 15 s limit cut people off mid-sentence.
+        self._noise_floor: Optional[float] = None     # room noise, carried between presses
+        self._listen_stop = threading.Event()          # Talk pressed again / Stop pressed
+        self._listen_cancelled = False                 # Stop: throw the audio away
+        self.voice_name = self.config.edge_voice
+        self.voice_rate = self.config.edge_rate
+        self.recognition_engine = self.config.asr_engine      # "local" | "google"
 
         self._recognizer = None
-        self._tts_engine = None
+        self._asr = None              # tom_core.voice.asr.ASREngine, created on first use
+        self._tts_engine = None       # pyttsx3 (SAPI) — local last-resort voice
+        self._tts_adapter = None      # tom_core.voice.tts.TTSEngine (Windows voices / edge)
         self._edge_tts_ok = False
         self._input_error = ""
         self._output_error = ""
@@ -64,14 +103,8 @@ class VoiceTools:
                 self.input_enabled = False
                 self._input_error = "No microphone devices detected."
                 return
-            recognizer = sr.Recognizer()
-            recognizer.energy_threshold = self.energy_threshold
-            recognizer.dynamic_energy_threshold = True
-            recognizer.pause_threshold = self.pause_threshold
-            recognizer.non_speaking_duration = 0.4
-            recognizer.dynamic_energy_adjustment_damping = 0.15
-            recognizer.dynamic_energy_ratio = 1.5
-            self._recognizer = recognizer
+            # Marks input as ready; listening itself is done by tom_core.voice.capture.
+            self._recognizer = sr.Recognizer()
         except Exception as exc:
             self.input_enabled = False
             msg = str(exc)
@@ -87,33 +120,85 @@ class VoiceTools:
     def _setup_output(self):
         if not self.output_enabled:
             return
-        try:
-            import edge_tts
-            self._edge_tts_ok = True
-        except ImportError:
-            self._edge_tts_ok = False
+        from tom_core.voice.tts import make_tts
+        self._tts_adapter = make_tts(self.config)
+        self._edge_tts_ok = bool(self._tts_adapter and self._tts_adapter.name == "edge")
+        if self._tts_adapter is None:
+            self._ensure_sapi()
 
-        if not self._edge_tts_ok:
-            try:
-                import pyttsx3
-                self._tts_engine = pyttsx3.init()
-                rate = int(os.environ.get("VOICE_RATE", "175"))
-                volume = float(os.environ.get("VOICE_VOLUME", "1.0"))
-                self._tts_engine.setProperty("rate", rate)
-                self._tts_engine.setProperty("volume", volume)
-            except Exception as exc:
+    def _ensure_sapi(self) -> bool:
+        """pyttsx3/SAPI: the local voice of last resort, so a TTS failure is never silence."""
+        if self._tts_engine is not None:
+            return True
+        try:
+            import pyttsx3
+            self._tts_engine = pyttsx3.init()
+            # SAPI words per minute; 200 ≈ the Windows voice's TOM_TTS_RATE 1.15 (SAPI's own default is ~175)
+            rate = int(os.environ.get("VOICE_RATE", "200"))
+            volume = float(os.environ.get("VOICE_VOLUME", "1.0"))
+            self._tts_engine.setProperty("rate", rate)
+            self._tts_engine.setProperty("volume", volume)
+            self._choose_sapi_voice()
+            return True
+        except Exception as exc:
+            if self._tts_adapter is None:
                 self.output_enabled = False
-                self._output_error = str(exc)
+            self._output_error = str(exc)
+            return False
+
+    def _choose_sapi_voice(self) -> None:
+        """Same voice rules as the Windows adapter (gender, then US English), instead of SAPI's default."""
+        try:
+            from tom_core.voice.tts import choose_voice
+            voices = list(self._tts_engine.getProperty("voices") or [])
+            idx = choose_voice([(v.name, str((v.languages or [""])[0]), v.gender or "") for v in voices],
+                               self.config.tts_voice_preference, self.config.tts_gender)
+            if idx is not None:
+                self._tts_engine.setProperty("voice", voices[idx].id)
+        except Exception:
+            pass  # keep SAPI's default voice rather than no voice
+
+    def _asr_engine(self):
+        if self._asr is None:
+            from tom_core.voice.asr import make_asr
+            self._asr = make_asr(self.config)
+        return self._asr
+
+    def warm_up_recognizer(self) -> None:
+        """Load the speech model in the background so the first utterance isn't slowed by it."""
+        asr = self._asr_engine()
+        if hasattr(asr, "warm_up"):
+            def _run():
+                try:
+                    asr.warm_up()
+                except Exception as exc:
+                    self._input_error = str(exc)
+            threading.Thread(target=_run, name="tom-asr-warmup", daemon=True).start()
+
+    def release_recognizer(self) -> None:
+        """Unload the speech model (frees its VRAM/RAM, PRD RRM-006); it reloads on next use."""
+        asr, self._asr = self._asr, None
+        if asr is not None:
+            try:
+                asr.close()
+            except Exception:
+                pass
 
     # ── Status ───────────────────────────────────────────────────────────
 
     def status(self) -> Dict[str, Any]:
+        adapter = self._tts_adapter
+        voice_engine = adapter.name if adapter else ("pyttsx3" if self._tts_engine else "none")
+        voice_name = (getattr(adapter, "voice", "") or ("auto (US English preferred)" if voice_engine == "windows" else "")
+                      ) if adapter else "system"
         return {
             "voice_input_enabled": self.input_enabled,
             "voice_output_enabled": self.output_enabled,
-            "voice_engine": "edge-tts" if self._edge_tts_ok else ("pyttsx3" if self._tts_engine else "none"),
-            "voice_name": self.voice_name if self._edge_tts_ok else "system",
+            "voice_engine": voice_engine,
+            "voice_name": voice_name,
             "recognition_engine": self.recognition_engine,
+            "asr_cloud": self.config.asr_is_cloud,
+            "tts_cloud": self.config.tts_is_cloud,
             "voice_input_error": self._input_error,
             "voice_output_error": self._output_error,
             "conversation_active": self._conv_active,
@@ -124,43 +209,47 @@ class VoiceTools:
     def speak(self, text: str, timeout_seconds: int = 30) -> Dict[str, Any]:
         if not self.output_enabled:
             return {"status": "skipped", "message": "Voice output disabled"}
+        from tom_core.voice.tts import speech_text
+        text = speech_text(text)
+        if not text:
+            return {"status": "skipped", "message": "Nothing to say"}
         self._speech_stop.clear()
         self._speaking = True
         try:
-            if self._edge_tts_ok:
-                return self._speak_edge_tts(text, timeout_seconds)
+            if self._tts_adapter is not None:
+                result = self._speak_adapter(text, timeout_seconds)
+                if result["status"] != "error":
+                    return result
+                # The preferred engine failed: fall back to the local SAPI voice, never silence.
+                self._output_error = result["message"]
+                if not self._ensure_sapi():
+                    return result
             return self._speak_pyttsx3(text, timeout_seconds)
         finally:
             self._speaking = False
 
-    def _speak_edge_tts(self, text: str, timeout_seconds: int) -> Dict[str, Any]:
-        result = {"status": "success", "message": "Spoken (edge-tts)"}
+    def _speak_adapter(self, text: str, timeout_seconds: int) -> Dict[str, Any]:
+        adapter = self._tts_adapter
+        result = {"status": "success", "message": f"Spoken ({adapter.name})"}
 
         def _run():
-            tmp = ""
+            clip = None
             try:
-                import edge_tts
-                # FIX: unique file per utterance — a fixed name gets locked by
-                # the player and every later save fails on Windows.
-                self._utt_counter = getattr(self, "_utt_counter", 0) + 1
-                tmp = os.path.join(tempfile.gettempdir(),
-                                   f"tom_voice_{os.getpid()}_{self._utt_counter}.mp3")
-                loop = asyncio.new_event_loop()
-                communicate = edge_tts.Communicate(text[:2000], self.voice_name, rate=self.voice_rate)
-                loop.run_until_complete(communicate.save(tmp))
-                loop.close()
+                clip = adapter.synthesize(text[:2000])
+                result["voice"] = clip.voice
                 if self._speech_stop.is_set():
                     result.update({"status": "stopped", "message": "Voice playback stopped."})
                     return
-                self._play_audio(tmp)
+                self._play_audio(clip.path)
+                if self._speech_stop.is_set():
+                    result.update({"status": "stopped", "message": "Voice playback stopped."})
             except Exception as exc:
                 result["status"] = "error"
-                result["message"] = f"edge-tts failed: {exc}"
+                result["message"] = f"{adapter.name} voice failed: {exc}"
             finally:
-                # best-effort cleanup of this and older utterance files
                 try:
-                    if tmp and os.path.isfile(tmp):
-                        os.remove(tmp)
+                    if clip and os.path.isfile(clip.path):
+                        os.remove(clip.path)
                 except OSError:
                     pass
 
@@ -168,7 +257,9 @@ class VoiceTools:
         worker.start()
         worker.join(timeout=max(5, timeout_seconds))
         if worker.is_alive():
-            return {"status": "error", "message": f"Voice output timed out after {timeout_seconds}s"}
+            # Not "error": the clip may still be playing, so no SAPI fallback (no double speech).
+            self.stop_speaking()
+            return {"status": "timeout", "message": f"Voice output timed out after {timeout_seconds}s"}
         return result
 
     def speak_async(self, text: str, timeout_seconds: int = 30) -> threading.Thread:
@@ -307,62 +398,66 @@ class VoiceTools:
             time.sleep(0.3)
             return {"status": "skipped", "message": "Waiting for speech to finish", "text": ""}
 
+        self._listen_stop.clear()
+        self._listen_cancelled = False
         try:
-            import speech_recognition as sr
+            from tom_core.voice.capture import CaptureSettings, record
 
-            mic_kwargs = {}
-            mic_index = os.environ.get("VOICE_MIC_INDEX", "").strip()
-            if mic_index.isdigit():
-                mic_kwargs["device_index"] = int(mic_index)
-            with sr.Microphone(**mic_kwargs) as source:
-                # FIX: calibrate ONCE per conversation. Re-calibrating on every
-                # listen (with dynamic adjustment on top) ratcheted the energy
-                # threshold up until real speech was treated as background noise.
-                if not getattr(self, "_calibrated", False):
-                    self._recognizer.adjust_for_ambient_noise(
-                        source, duration=max(0.3, self.calibration_duration))
-                    self._calibrated = True
+            settings = CaptureSettings(start_timeout=float(timeout),
+                                       end_silence=self.config.listen_end_silence,
+                                       max_seconds=self.config.listen_max_seconds)
+            with self._microphone() as (read, rate, width):
                 if self.on_state_change:
                     self.on_state_change("listening", "")
-                if self.on_audio_level:
-                    self.on_audio_level(0.3)
-
-                audio = self._recognizer.listen(
-                    source, timeout=timeout, phrase_time_limit=self.phrase_time_limit)
-
-            # Compute audio levels from captured data for the UI meter
+                rec = record(read, rate, sample_width=width, settings=settings, stop=self._listen_stop,
+                             on_level=self.on_audio_level, noise_floor=self._noise_floor)
+            self._noise_floor = rec.noise_floor
             if self.on_audio_level:
-                try:
-                    raw = audio.get_raw_data(convert_rate=16000, convert_width=2)
-                    chunk_size = 3200
-                    for i in range(0, min(len(raw), chunk_size * 20), chunk_size):
-                        level = self._compute_rms(raw[i:i + chunk_size])
-                        self.on_audio_level(level)
-                except Exception:
-                    pass
                 self.on_audio_level(0.0)
+            if self._listen_cancelled:
+                return {"status": "cancelled", "message": "Listening cancelled.", "text": ""}
+            if not rec.pcm:
+                return {"status": "timeout", "message": "No speech detected.", "text": ""}
 
-            if self.recognition_engine == "google":
-                text = self._recognizer.recognize_google(audio)
-            else:
-                text = self._recognizer.recognize_whisper(audio)
-
-            return {"status": "success", "message": "Voice recognized", "text": text.strip()}
+            if self.on_state_change:
+                self.on_state_change("transcribing", "")
+            heard = self._asr_engine().transcribe_wav(_wav_16k(rec.pcm, rec.sample_rate, rec.sample_width))
+            if not heard.text:
+                return {"status": "error", "message": "Could not understand audio.", "text": ""}
+            return {"status": "success", "message": "Voice recognized", "text": heard.text,
+                    "engine": heard.engine, "asr_seconds": heard.seconds,
+                    "audio_seconds": round(rec.seconds, 2), "ended_by": rec.reason}
 
         except Exception as exc:
             if self.on_audio_level:
                 self.on_audio_level(0.0)
-            import speech_recognition as sr
-            if isinstance(exc, sr.WaitTimeoutError):
-                return {"status": "timeout", "message": "No speech detected.", "text": ""}
-            if isinstance(exc, sr.UnknownValueError):
-                return {"status": "error", "message": "Could not understand audio.", "text": ""}
-            if isinstance(exc, sr.RequestError):
-                return {"status": "error", "message": f"Speech service error: {exc}", "text": ""}
+            from tom_core.voice.asr import ASRError
+            if isinstance(exc, ASRError):
+                return {"status": "error", "message": str(exc), "text": ""}
             err = str(exc)
-            if "PortAudio" in err or "Pa_" in err or "No Default" in err:
+            if "PortAudio" in err or "Pa_" in err or "No Default" in err or "Invalid input device" in err:
                 return {"status": "error", "message": "Microphone not available.", "text": ""}
             return {"status": "error", "message": f"Voice input failed: {err}", "text": ""}
+
+    @contextmanager
+    def _microphone(self):
+        """(read, sample_rate, sample_width) of the configured microphone (VOICE_MIC_INDEX or default)."""
+        import speech_recognition as sr
+        mic_kwargs = {}
+        mic_index = os.environ.get("VOICE_MIC_INDEX", "").strip()
+        if mic_index.isdigit():
+            mic_kwargs["device_index"] = int(mic_index)
+        with sr.Microphone(**mic_kwargs) as source:
+            yield (lambda: source.stream.read(source.CHUNK)), source.SAMPLE_RATE, source.SAMPLE_WIDTH
+
+    def finish_listening(self) -> None:
+        """End the current request now and recognise what was said (Talk pressed again)."""
+        self._listen_stop.set()
+
+    def cancel_listening(self) -> None:
+        """Stop listening and throw the audio away (Stop pressed)."""
+        self._listen_cancelled = True
+        self._listen_stop.set()
 
     def listen_once(self) -> Dict[str, Any]:
         return self.listen_neural(timeout=self.listen_timeout)
@@ -391,7 +486,8 @@ class VoiceTools:
 
         self._conv_stop.clear()
         self._conv_active = True
-        self._calibrated = False  # fresh ambient calibration per session
+        self._noise_floor = None  # fresh noise-floor estimate per session
+        self.warm_up_recognizer()  # model loads while the greeting plays
 
         def _notify(state, text=""):
             if on_status:
@@ -404,7 +500,7 @@ class VoiceTools:
             import speech_recognition as sr
 
             _notify("ready", "Voice mode active. I'm listening...")
-            greeting = "Hey! I'm here. What's up?"
+            greeting = "Hello, I'm listening. How can I help?"
             _notify("speaking", f"TOM: {greeting}")
             _greet_res = self.speak(greeting, timeout_seconds=10)
             if _greet_res.get("status") not in ("success", "skipped"):
@@ -440,11 +536,24 @@ class VoiceTools:
 
                     lower = heard.lower().strip()
 
+                    # Optional wake word (PRD C02 / FR-002: opt-in). With TOM_WAKE_WORD set, hands-free mode
+                    # ignores speech that does not start with it, so background talk is never acted on.
+                    wake = wake_word()
+                    if wake:
+                        stripped = strip_wake_word(heard, wake)
+                        if stripped is None:
+                            _notify("listening", f"(ignored — say \"{wake}\" first)")
+                            continue
+                        heard, lower = stripped, stripped.lower()
+                        if not heard:
+                            _notify("listening", "Yes?")
+                            continue
+
                     # Stop commands
                     if lower in ("stop", "exit", "quit", "stop listening", "end conversation",
                                  "goodbye", "bye", "stop talking", "shut up", "that's all",
                                  "thanks bye", "ok bye", "that's all for now"):
-                        farewell = "Alright, talk to you later!"
+                        farewell = "Okay. I'll be here whenever you need me."
                         _notify("speaking", f"TOM: {farewell}")
                         self.speak(farewell, timeout_seconds=8)
                         _notify("idle", "Voice conversation ended.")
@@ -488,6 +597,7 @@ class VoiceTools:
                     time.sleep(0.5)
 
             self._conv_active = False
+            self.release_recognizer()
 
         self._conv_thread = threading.Thread(target=_loop, daemon=True, name="tom-voice-conv")
         self._conv_thread.start()
@@ -499,12 +609,14 @@ class VoiceTools:
 
     def stop_conversation_mode(self) -> Dict[str, Any]:
         self.stop_speaking()
+        self.cancel_listening()
         if not self._conv_active:
             return {"status": "not_active", "message": "Conversation mode is not running."}
         self._conv_stop.set()
         if self._conv_thread and self._conv_thread.is_alive():
             self._conv_thread.join(timeout=5)
         self._conv_active = False
+        self.release_recognizer()
         return {"status": "stopped", "message": "Conversation mode stopped."}
 
     @property
@@ -561,14 +673,33 @@ class VoiceTools:
             pygame.mixer.quit()
         except Exception as exc:
             report["pygame_audio"] = f"FAILED: {exc} (fallback players will be used)"
-        # network for STT (google) and TTS (edge)
-        for label, host in (("google_stt_reachable", "speech.googleapis.com"),
-                            ("edge_tts_reachable", "speech.platform.bing.com")):
+        # network — only for the cloud engines actually selected (ADR-005: they are opt-in)
+        cloud_checks = []
+        if self.config.asr_is_cloud:
+            cloud_checks.append(("google_stt_reachable", "speech.googleapis.com"))
+        if self.config.tts_is_cloud:
+            cloud_checks.append(("edge_tts_reachable", "speech.platform.bing.com"))
+        for label, host in cloud_checks:
             try:
                 socket.create_connection((host, 443), timeout=3).close()
                 report[label] = True
             except OSError:
                 report[label] = False
+        # local engines
+        report["asr_engine"] = self.config.asr_engine
+        report["tts_engine"] = self.config.tts_engine
+        if not self.config.asr_is_cloud:
+            report["asr_model"] = self.config.asr_model
+            report["asr_model_found"] = bool(os.path.isdir(self.config.asr_model) or self.config.model_dir())
+        if self._tts_adapter is not None and self._tts_adapter.name == "windows":
+            try:
+                voices = self._tts_adapter.voices()
+                report["windows_voices"] = [f"{v['name']} ({v['language']})" for v in voices]
+                report["us_english_female_voice"] = any(
+                    v["language"].lower() == "en-us" and v.get("gender") == "female" for v in voices)
+            except Exception as exc:
+                report["windows_voices"] = []
+                report["windows_voice_error"] = str(exc)
         report["input_error"] = self._input_error
         report["output_error"] = self._output_error
         # verdicts
@@ -576,12 +707,20 @@ class VoiceTools:
         if report["mic_count"] == 0:
             problems.append("No microphone detected — check Windows Settings > Privacy "
                             "& security > Microphone (allow desktop apps), and that a mic is plugged in/enabled.")
-        if not report.get("google_stt_reachable"):
-            problems.append("Google speech service unreachable — voice RECOGNITION needs internet; "
-                            "check connection/firewall, or set VOICE_RECOGNITION_ENGINE=whisper (offline, needs openai-whisper).")
-        if not report.get("edge_tts_reachable"):
-            problems.append("Edge-TTS service unreachable — TOM's neural VOICE needs internet; "
-                            "pyttsx3 offline fallback will be used if installed.")
+        if report.get("asr_model_found") is False:
+            problems.append(f"Local speech model '{self.config.asr_model}' not found in "
+                            f"{', '.join(self.config.asr_model_dirs)} — set TOM_ASR_MODEL_DIR to a faster-whisper "
+                            "cache that has it (TOM never downloads models).")
+        if report.get("google_stt_reachable") is False:
+            problems.append("Google speech service unreachable (cloud ASR is selected) — check the connection, "
+                            "or switch back to local recognition: VOICE_RECOGNITION_ENGINE=local.")
+        if report.get("edge_tts_reachable") is False:
+            problems.append("Edge-TTS unreachable (cloud voice is selected) — the local Windows voice will be used.")
+        if report.get("windows_voice_error"):
+            problems.append(f"Windows voices unavailable: {report['windows_voice_error']}")
+        if report.get("us_english_female_voice") is False:
+            report["tip"] = ("No female US English voice found: Settings > Time & language > Speech > "
+                             "Manage voices > Add voices > English (United States). TOM picks it up automatically.")
         if str(report.get("pygame_audio", "")).startswith("FAILED"):
             problems.append("Audio playback device issue — check output device / drivers; "
                             "fallback players (ffplay/PowerShell) will be tried automatically.")
@@ -595,12 +734,18 @@ class VoiceTools:
                  f"  Mics detected: {r['mic_count']}"
                  + (f" (first: {r['microphones'][0]})" if r.get("microphones") else ""),
                  f"  Playback (pygame): {r['pygame_audio']}",
-                 f"  Google STT reachable: {r.get('google_stt_reachable')}",
-                 f"  Edge-TTS reachable: {r.get('edge_tts_reachable')}",
+                 f"  Speech recognition: {r['asr_engine']}"
+                 + (f" (model {r.get('asr_model')}, found: {r.get('asr_model_found')})" if 'asr_model' in r else
+                    f" (cloud, reachable: {r.get('google_stt_reachable')})"),
+                 f"  Voice: {r['tts_engine']}"
+                 + (f" — installed: {', '.join(r['windows_voices'])}" if r.get("windows_voices") else "")
+                 + (f" (cloud, reachable: {r.get('edge_tts_reachable')})" if 'edge_tts_reachable' in r else ""),
                  f"  Env: input={r['env']['VOICE_INPUT_ENABLED']} output={r['env']['VOICE_OUTPUT_ENABLED']} "
                  f"engine={r['env']['engine']} threshold={r['env']['energy_threshold']}"]
         if r.get("mic_error"):
             lines.append(f"  Mic error: {r['mic_error']}")
         for p in r["problems"]:
             lines.append(f"  FIX: {p}")
+        if r.get("tip"):
+            lines.append(f"  TIP: {r['tip']}")
         return "\n".join(lines)

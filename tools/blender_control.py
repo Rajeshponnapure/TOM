@@ -3,6 +3,7 @@ TOM Blender Control — Automates Blender 3D modeling via Python API.
 Generates and executes Blender Python scripts for 3D creation.
 """
 import os
+import re
 import json
 import subprocess
 import sys
@@ -26,17 +27,16 @@ class BlenderControl:
             self._bpy = None
 
     def _find_blender(self) -> Optional[str]:
-        candidates = [
-            r"C:\Program Files\Blender Foundation\Blender 4.3\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 4.0\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 3.6\blender.exe",
-            r"C:\Program Files\Blender Foundation\Blender 3.5\blender.exe",
-        ]
-        for path in candidates:
-            if os.path.exists(path):
-                return path
+        configured = (os.environ.get("BLENDER_PATH") or "").strip().strip('"')
+        if configured and os.path.isfile(configured):
+            return configured
+        # Any installed version, newest first (the fixed 3.5–4.3 list missed newer releases).
+        import glob
+        found = sorted(glob.glob(r"C:\Program Files\Blender Foundation\Blender *\blender.exe"),
+                       key=lambda p: [int(x) for x in re.findall(r"\d+", os.path.basename(os.path.dirname(p)))],
+                       reverse=True)
+        if found:
+            return found[0]
         try:
             kwargs = {"capture_output": True, "text": True, "timeout": 5}
             if os.name == "nt":
@@ -57,7 +57,12 @@ class BlenderControl:
     def generate_script(self, task: str) -> str:
         task_lower = task.lower()
         scene_name = "TOM_Generated_Scene"
-        if "cube" in task_lower:
+        # The subject wins over modifiers: "a low-poly house with lights" is a house (with lights), not a
+        # lighting demo on a cube (live check 2026-10-27).
+        if re.search(r"\b(house|home|building|cottage|cabin|hut)\b", task_lower):
+            code = self._house_script() if re.search(r"\blights?|lit|glow|lamp|night|evening\b", task_lower) \
+                else self._house_base()
+        elif "cube" in task_lower:
             code = self._cube_script()
         elif "sphere" in task_lower or "ball" in task_lower:
             code = self._sphere_script()
@@ -473,42 +478,69 @@ print(f"Render saved to {{bpy.context.scene.render.filepath}}")
 '''
 
     def _house_script(self) -> str:
+        return self._house_base() + _HOUSE_LIGHTS
+
+    def _house_base(self) -> str:
         return '''import bpy
 bpy.ops.object.select_all(action='SELECT')
 bpy.ops.object.delete(use_global=False)
 
-# Walls
-bpy.ops.mesh.primitive_cube_add(size=4, location=(0, 0, 1.5))
-walls = bpy.context.active_object
-walls.scale = (2, 1.5, 0.75)
-bpy.ops.object.transform_apply(scale=True)
-walls.name = "TOM_House"
+def mat(name, rgb, rough=0.8):
+    m = bpy.data.materials.new(name=name)
+    m.use_nodes = True
+    b = m.node_tree.nodes["Principled BSDF"]
+    b.inputs["Base Color"].default_value = (*rgb, 1.0)
+    b.inputs["Roughness"].default_value = rough
+    return m
 
-# Roof
-bpy.ops.mesh.primitive_cone_add(vertices=4, radius1=3, depth=1.5, location=(0, 0, 3))
-roof = bpy.context.active_object
-roof.rotation_euler.x = 0
-roof.name = "TOM_Roof"
-mat_roof = bpy.data.materials.new(name="Roof_Mat")
-mat_roof.use_nodes = True
-mat_roof.node_tree.nodes["Principled BSDF"].inputs[0].default_value = (0.6, 0.2, 0.1, 1.0)
-roof.data.materials.append(mat_roof)
 
-# Ground
-bpy.ops.mesh.primitive_plane_add(size=15, location=(0, 0, 0))
+def box(name, size, loc, material):
+    bpy.ops.mesh.primitive_cube_add(size=1, location=loc)
+    o = bpy.context.active_object
+    o.scale = size
+    bpy.ops.object.transform_apply(scale=True)
+    o.name = name
+    o.data.materials.append(material)
+    return o
+
+
+# Walls (6 x 4 x 3 m), standing on the ground
+walls = box("TOM_House", (6, 4, 3), (0, 0, 1.5), mat("Walls", (0.85, 0.75, 0.6)))
+
+# Gable roof with a 0.4 m overhang
+ov, ridge = 0.4, 4.7
+verts = [(-3 - ov, -2 - ov, 3), (3 + ov, -2 - ov, 3), (3 + ov, 2 + ov, 3), (-3 - ov, 2 + ov, 3),
+         (-3 - ov, 0, ridge), (3 + ov, 0, ridge)]
+faces = [(0, 1, 5, 4), (2, 3, 4, 5), (0, 4, 3), (1, 2, 5), (0, 3, 2, 1)]
+mesh = bpy.data.meshes.new("TOM_RoofMesh")
+mesh.from_pydata(verts, [], faces)
+mesh.update()
+roof = bpy.data.objects.new("TOM_Roof", mesh)
+bpy.context.collection.objects.link(roof)
+roof.data.materials.append(mat("Roof", (0.55, 0.18, 0.1), 0.6))
+
+# Door, windows (on the front face, y = -2), chimney
+wood = mat("Door", (0.3, 0.17, 0.08))
+box("TOM_Door", (0.9, 0.1, 1.9), (0.9, -2.03, 0.95), wood)
+frame = mat("WindowFrame", (0.95, 0.95, 0.92))
+for i, x in enumerate((-1.6, 2.3)):
+    box(f"TOM_WindowFrame_{i + 1}", (1.0, 0.06, 0.9), (x, -2.02, 1.8), frame)
+box("TOM_Chimney", (0.5, 0.5, 1.4), (-1.8, 0.9, 4.3), mat("Brick", (0.45, 0.2, 0.15)))
+
+# Ground, a stone path to the door, low-poly trees
+bpy.ops.mesh.primitive_plane_add(size=24, location=(0, 0, 0))
 ground = bpy.context.active_object
 ground.name = "TOM_Ground"
-mat_ground = bpy.data.materials.new(name="Ground_Mat")
-mat_ground.use_nodes = True
-mat_ground.node_tree.nodes["Principled BSDF"].inputs[0].default_value = (0.2, 0.5, 0.1, 1.0)
-ground.data.materials.append(mat_ground)
-
-# Door
-bpy.ops.mesh.primitive_cube_add(size=0.5, location=(1.5, -0.1, 0.5))
-door = bpy.context.active_object
-door.scale = (0.3, 0.1, 0.8)
-bpy.ops.object.transform_apply(scale=True)
-door.name = "TOM_Door"
+ground.data.materials.append(mat("Grass", (0.18, 0.42, 0.12)))
+box("TOM_Path", (1.0, 4.0, 0.02), (0.9, -4.0, 0.01), mat("Stone", (0.55, 0.55, 0.52)))
+leaves, bark = mat("Leaves", (0.12, 0.38, 0.14)), mat("Bark", (0.28, 0.17, 0.08))
+for i, (x, y) in enumerate(((-5.5, -2.5), (5.8, 1.5), (-4.8, 3.5))):
+    bpy.ops.mesh.primitive_cylinder_add(vertices=6, radius=0.18, depth=1.2, location=(x, y, 0.6))
+    bpy.context.active_object.data.materials.append(bark)
+    bpy.ops.mesh.primitive_cone_add(vertices=6, radius1=1.1, depth=2.6, location=(x, y, 2.4))
+    tree = bpy.context.active_object
+    tree.name = f"TOM_Tree_{i + 1}"
+    tree.data.materials.append(leaves)
 print("TOM house model created")
 '''
 
@@ -521,12 +553,13 @@ print("TOM house model created")
         with open(script_path, "w") as f:
             f.write(script)
 
-        if self._has_bpy:
-            try:
-                exec(script, {"__name__": "__tom_blender__"})
-                return {"status": "success", "mode": "direct", "message": "Script executed in-process"}
-            except Exception as e:
-                return {"status": "error", "mode": "direct", "message": str(e)}
+        if self._has_bpy and not self.blender_path:
+            # In-process exec() is blocked (tool-permissions.md §2): a script runs only inside a
+            # separate Blender process, never inside TOM itself.
+            from tom_core.policy.engine import ActionClass
+            from tom_core.tools.guard import enforce
+            gate = enforce("blender.exec_in_process", ActionClass.BLOCKED, payload={"script": script_path})
+            return {**gate.refusal(), "mode": "direct"}
 
         # NOTE: this used to fire-and-forget with subprocess.Popen() and report
         # "success" the instant the process merely *launched* -- never waiting
@@ -537,8 +570,11 @@ print("TOM house model created")
         # subprocess.run(..., timeout=...) always waits and captures output,
         # whether or not the caller asked for "background" (Blender itself
         # still runs headless via --background either way).
-        cmd = [self.blender_path, "--background", "--python", script_path] if background \
-            else [self.blender_path, "--python", script_path]
+        # --factory-startup: the owner's own add-ons must not break TOM's job (live check 2026-10-27: the
+        # blender_mcp add-on crashed while unregistering at exit, Blender returned 1, and every scene was
+        # reported as failed although it had been saved).
+        cmd = [self.blender_path, "--factory-startup", "--background", "--python", script_path] if background \
+            else [self.blender_path, "--factory-startup", "--python", script_path]
         mode = "background" if background else "foreground"
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -564,8 +600,14 @@ print("TOM house model created")
         slug = _re.sub(r"[^a-z0-9]+", "_", task.lower()).strip("_")[:40] or "scene"
         out_dir = project_path_str("tom_brain", "blender_output", f"{slug}_{_uuid.uuid4().hex[:8]}")
         script = self.generate_script(task)
+        return self._run_scene(script, out_dir)
+
+    def _run_scene(self, script: str, out_dir: str) -> Dict[str, Any]:
         finalized, blend_path, png_path = self._finalize_script(script, out_dir)
         result = self.execute_script(finalized)
+        if result["status"] != "success" and os.path.isfile(blend_path) and "code" in result.get("message", ""):
+            # Blender saved the scene, then failed while shutting down: the work is there.
+            result.update(status="success", note=result.get("message", "")[:300])
         if result["status"] == "success":
             result["script_preview"] = script[:500]
             # Don't just trust Blender's exit code: confirm the scene actually
@@ -581,6 +623,72 @@ print("TOM house model created")
                     f"(expected {blend_path}). {result.get('stdout_tail', '')}"[:800])
         return result
 
+    def assemble_scene(self, asset_mains, hdri_path: str = "", task: str = "asset scene") -> Dict[str, Any]:
+        """Import downloaded glTF models (asset_mains: list of .gltf/.glb paths), optionally light the
+        world with an HDRI, frame a camera, then save + preview-render and verify the file landed."""
+        import re as _re
+        import uuid as _uuid
+        slug = _re.sub(r"[^a-z0-9]+", "_", (task or "scene").lower()).strip("_")[:40] or "scene"
+        out_dir = project_path_str("tom_brain", "blender_output", f"{slug}_{_uuid.uuid4().hex[:8]}")
+        mains = [p.replace("\\", "/") for p in (asset_mains or []) if p]
+        if not mains and not hdri_path:
+            return {"status": "error", "message": "No assets to assemble."}
+        lines = [
+            "import bpy, math",
+            "bpy.ops.wm.read_factory_settings(use_empty=True)",
+            "imported = []",
+        ]
+        for p in mains:
+            ext = os.path.splitext(p)[1].lower()
+            op = "import_scene.gltf" if ext in (".gltf", ".glb") else (
+                "import_scene.fbx" if ext == ".fbx" else "import_scene.obj" if ext == ".obj" else "")
+            if not op:
+                continue
+            lines += [
+                "try:",
+                f"    before = set(bpy.data.objects)",
+                f"    bpy.ops.{op}(filepath={p!r})",
+                f"    imported += [o for o in bpy.data.objects if o not in before]",
+                "except Exception as _e:",
+                f"    print('TOM import failed for {os.path.basename(p)}:', _e)",
+            ]
+        # spread multiple models out along X so they don't overlap at the origin
+        lines += [
+            "roots = [o for o in imported if o.parent is None]",
+            "for i, o in enumerate(roots):",
+            "    o.location.x += (i - (len(roots)-1)/2.0) * 2.5",
+        ]
+        if hdri_path:
+            h = hdri_path.replace("\\", "/")
+            lines += [
+                "world = bpy.data.worlds.get('World') or bpy.data.worlds.new('World')",
+                "bpy.context.scene.world = world",
+                "world.use_nodes = True",
+                "nt = world.node_tree; nt.nodes.clear()",
+                "bg = nt.nodes.new('ShaderNodeBackground')",
+                "env = nt.nodes.new('ShaderNodeTexEnvironment')",
+                f"env.image = bpy.data.images.load({h!r})",
+                "out = nt.nodes.new('ShaderNodeOutputWorld')",
+                "nt.links.new(env.outputs['Color'], bg.inputs['Color'])",
+                "nt.links.new(bg.outputs['Background'], out.inputs['Surface'])",
+            ]
+        else:
+            lines += [
+                "light_data = bpy.data.lights.new('key', 'SUN'); light_data.energy = 3.0",
+                "light = bpy.data.objects.new('key', light_data); bpy.context.collection.objects.link(light)",
+                "light.rotation_euler = (math.radians(55), 0, math.radians(45))",
+            ]
+        # frame a camera on everything imported
+        lines += [
+            "cam_data = bpy.data.cameras.new('cam'); cam = bpy.data.objects.new('cam', cam_data)",
+            "bpy.context.collection.objects.link(cam); bpy.context.scene.camera = cam",
+            "cam.location = (6, -6, 4); cam.rotation_euler = (math.radians(63), 0, math.radians(46))",
+            "bpy.context.scene.render.engine = 'CYCLES' if 'CYCLES' in "
+            "[e.identifier for e in bpy.types.RenderEngine.__subclasses__() if hasattr(e,'identifier')] else "
+            "bpy.context.scene.render.engine",
+        ]
+        return self._run_scene("\n".join(lines), out_dir)
+
     def _finalize_script(self, script: str, out_dir: str):
         """Append a save (+ preview render, unless the template already
         renders one) so a generated scene leaves a real file behind instead
@@ -590,9 +698,10 @@ print("TOM house model created")
         already_renders = "render.render(" in script
         png_path = (os.path.join(os.path.expanduser("~"), "Desktop", "TOM_Render.png").replace("\\", "/")
                     if already_renders else os.path.join(out_dir, "preview.png").replace("\\", "/"))
-        lines = [script.rstrip(), "", f"bpy.ops.wm.save_as_mainfile(filepath={blend_path!r})"]
+        lines = [script.rstrip(), "", _STAGE, "", f"bpy.ops.wm.save_as_mainfile(filepath={blend_path!r})"]
         if not already_renders:
             lines += [
+                "bpy.context.scene.render.resolution_percentage = 50",
                 f"bpy.context.scene.render.filepath = {png_path!r}",
                 "try:",
                 "    bpy.ops.render.render(write_still=True)",
@@ -619,3 +728,79 @@ print("TOM house model created")
             "render": "Full scene setup and Cycles render",
             "house": "Build a simple house model",
         }
+
+
+# Appended to every generated scene: a camera that frames all objects and a key light when the template
+# made none — without them the preview render was empty (live check 2026-10-27).
+_STAGE = '''
+import mathutils as _tom_mu
+_tom_scene = bpy.context.scene
+_tom_meshes = [o for o in _tom_scene.objects if o.type == "MESH"]
+if _tom_meshes:
+    _tom_pts = [o.matrix_world @ _tom_mu.Vector(c) for o in _tom_meshes for c in o.bound_box]
+    _tom_lo = _tom_mu.Vector([min(p[i] for p in _tom_pts) for i in range(3)])
+    _tom_hi = _tom_mu.Vector([max(p[i] for p in _tom_pts) for i in range(3)])
+    _tom_center = (_tom_lo + _tom_hi) / 2
+    _tom_size = max((_tom_hi - _tom_lo).length, 1.0)
+else:
+    _tom_center, _tom_size = _tom_mu.Vector((0, 0, 0)), 4.0
+if not any(o.type == "CAMERA" for o in _tom_scene.objects):
+    bpy.ops.object.empty_add(location=_tom_center)
+    _tom_target = bpy.context.active_object
+    _tom_target.name = "TOM_CameraTarget"
+    bpy.ops.object.camera_add(location=_tom_center + _tom_mu.Vector((0.9, -1.1, 0.6)) * _tom_size)
+    _tom_cam = bpy.context.active_object
+    _tom_track = _tom_cam.constraints.new(type="TRACK_TO")
+    _tom_track.target = _tom_target
+    _tom_track.track_axis = "TRACK_NEGATIVE_Z"
+    _tom_track.up_axis = "UP_Y"
+    _tom_scene.camera = _tom_cam
+if not any(o.type == "LIGHT" for o in _tom_scene.objects):
+    bpy.ops.object.light_add(type="SUN", location=_tom_center + _tom_mu.Vector((4, -4, 8)))
+    bpy.context.active_object.rotation_euler = (0.9, 0.15, 0.5)   # from the front-left, so walls are lit too
+    bpy.context.active_object.data.energy = 3.0
+if _tom_scene.world is None:
+    _tom_scene.world = bpy.data.worlds.new("TOM_World")
+    _tom_scene.world.color = (0.35, 0.45, 0.6)
+'''
+
+# "with lights": a warm lamp over the door, glowing windows, and a soft evening sun.
+_HOUSE_LIGHTS = '''
+_glow = bpy.data.materials.new(name="Window_Glow")
+_glow.use_nodes = True
+_bsdf = _glow.node_tree.nodes["Principled BSDF"]
+_bsdf.inputs["Base Color"].default_value = (1.0, 0.75, 0.4, 1.0)
+for _name in ("Emission Color", "Emission"):
+    if _name in _bsdf.inputs:
+        _bsdf.inputs[_name].default_value = (1.0, 0.7, 0.35, 1.0)
+if "Emission Strength" in _bsdf.inputs:
+    _bsdf.inputs["Emission Strength"].default_value = 6.0
+for _i, _x in enumerate((-1.6, 2.3)):                  # glowing panes just in front of the window frames
+    bpy.ops.mesh.primitive_cube_add(size=1, location=(_x, -2.06, 1.8))
+    _win = bpy.context.active_object
+    _win.scale = (0.8, 0.02, 0.7)
+    bpy.ops.object.transform_apply(scale=True)
+    _win.name = f"TOM_Window_{_i + 1}"
+    _win.data.materials.append(_glow)
+bpy.ops.object.light_add(type="POINT", location=(0.9, -2.7, 2.3))
+_lamp = bpy.context.active_object
+_lamp.name = "TOM_PorchLight"
+_lamp.data.energy = 250
+_lamp.data.color = (1.0, 0.8, 0.5)
+for _i, _x in enumerate((-1.6, 2.3)):                  # window light spilling onto the lawn
+    bpy.ops.object.light_add(type="AREA", location=(_x, -2.4, 1.8))
+    _spill = bpy.context.active_object
+    _spill.name = f"TOM_WindowSpill_{_i + 1}"
+    _spill.rotation_euler = (1.5708, 0, 0)
+    _spill.data.energy = 120
+    _spill.data.color = (1.0, 0.7, 0.4)
+bpy.ops.object.light_add(type="SUN", location=(6, -6, 8))
+_sun = bpy.context.active_object
+_sun.name = "TOM_EveningSun"
+_sun.rotation_euler = (1.1, 0.2, 0.8)
+_sun.data.energy = 1.2
+_sun.data.color = (1.0, 0.6, 0.4)
+bpy.context.scene.world = bpy.context.scene.world or bpy.data.worlds.new("TOM_World")
+bpy.context.scene.world.color = (0.02, 0.03, 0.08)     # dusk sky so the lights read
+print("TOM house lights added")
+'''

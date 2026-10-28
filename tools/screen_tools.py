@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import importlib
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -40,7 +39,8 @@ class ScreenTools:
     """
 
     def __init__(self):
-        self.tesseract_cmd = os.environ.get("TESSERACT_CMD", "").strip()
+        from tom_core.screen_control import find_tesseract       # PATH or the standard install folder
+        self.tesseract_cmd = find_tesseract()
         if self.tesseract_cmd and pytesseract:
             pytesseract.pytesseract.tesseract_cmd = self.tesseract_cmd
 

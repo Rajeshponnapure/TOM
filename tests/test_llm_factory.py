@@ -57,22 +57,23 @@ def test_unreachable_server_keeps_configured_name(ollama):
     assert llm_factory.resolve_model("unknown-slot") == "gemma4:latest"
 
 
-def test_provider_defaults_to_hosted_groq_when_a_key_is_configured(monkeypatch):
-    """A configured Groq key means Groq, even with TOM_LLM_PROVIDER unset."""
+def test_a_groq_key_alone_does_not_send_prompts_to_the_cloud(monkeypatch):
+    """ADR-005: cloud inference is opt-in. A key in .env is not an opt-in."""
     monkeypatch.delenv("TOM_LLM_PROVIDER", raising=False)
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
-    assert llm_factory.provider() == "groq"
-    assert llm_factory.resolve_model("primary") == llm_factory.groq_model("primary")
+    assert llm_factory.provider() == "ollama"
+    monkeypatch.setenv("TOM_LLM_PROVIDER", "something-unknown")
+    assert llm_factory.provider() == "ollama"
 
 
-def test_local_provider_requires_an_explicit_opt_in(monkeypatch):
-    """TOM never drifts back to local while a Groq key is present."""
+def test_hosted_provider_requires_an_explicit_opt_in(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
     for value in ("ollama", "OLLAMA", "local", "local-llm"):
         monkeypatch.setenv("TOM_LLM_PROVIDER", value)
         assert llm_factory.provider() == "ollama"
     monkeypatch.setenv("TOM_LLM_PROVIDER", "groq")
     assert llm_factory.provider() == "groq"
+    assert llm_factory.resolve_model("primary") == llm_factory.groq_model("primary")
 
 
 def test_provider_without_a_groq_key_stays_local(monkeypatch):

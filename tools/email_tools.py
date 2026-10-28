@@ -179,7 +179,8 @@ async def auto_reply_if_allowed(email_tools: "EmailTools", analysis: Dict[str, A
     key = f"{analysis.get('id', '')}|{sender.lower()}|{analysis.get('subject', '')}"
     if not ledger.can_reply(key, sender):
         return None
-    result = await email_tools.send_email_direct(sender, analysis["reply_subject"], body + AUTO_REPLY_FOOTER)
+    result = await email_tools.send_email_direct(sender, analysis["reply_subject"], body + AUTO_REPLY_FOOTER,
+                                                 standing="EMAIL_AUTO_REPLY_ENABLED")
     if result.get("status") != "success":
         return None
     ledger.record(key, sender)
@@ -253,7 +254,15 @@ class EmailTools:
     async def connect_email_service(self, provider: str = "gmail") -> Dict[str, Any]:
         try:
             if provider == "gmail" and self.gmail_credentials_file:
-                return await self._connect_gmail_oauth()
+                oauth = await self._connect_gmail_oauth()
+                if oauth.get("status") == "success" or not (self.email_address and self.email_password):
+                    return oauth
+                # An expired/revoked OAuth token ("invalid_grant") used to disable all mail reading even
+                # though the app password in .env works (found 2026-10-27). Fall back to it.
+                fallback = await self._connect_imap_generic(provider)
+                if fallback.get("status") == "success":
+                    fallback["message"] += f" (OAuth unavailable: {oauth.get('message', '')[:120]})"
+                return fallback
             else:
                 return await self._connect_imap_generic(provider)
         except Exception as e:
@@ -478,6 +487,9 @@ class EmailTools:
         else:
             safe_print("No approval callback set. Cancelling send.")
             return {"status": "cancelled", "message": "No approval mechanism available."}
+        gate = await self._policy_gate(recipient, subject)
+        if not gate.allowed:
+            return gate.refusal()
 
         try:
             message = self._compose_email_message(recipient, subject, body, attachments)
@@ -494,11 +506,27 @@ class EmailTools:
             safety.log_action("EMAIL_SEND_ERROR", target=recipient, status="FAILURE", message=str(e))
             return {"status": "error", "message": f"Failed to send email: {str(e)}"}
 
+    @staticmethod
+    async def _policy_gate(recipient: str, subject: str, standing: Optional[str] = None):
+        """R3 policy check right before anything is handed to the mail server (TOM-MIG-010)."""
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import aenforce
+        return await aenforce("email.send", ActionClass.DESTRUCTIVE_OR_EXTERNAL,
+                              payload={"to": recipient, "subject": subject}, approval_action="send_email",
+                              standing=standing)
+
     async def send_email_direct(self, recipient: str, subject: str, body: str,
-                                 attachments: Optional[List[str]] = None) -> Dict[str, Any]:
+                                 attachments: Optional[List[str]] = None,
+                                 standing: Optional[str] = None) -> Dict[str, Any]:
+        """Send without an approval callback. Allowed only with an approval for this exact
+        recipient/subject, or when `standing` names an opt-in setting the user switched on
+        (EMAIL_AUTO_REPLY_ENABLED, INSTAGRAM_AUTO_SEND_REPORT_EMAIL)."""
         from safety.guards import SafetyGuards
         if not is_valid_address(recipient):
             return {"status": "error", "message": f"'{recipient}' is not an email address. Give me the full address (name@example.com)."}
+        gate = await self._policy_gate(recipient, subject, standing)
+        if not gate.allowed:
+            return gate.refusal()
         try:
             message = self._compose_email_message(recipient, subject, body, attachments)
             delivered = await self._deliver(message)

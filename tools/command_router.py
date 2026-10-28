@@ -29,6 +29,86 @@ class CommandRouter:
     action" gate is checked LAST so it cannot shadow a concrete handler.
     """
 
+    _WEBSITE_BUILD = re.compile(
+        r"\b(?:create|make|build|design|develop|generate|code|set ?up|need|want)\b(?:\s+[\w'&.-]+){0,6}?\s+"
+        r"(?:website|web ?site|landing ?page|web ?page|home ?page|(?:a|an|my|our|new|business|small|simple|"
+        r"professional|modern)\s+site)\b")
+    _NOT_A_WEBSITE = re.compile(
+        r"\b(?:word|docx?|pdf|power ?point|pptx?|slides?|presentation|excel|spreadsheet|report|essay|"
+        r"screenshot|safe|safety|secure|scan|phishing)\b")
+
+    # "click Send", "click on the File menu", "double-click Recycle Bin" — screen control by what's visible
+    _SCREEN_CLICK = re.compile(r"^(?:please\s+)?(double[- ]?click|click|tap)\s+(?:on\s+)?(?:the\s+)?[\"']?(.+?)[\"']?"
+                               r"(?:\s+(?:button|link|tab|menu|icon|option))?\s*[.!]?$")
+    # "type Hello Ravi", "type: meeting at 4 pm" — into the focused app
+    _SCREEN_TYPE = re.compile(r"^(?:please\s+)?type\s*:?\s+[\"']?(.+?)[\"']?\s*$", re.I | re.S)
+
+    @staticmethod
+    def _original_case(text: str, lowered: str) -> str:
+        i = text.lower().find(lowered)
+        return text[i:i + len(lowered)] if i >= 0 else lowered
+
+    _GAME_VERB = re.compile(
+        r"^(?:please\s+|can you\s+|could you\s+|let'?s\s+|i want to\s+)?(?:play|start|launch|run|open|load)\s+"
+        r"(?:the\s+|a\s+)?(?:game\s+)?(.+?)(?:\s+game)?(?:\s+(?:for me|on steam|on epic|now|please))*\s*[?.!]*$")
+
+    @classmethod
+    def game_in_request(cls, lower: str):
+        """The installed game a "play/start/launch <name>" request names, else None (cheap: cached index)."""
+        m = cls._GAME_VERB.match(lower.strip())
+        if not m:
+            return None
+        try:
+            from tools.game_library import find_game
+            return find_game(m.group(1))
+        except Exception:
+            return None
+
+    @staticmethod
+    def game_task_in_request(text: str):
+        """{'game', 'task'} for "build a house in minecraft" — only when the game is really on this PC
+        (or is one TOM made), so "build a website in react" never becomes a game task."""
+        from tools import game_tasks
+        parsed = game_tasks.parse(text)
+        if parsed is None:
+            return None
+        game, task = parsed
+        try:
+            from tools.game_library import find_game
+            found = find_game(game)
+        except Exception:
+            found = None
+        if found is not None:
+            return {"game": found.name, "task": task}
+        if game_tasks.is_minecraft(game):
+            return {"game": "Minecraft", "task": task}
+        return None
+
+    @staticmethod
+    def made_game_in_request(lower: str):
+        """A game TOM made, named in a play/open request ("play my snake game", "open Viper")."""
+        m = re.match(r"^(?:please\s+)?(?:play|open|launch|start|run|autopilot)\s+(.+?)(?:\s+(?:for me|yourself|now|please|"
+                     r"by yourself|on my behalf))*\s*[?.!]*$", lower.strip())
+        if not m:
+            return None
+        marked = re.search(r"\b(my|you made|you built|tom'?s|the one you|that you)\b|\bgame\b", m.group(1))
+        try:
+            from tom_core.games.studio import find_made_game
+            found = find_made_game(m.group(1))
+        except Exception:
+            return None
+        if found is not None and not marked:          # a bare name only counts if it is the game's title
+            title = set(re.split(r"[^a-z0-9]+", found["title"].lower()))
+            if not {w for w in re.split(r"[^a-z0-9]+", m.group(1)) if w} <= title:
+                return None
+        return found
+
+    @classmethod
+    def is_website_build_request(cls, lower: str) -> bool:
+        """"build a website for my bakery", "create a landing page for our app" — not "open website X",
+        "is this website safe" or "make a report about website trends"."""
+        return bool(cls._WEBSITE_BUILD.search(lower)) and not cls._NOT_A_WEBSITE.search(lower)
+
     def route(self, command: str) -> RouteDecision:
         text = (command or "").strip()
         if "User request:" in text:
@@ -37,6 +117,14 @@ class CommandRouter:
 
         if not lower:
             return RouteDecision("chat", "empty", "generate_chat_response", confidence=1.0)
+
+        # A named file ("what does notes.docx say about deadlines") is read, not explained from memory
+        from tom_core import user_files
+        m = user_files.READ_RX.match(text.strip())
+        if m and not re.match(r"^https?:", m.group("name"), re.I):
+            return RouteDecision("files", "read_user_file", "execute_read_user_file", confidence=0.92,
+                                 metadata={"name": m.group("name").strip(), "verb": m.group(1).lower(),
+                                           "question": (m.group("rest") or "").strip()})
 
         # Explanation / understanding questions — must come BEFORE action handlers
         if self._is_explanation_request(lower):
@@ -83,9 +171,86 @@ class CommandRouter:
             if any(act in lower for act in ("open", "launch", "start")):
                 return RouteDecision("communication", "open_whatsapp", "execute_open_whatsapp", confidence=0.93)
 
+        # Instagram / LinkedIn direct messages in the owner's own Chrome profile ("message Sara on
+        # instagram: hi", "dm @john on insta saying hey", "text the recruiter on linkedin that ...").
+        # The send gate lives in the flow (one approval on the exact person+text), so not here.
+        if ("instagram" in lower or "linkedin" in lower or re.search(r"\binsta\b", lower)) and \
+           any(act in lower for act in ("message", "text", "dm", "tell", "say", "write to", "send")) and \
+           not any(w in lower for w in ("scroll", "report", "summarize", "extract", "digest", "news feed")):
+            app = "linkedin" if "linkedin" in lower else "instagram"
+            return RouteDecision("communication", "social_message", "execute_social_message",
+                                 metadata={"app": app}, confidence=0.9)
+        if ("instagram" in lower or "linkedin" in lower or re.search(r"\binsta\b", lower)) and \
+           any(act in lower for act in ("open", "launch", "start")) and \
+           not any(w in lower for w in ("scroll", "report", "summarize", "extract", "digest", "news")):
+            app = "linkedin" if "linkedin" in lower else "instagram"
+            return RouteDecision("communication", "open_social", "execute_social_message",
+                                 metadata={"app": app, "open_only": True}, confidence=0.88)
+
+        if re.match(r"^(?:please\s+)?stop\s+(?:playing|the game|the autopilot|autopilot|gaming)\b", lower):
+            return RouteDecision("system", "stop_game", "execute_stop_game", confidence=0.95)
+        # A task inside a game ("build a house in minecraft", "in Green Hell find water")
+        task = self.game_task_in_request(text)
+        if task is not None:
+            return RouteDecision("system", "game_task", "execute_game_task", confidence=0.92, metadata=task)
+        # A game TOM made ("play my snake game for me", "open the game you made")
+        made = self.made_game_in_request(lower)
+        if made is not None:
+            auto = bool(re.search(r"\b(for me|yourself|auto ?pilot|by yourself|on my behalf)\b", lower))
+            return RouteDecision("system", "made_game", "execute_game_autopilot" if auto else "execute_game_launch",
+                                 confidence=0.9, metadata={"game": made["title"], "made": made["path"]})
+        # Games installed on this PC ("play Green Hell") and everyday Windows control ("lock my pc")
+        game = self.game_in_request(lower)
+        if game is not None:
+            # "play X for me" / "autopilot X" → experimental autopilot; plain "play/launch X" → just start it.
+            if re.search(r"\b(for me|on my behalf|yourself|auto ?pilot|automatically|by yourself|"
+                         r"play (?:it|the game) for)\b", lower) or lower.startswith(("autopilot", "auto-pilot")):
+                return RouteDecision("system", "game_autopilot", "execute_game_autopilot", confidence=0.9,
+                                     metadata={"game": game.name})
+            return RouteDecision("system", "launch_game", "execute_game_launch", confidence=0.93,
+                                 metadata={"game": game.name})
+        # "autopilot <game not in library>" / "play <x> for me" even if we couldn't match the index
+        if re.search(r"\bauto ?pilot\b", lower) or re.search(r"\bplay\b.*\bfor me\b", lower):
+            gm = re.search(r"(?:play|autopilot|auto-pilot)\s+(.+?)(?:\s+for me\b|\s+yourself\b|$)", lower)
+            if gm:
+                return RouteDecision("system", "game_autopilot", "execute_game_autopilot", confidence=0.8,
+                                     metadata={"game": gm.group(1).strip()})
+        m = self._SCREEN_CLICK.match(lower)
+        if m and not re.match(r"^(?:at\s+)?\d+\s*[, ]\s*\d+$", m.group(2)):        # coordinates: Hardware engine
+            return RouteDecision("system", "screen_click", "execute_screen_action", confidence=0.9,
+                                 metadata={"action": "double_click" if m.group(1).startswith("double") else "click",
+                                           "target": self._original_case(text, m.group(2))})
+        m = self._SCREEN_TYPE.match(text.strip())
+        if m:
+            words = re.sub(r"^(?:the\s+)?text\s*:?\s+", "", m.group(1), flags=re.I)     # "type text hello" → hello
+            return RouteDecision("system", "screen_type", "execute_screen_action", confidence=0.9,
+                                 metadata={"action": "type", "target": words})
+        from tom_core import diagnostics
+        what = diagnostics.wants(lower)
+        if what:
+            return RouteDecision("system", "diagnostics", "execute_diagnostics", confidence=0.92,
+                                 metadata={"what": what})
+        from tools import system_control
+        control = system_control.parse(lower)
+        if control is not None:
+            return RouteDecision("system", "system_control", "execute_system_control", confidence=0.92,
+                                 metadata={"action": control[0], "arg": control[1]})
+
         # Content creation
-        if any(token in lower for token in ("create website", "make website")):
+        if self.is_website_build_request(lower):
             return RouteDecision("content", "create_website", "execute_website_creation", confidence=0.9)
+
+        # 3D assets (CC0 from Poly Haven) and Blender scenes built from them. Needs a fetch/build verb,
+        # and never a "report/write about 3D …" request (those are documents, routed below).
+        if not re.search(r"\b(report|write|essay|article|blog|document|paper|presentation|powerpoint|"
+                         r"slides?|explain|about)\b", lower):
+            if re.search(r"\b(download|find|fetch|get|grab|import)\b.*\b(3d|3-d)\b.*\b(model|asset|object)\b", lower) \
+               or re.search(r"\b(blender|3d|3-d)\s+scene\b", lower) \
+               or (re.search(r"\b(build|create|make|assemble|generate|set\s*up)\b", lower) and
+                   re.search(r"\b(3d scene|3d model|3d asset|3d object|blender scene|hdri)\b", lower)) \
+               or (re.search(r"\b(build|create|make|assemble)\b.*\bscene\b", lower) and
+                   re.search(r"\b(blender|hdri|asset|3d)\b", lower)):
+                return RouteDecision("content", "asset_3d", "execute_asset_task", confidence=0.88)
 
         if any(token in lower for token in ("presentation", "pptx", "slide", "slides", "powerpoint presentation")):
             if any(act in lower for act in ("create", "make", "build", "generate", "design")):
@@ -107,10 +272,7 @@ class CommandRouter:
             if not any(act in lower for act in ("build", "create", "make", "develop", "implement")):
                 return RouteDecision("chat", "general_chat", "generate_chat_response", confidence=0.72)
 
-        if any(token in lower for token in ("build app", "build application", "create app", "create project",
-                                             "make app", "android app", "ios app", "desktop app",
-                                             "web app", "mobile app", "react app", "flutter app",
-                                             "full stack", "full-stack", "api routes", "authentication")):
+        if self._is_code_project_request(lower):
             return RouteDecision("content", "create_project", "execute_code_project", confidence=0.88)
 
         # Data / web search / files
@@ -126,8 +288,8 @@ class CommandRouter:
             return RouteDecision("files", "file_operation", "execute_file_or_read", confidence=0.88)
 
         # Screen
-        if any(token in lower for token in ("read screen", "analyze screen", "what is on screen",
-                                             "what's on screen", "scan screen", "inspect screen")):
+        if re.search(r"\b(?:read|analy[sz]e|scan|inspect|describe|look at|summari[sz]e|check)\b.{0,15}\bscreen\b"
+                     r"|\bwhat(?:'s| is| do you see)\b.{0,20}\bon\b.{0,12}\bscreen\b|\bwhat do you see\b", lower):
             return RouteDecision("screen", "read_screen", "execute_screen_read", confidence=0.93)
 
         # Open application / browser
@@ -204,6 +366,23 @@ class CommandRouter:
         if "email" in lower:
             return "send_email"
         return "sensitive_action"
+
+    _BUILD_VERB = re.compile(r"\b(build|create|make|scaffold|generate|write|develop|set\s*up|bootstrap|"
+                             r"start)\b")
+    _STACK = re.compile(
+        r"\b(android app|ios app|desktop app|web app|mobile app|react app|flutter app|react|vue|angular|"
+        r"svelte|next\.?js|vite|express|fastify|node api|rest api|graphql api|backend|frontend|full[- ]?stack|"
+        r"flask|fastapi|django|python (?:cli|script|app)|cli tool|api routes|authentication|microservice)\b")
+
+    def _is_code_project_request(self, lower: str) -> bool:
+        """A request to build a software project (needs a build verb, so "what is react" stays chat)."""
+        if any(p in lower for p in ("build app", "build application", "create app", "create project",
+                                    "make app", "build a project", "code project")):
+            return True
+        if self._BUILD_VERB.search(lower) and self._STACK.search(lower):
+            return True
+        # generic "build/create … a project/app" (office/website/presentation kinds are routed earlier)
+        return bool(self._BUILD_VERB.search(lower) and re.search(r"\b(a |an |the |my )?(project|app|application)\b", lower))
 
     def _is_browser_open(self, lower: str) -> bool:
         return any(term in lower for term in ("open ", "launch ", "go to ", "visit ", "browse "))

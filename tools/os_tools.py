@@ -269,6 +269,12 @@ class OSTools:
 
     async def open_application(self, app_name: str, profile_id: Optional[str] = None) -> Dict[str, Any]:
         """Open any installed application by name using dynamic discovery."""
+        # R3: reversible, no approval — but the emergency stop and the audit log see it.
+        from tom_core.policy.engine import ActionClass
+        from tom_core.tools.guard import aenforce
+        gate = await aenforce("app.open", ActionClass.REVERSIBLE, payload={"app": app_name})
+        if not gate.allowed:
+            return {**gate.refusal(), "action": "open_app", "app": app_name}
         result = {
             "action": "open_app",
             "app": app_name,

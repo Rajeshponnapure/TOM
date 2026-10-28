@@ -8,6 +8,8 @@ import logging
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
 
+from tools.project_paths import project_path_str
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,9 +58,8 @@ class SafetyGuards:
     }
 
     def __init__(self):
-        self.log_file = os.path.join(
-            os.getcwd(), "tom_logs", "safety_log.txt"
-        )
+        # Was os.getcwd()-relative (R0 defect D5).
+        self.log_file = project_path_str("tom_logs", "safety_log.txt")
         os.makedirs(os.path.dirname(self.log_file), exist_ok=True)
         self.blocked_actions = {
             "delete_files": True,
@@ -70,7 +71,7 @@ class SafetyGuards:
         self.user_profile = self._load_user_profile()
 
     def _load_user_profile(self) -> Dict[str, Any]:
-        profile_path = os.path.join(os.getcwd(), "tom_brain", "user_profile.json")
+        profile_path = project_path_str("tom_brain", "user_profile.json")
         try:
             if os.path.exists(profile_path):
                 with open(profile_path, "r", encoding="utf-8") as f:
@@ -80,7 +81,7 @@ class SafetyGuards:
         return {}
 
     def _save_user_profile(self):
-        profile_path = os.path.join(os.getcwd(), "tom_brain", "user_profile.json")
+        profile_path = project_path_str("tom_brain", "user_profile.json")
         try:
             os.makedirs(os.path.dirname(profile_path), exist_ok=True)
             with open(profile_path, "w", encoding="utf-8") as f:
@@ -90,9 +91,11 @@ class SafetyGuards:
 
     def log_action(self, action: str, target: str = "",
                    status: str = "SUCCESS", message: str = ""):
-        """Logs all Tom actions with timestamp"""
+        """Logs all Tom actions with timestamp. Secrets are redacted before anything is written."""
+        from tom_core.observability.redact import redact
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        record = f"[{timestamp}] {action}: [{status.upper()}] | Target: {target} | Note: {message}\n"
+        record = (f"[{timestamp}] {redact(action)}: [{status.upper()}] | Target: {redact(target)} "
+                  f"| Note: {redact(message)}\n")
 
         try:
             # Size-capped rotation: keep safety_log.txt under ~2 MB,

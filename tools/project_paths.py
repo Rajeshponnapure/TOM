@@ -7,13 +7,33 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+# Folders that hold TOM's runtime state (chats, memory, learning, logs, undo journal) rather than
+# code or bundled content. TOM_STATE_ROOT relocates all of them at once: the test suite points it
+# at a throwaway folder, because tests were writing into the owner's real chat history, learning
+# files, audit log and file-move journal (measured 2026-10-21, docs/migration/status.md).
+STATE_DIRS = frozenset({"memories", "tom_brain", "tom_logs", "data"})
+
+
+def state_root() -> Path:
+    override = (os.environ.get("TOM_STATE_ROOT") or "").strip()
+    return Path(override) if override else PROJECT_ROOT
+
 
 def project_path(*parts: str) -> Path:
-    return PROJECT_ROOT.joinpath(*parts)
+    """A path inside the project. Runtime-state folders (STATE_DIRS) follow TOM_STATE_ROOT."""
+    first = re.split(r"[\\/]", str(parts[0]), maxsplit=1)[0] if parts else ""
+    root = state_root() if first in STATE_DIRS else PROJECT_ROOT
+    return root.joinpath(*parts)
 
 
 def project_path_str(*parts: str) -> str:
     return str(project_path(*parts))
+
+
+def env_file() -> Path:
+    """The .env TOM reads and writes settings to (TOM_ENV_FILE overrides it, e.g. in tests)."""
+    override = (os.environ.get("TOM_ENV_FILE") or "").strip()
+    return Path(override) if override else PROJECT_ROOT / ".env"
 
 
 # ── User workspace (where TOM builds things for the user) ────────────────────

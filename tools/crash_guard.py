@@ -14,7 +14,10 @@ import sys
 import threading
 import traceback
 
-_LOG_DIR = os.path.join(os.getcwd(), "tom_logs")
+from tools.project_paths import project_path_str  # noqa: E402
+
+# Was os.getcwd()-relative (R0 defect D5): logs landed wherever TOM happened to be started from.
+_LOG_DIR = project_path_str("tom_logs")
 _native_log_handle = None  # kept open for faulthandler
 
 

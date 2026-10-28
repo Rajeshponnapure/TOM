@@ -1142,7 +1142,10 @@ class NewsAgent:
 
                 async def _playwright_scrape():
                     async with async_playwright() as p:
-                        browser = await p.chromium.launch(headless=True)
+                        try:
+                            browser = await p.chromium.launch(headless=True)
+                        except Exception:       # Playwright's own browser not downloaded: use installed Chrome
+                            browser = await p.chromium.launch(headless=True, channel="chrome")
                         page = await browser.new_page()
                         await page.goto(url, timeout=30000, wait_until="domcontentloaded")
                         content = await page.content()
