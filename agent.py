@@ -1216,12 +1216,20 @@ class TomAgent:
                                        f"Fix: pip install SpeechRecognition pyttsx3 pyaudio edge-tts pygame"}
 
             # ── An answer to a question TOM just asked ("which Mounish?") ──
+            answered = await self._answer_pending_key(command)
+            if answered is not None:
+                return answered
             answered = await self._answer_pending_choice(command)
             if answered is not None:
                 return answered
             answered = await self._answer_pending_site(command)
             if answered is not None:
                 return answered
+
+            # ── API keys: "set my openai key to …", "what api keys are set" ──
+            key_result = await self._secrets_command(command)
+            if key_result is not None:
+                return key_result
 
             # ── Long-term memory: meta commands, preferences, recall ──────
             mem_result = await self._memory_command(command)
@@ -3165,6 +3173,67 @@ class TomAgent:
             return exact[0]
         partial = [i for i, o in enumerate(options) if text in o.lower() or o.lower() in text]
         return partial[0] if len(partial) == 1 else None
+
+    # ── API KEYS ────────────────────────────────────────────────────────
+    _SET_KEY_RE = re.compile(
+        r"^(?:please\s+)?(?:set|save|store|add|update|use)\s+(?:my\s+|the\s+)?(?P<svc>[\w .\-]+?)\s+"
+        r"(?:api[ -]?)?(?:key|token)\s+(?:to|=|is|:)?\s*(?P<val>[A-Za-z0-9._\-]{8,})\s*$", re.I)
+
+    def _require_key(self, service: str, retry_command: str) -> Optional[Dict[str, Any]]:
+        """A feature calls this when it needs a key: returns None when the key is already present (go
+        ahead), else remembers the service + command and returns a prompt so the owner can paste it."""
+        from tom_core import secrets
+        res = secrets.ensure(service)
+        if res.get("status") == "success":
+            return None
+        if res.get("status") == "needs_key":
+            self._pending_key = {"service": res["service"], "env_var": res["env_var"],
+                                 "command": retry_command, "at": time.time()}
+        return res
+
+    async def _answer_pending_key(self, command: str) -> Optional[Dict[str, Any]]:
+        """The owner's reply to "I need your <service> key". Saves it, then re-runs what they asked."""
+        pending = getattr(self, "_pending_key", None)
+        if not pending:
+            return None
+        if time.time() - pending.get("at", 0) > 15 * 60:
+            self._pending_key = None
+            return None
+        from tom_core import secrets
+        text = command.strip()
+        if re.fullmatch(r"(?i)\s*(cancel|stop|never ?mind|no|forget it)\s*[.!]?\s*", text):
+            self._pending_key = None
+            return {"status": "cancelled", "response_type": "api_key",
+                    "message": f"Okay, I won't save a {pending['service']} key."}
+        m = self._SET_KEY_RE.match(text)
+        value = m.group("val") if m else text
+        if not secrets.looks_like_key(value):
+            return None                                   # not a key — treat as a brand-new request
+        self._pending_key = None
+        saved = secrets.save(pending["env_var"], value)
+        if saved.get("status") != "success":
+            return saved
+        retry = pending.get("command")
+        if retry:
+            result = await self.execute_task(retry)
+            if isinstance(result, dict):
+                result["message"] = f"{saved['message']}\n\n" + str(result.get("message", ""))
+            return result
+        return saved
+
+    async def _secrets_command(self, command: str) -> Optional[Dict[str, Any]]:
+        """"set my openai key to sk-…", "what api keys are set", "which keys do I have"."""
+        from tom_core import secrets
+        text = command.strip()
+        low = text.lower()
+        m = self._SET_KEY_RE.match(text)
+        svc = secrets.resolve(m.group("svc")) if m else None
+        if m and svc is not None:
+            return secrets.save(svc.env_vars[0] if svc.env_vars else m.group("svc").upper(), m.group("val"))
+        if re.search(r"\b(api[ -]?keys?|credentials?|tokens?)\b", low) and \
+           re.search(r"\b(what|which|list|show|do i have|are set|status)\b", low):
+            return secrets.status_report()
+        return None
 
     async def _answer_pending_choice(self, command: str) -> Optional[Dict[str, Any]]:
         """Finish a task that stopped to ask "which one?" when this message answers it."""
