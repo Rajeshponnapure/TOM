@@ -22,7 +22,7 @@ from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
     QApplication, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton, QSplitter,
+    QFileDialog, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton, QSplitter,
     QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
@@ -219,6 +219,7 @@ class TomWindow(QMainWindow):
         self._voice_factory = voice_factory
         self.voice: Any = None
         self._selected_task: Optional[str] = None
+        self._pending_attachment: Optional[str] = None
         self._speak_next = False          # set when a request came from push-to-talk: answer aloud
         self._listening = False           # a push-to-talk capture/recognition is running
         self._build_ui()
@@ -291,6 +292,17 @@ class TomWindow(QMainWindow):
         self.progress_lbl = QLabel("")
         self.progress_lbl.setStyleSheet("color:#6f8fb8")
         cl.addWidget(self.progress_lbl)
+        attach_row = QHBoxLayout()
+        self.capabilities_btn = QPushButton("Capabilities")
+        self.attach_file_btn = QPushButton("Attach file")
+        self.attach_image_btn = QPushButton("Attach image")
+        self.attachment_lbl = QLabel("No attachment")
+        self.attachment_lbl.setStyleSheet("color:#8b95a7")
+        attach_row.addWidget(self.capabilities_btn)
+        attach_row.addWidget(self.attach_file_btn)
+        attach_row.addWidget(self.attach_image_btn)
+        attach_row.addWidget(self.attachment_lbl, 1)
+        cl.addLayout(attach_row)
         row = QHBoxLayout()
         self.input = QLineEdit()
         self.input.setPlaceholderText("Ask TOM to do something…  (Enter to send)")
@@ -369,6 +381,9 @@ class TomWindow(QMainWindow):
 
     def _wire(self) -> None:
         self.send_btn.clicked.connect(self.send)
+        self.capabilities_btn.clicked.connect(self.show_capabilities)
+        self.attach_file_btn.clicked.connect(lambda: self.attach_file(image_only=False))
+        self.attach_image_btn.clicked.connect(lambda: self.attach_file(image_only=True))
         self.input.returnPressed.connect(self.send)
         self.stop_all_btn.clicked.connect(self.emergency_stop)
         self.pause_btn.toggled.connect(self._on_pause)
@@ -414,12 +429,80 @@ class TomWindow(QMainWindow):
         if not text or self.host.agent is None:
             return
         self.input.clear()
-        self._append("You", text, "#7fb2ff")
+        attachment = self._pending_attachment
+        self._pending_attachment = None
+        self.attachment_lbl.setText("No attachment")
+        self.attachment_lbl.setToolTip("")
+        request = text
+        if attachment:
+            from tom_core import skill_modes
+            request = skill_modes.tag(f'{text or "Analyze this attachment in detail"} "{attachment}"', "file")
+            self._append("You", f"{text or 'Analyze this attachment'}\n[Attached: {os.path.basename(attachment)}]",
+                         "#7fb2ff")
+        else:
+            self._append("You", text, "#7fb2ff")
         self.status_lbl.setText("Working…")
         self._busy_since = time.monotonic()
         from tom_core.policy import get_policy
         get_policy().resume()            # a new request from the user lifts an emergency stop
-        self.host.submit(text, interface)
+        self.host.submit(request, interface)
+
+    @Slot()
+    def attach_file(self, *, image_only: bool = False) -> None:
+        """Choose one file for analysis; execution still goes through execute_task and its policies."""
+        filters = "Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp)" if image_only else (
+            "All supported files (*);;Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp);;"
+            "Documents (*.pdf *.txt *.md *.csv *.json *.docx *.xlsx *.py *.js *.html)")
+        path, _selected = QFileDialog.getOpenFileName(
+            self, "Attach image" if image_only else "Attach file", "", filters)
+        if path:
+            self._pending_attachment = path
+            self.attachment_lbl.setText(os.path.basename(path))
+            self.attachment_lbl.setToolTip(path)
+
+    @Slot()
+    def show_capabilities(self) -> None:
+        """Expose the live capability registry in the UI; selecting an example fills chat only."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("TOM capabilities")
+        dialog.resize(650, 520)
+        layout = QVBoxLayout(dialog)
+        intro = QLabel("Every listed capability is available through TOM's shared task router. "
+                       "Double-click an example to place it in chat; review or edit it before sending.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        entries = QListWidget()
+        try:
+            from tools.capability_registry import CAPABILITIES, validate
+            report = validate()
+            for cap in CAPABILITIES:
+                trigger = cap["triggers"][0]
+                label = f"{cap['label']}  —  {trigger}"
+                item = QListWidgetItem(label)
+                item.setToolTip(f"Category: {cap['category']}\nExecutor: {cap['executor']}")
+                if trigger.startswith("("):
+                    item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+                entries.addItem(item)
+            intro.setText(f"{report['verified']}/{report['total']} capability mappings verified. "
+                           "Double-click an example to place it in chat; review or edit it before sending.")
+            if not report["ok"]:
+                intro.setText(intro.text() + "\nSome executor mappings need attention.")
+        except Exception as exc:
+            entries.addItem(f"Capability registry unavailable: {type(exc).__name__}: {exc}")
+        layout.addWidget(entries, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+
+        def use_example(item: QListWidgetItem) -> None:
+            example = item.text().split("  —  ", 1)
+            if len(example) == 2:
+                self.input.setText(example[1])
+                self.input.setFocus()
+                dialog.accept()
+        entries.itemDoubleClicked.connect(use_example)
+        dialog.exec()
 
     @Slot(str, dict)
     def _tick_elapsed(self) -> None:
